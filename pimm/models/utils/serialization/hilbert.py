@@ -88,6 +88,73 @@ def gray2binary(gray, axis=-1):
     return gray
 
 
+@torch.compile
+def encode_int(locs, num_dims, num_bits):
+    """Hilbert encode using integer bitwise ops.
+
+    Equivalent to encode() but avoids the int64→uint8→bits→bits→uint8→int64
+    conversion overhead. The Skilling algorithm operates on per-dimension
+    integer coordinates using bit masks.
+
+    Parameters:
+    -----------
+     locs: (N, num_dims) integer coordinates in [0, 2**num_bits).
+     num_dims: Number of dimensions.
+     num_bits: Bits per dimension.
+
+    Returns:
+    --------
+     (N,) int64 Hilbert codes.
+    """
+    # gray[d] holds the bits for dimension d as an integer
+    gray = [locs[:, d].long().clone() for d in range(num_dims)]
+
+    # Skilling's encoding: iterate forward through bits, forward through dims
+    # This mirrors the original bit-array loop:
+    #   for bit in range(num_bits):
+    #     for dim in range(num_dims):
+    #       if gray[dim] has bit set:
+    #         flip all lower bits in gray[0]
+    #       else:
+    #         exchange lower bits between gray[0] and gray[dim]
+    for bit in range(num_bits):
+        # Mask for bits below current bit position
+        lower_mask = (1 << (num_bits - bit - 1)) - 1  # bits bit+1..num_bits-1
+        for dim in range(num_dims):
+            # Check if current bit is set in this dimension
+            bit_set = (gray[dim] >> (num_bits - bit - 1)) & 1  # 0 or 1
+            mask = bit_set.bool()
+
+            # Where bit is on: invert lower bits of gray[0]
+            gray[0] = torch.where(mask, gray[0] ^ lower_mask, gray[0])
+
+            # Where bit is off: exchange lower bits between gray[0] and gray[dim]
+            to_flip = (~mask) & ((gray[0] ^ gray[dim]) & lower_mask).bool()
+            flip_bits = torch.where(to_flip, (gray[0] ^ gray[dim]) & lower_mask,
+                                    torch.zeros_like(gray[0]))
+            gray[dim] = gray[dim] ^ flip_bits
+            gray[0] = gray[0] ^ flip_bits
+
+    # Interleave bits: gray[d] bit b → output bit (b * num_dims + d)
+    # But bits in gray are stored MSB-first (bit 0 in position num_bits-1)
+    # After Skilling, flatten by swapping axes: dim,bit → bit,dim
+    result = torch.zeros_like(gray[0])
+    for bit in range(num_bits):
+        for d in range(num_dims):
+            src_bit = (gray[d] >> (num_bits - 1 - bit)) & 1
+            out_pos = (num_bits * num_dims - 1) - (bit * num_dims + d)
+            result |= src_bit << out_pos
+
+    # Convert from Gray to binary
+    val = result
+    shift = 1
+    while shift < num_bits * num_dims:
+        val = val ^ (val >> shift)
+        shift <<= 1
+
+    return val
+
+
 def encode(locs, num_dims, num_bits):
     """Decode an array of locations in a hypercube into a Hilbert integer.
 

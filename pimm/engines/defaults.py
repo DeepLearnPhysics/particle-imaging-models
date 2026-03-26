@@ -9,6 +9,7 @@ Please cite our work if the code is helpful to you.
 
 import os
 import sys
+import json
 import argparse
 import multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
@@ -180,7 +181,12 @@ def default_config_parser(file_path, options):
     if hasattr(cfg, 'hooks_override'):
         _apply_hook_overrides_from_dict(cfg, cfg.hooks_override)
         # Remove hooks_override from config after processing (it's not a real config key)
-        delattr(cfg, 'hooks_override')
+        try:
+            delattr(cfg, 'hooks_override')
+        except AttributeError:
+            # Config objects may not support delattr; try dict-style deletion
+            if 'hooks_override' in cfg:
+                del cfg._cfg_dict['hooks_override']
 
     if options is not None:
         cfg.merge_from_dict(options)
@@ -197,7 +203,16 @@ def default_config_parser(file_path, options):
         pass
 
     if not cfg.resume:
+        # Save config as Python file (for backward compatibility)
         cfg.dump(os.path.join(cfg.save_path, "config.py"))
+        
+        # Also save as JSON for easy loading with OmegaConf
+        # Convert config to dict - Config uses _cfg_dict internally
+        cfg_dict = cfg._cfg_dict.to_dict() if hasattr(cfg, '_cfg_dict') else dict(cfg)
+        json_path = os.path.join(cfg.save_path, "model.json")
+        with open(json_path, 'w') as f:
+            json.dump(cfg_dict, f, indent=2, default=str)
+    
     return cfg
 
 

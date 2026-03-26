@@ -26,7 +26,6 @@ from pimm.utils.comm import is_main_process, synchronize
 from pimm.utils.cache import shared_dict
 from pimm.utils.scheduler import CosineScheduler
 import pimm.utils.comm as comm
-from pimm.engines.test import TESTERS
 
 from .default import HookBase
 from .builder import HOOKS
@@ -165,15 +164,18 @@ class IterationTimer(HookBase):
 @HOOKS.register_module()
 class InformationWriter(HookBase):
     def __init__(self):
-        self.curr_iter = 0
         self.model_output_keys = []
 
     def before_train(self):
         self.trainer.comm_info["iter_info"] = ""
-        self.curr_iter = self.trainer.start_epoch * len(self.trainer.train_loader)
+
+    def _get_global_step(self):
+        # compute global step same way as GradientNormLogger for consistency
+        current_epoch = self.trainer.comm_info["epoch"] + 1
+        current_iter = self.trainer.comm_info["iter"]
+        return (current_epoch - 1) * len(self.trainer.train_loader) + current_iter + 1
 
     def before_step(self):
-        self.curr_iter += 1
         info = "Train: [{epoch}/{max_epoch}][{iter}/{max_iter}] ".format(
             epoch=self.trainer.epoch + 1,
             max_epoch=self.trainer.max_epoch,
@@ -231,12 +233,13 @@ class InformationWriter(HookBase):
         self.trainer.logger.info(self.trainer.comm_info["iter_info"])
         self.trainer.comm_info["iter_info"] = ""  # reset iter info
         if self.trainer.writer is not None:
-            self.trainer.writer.add_scalar("params/lr", lr, self.curr_iter)
+            global_step = self._get_global_step()
+            self.trainer.writer.add_scalar("params/lr", lr, global_step)
             for key in self.model_output_keys:
                 self.trainer.writer.add_scalar(
                     "train_batch/" + key,
                     self.trainer.storage.history(key).val,
-                    self.curr_iter,
+                    global_step,
                 )
 
     def after_epoch(self):
@@ -361,7 +364,31 @@ class CheckpointLoader(HookBase):
                 
                 self.trainer.best_metric_value = checkpoint["best_metric_value"]
 
-                self.trainer.optimizer.load_state_dict(checkpoint["optimizer"])
+                # Load optimizer state dict in non-strict mode and show any missing/unexpected keys
+                optimizer_state = checkpoint.get("optimizer", None)
+                if optimizer_state is not None:
+                    try:
+                        load_result = self.trainer.optimizer.load_state_dict(optimizer_state, strict=False)
+                        missing_keys = load_result.get('missing_keys', []) if isinstance(load_result, dict) else load_result[0] if len(load_result) > 0 else []
+                        unexpected_keys = load_result.get('unexpected_keys', []) if isinstance(load_result, dict) else load_result[1] if len(load_result) > 1 else []
+                        if missing_keys:
+                            self.trainer.logger.info(f"Optimizer missing keys: {missing_keys}")
+                        if unexpected_keys:
+                            self.trainer.logger.info(f"Optimizer unexpected keys: {unexpected_keys}")
+                    except TypeError:
+                        # fallback for PyTorch versions where strict is not allowed
+                        try:
+                            load_result = self.trainer.optimizer.load_state_dict(optimizer_state)
+                            missing_keys = load_result.get('missing_keys', []) if isinstance(load_result, dict) else load_result[0] if len(load_result) > 0 else []
+                            unexpected_keys = load_result.get('unexpected_keys', []) if isinstance(load_result, dict) else load_result[1] if len(load_result) > 1 else []
+                            if missing_keys:
+                                self.trainer.logger.info(f"Optimizer missing keys: {missing_keys}")
+                            if unexpected_keys:
+                                self.trainer.logger.info(f"Optimizer unexpected keys: {unexpected_keys}")
+                        except Exception as e:
+                            self.trainer.logger.warning(f"Could not load optimizer state dict: {e}")
+                else:
+                    self.trainer.logger.info("No optimizer state found in checkpoint.")
                 self.trainer.scheduler.load_state_dict(checkpoint["scheduler"])
                 if self.trainer.cfg.enable_amp and checkpoint.get("scaler", None) is not None:
                     self.trainer.scaler.load_state_dict(checkpoint["scaler"])
@@ -370,8 +397,9 @@ class CheckpointLoader(HookBase):
 
 @HOOKS.register_module()
 class CheckpointSaverIteration(HookBase):
-    def __init__(self, save_freq=None):
+    def __init__(self, save_freq=None, save_iter_checkpoints=False):
         self.save_freq = save_freq  # None or int, None indicate only save model last
+        self.save_iter_checkpoints = save_iter_checkpoints  # if False, only save model_last/best, not iter_{step}.pth
         self.step_count = 0
 
     def after_step(self):
@@ -418,7 +446,7 @@ class CheckpointSaverIteration(HookBase):
                     filename,
                     os.path.join(self.trainer.cfg.save_path, "model", "model_best.pth"),
                 )
-            if self.save_freq and self.step_count % self.save_freq == 0:
+            if self.save_iter_checkpoints and self.save_freq and self.step_count % self.save_freq == 0:
                 shutil.copyfile(
                     filename,
                     os.path.join(
@@ -429,12 +457,23 @@ class CheckpointSaverIteration(HookBase):
                 )
 
 
+
 @HOOKS.register_module()
 class FinalEvaluator(HookBase):
     def __init__(self, test_last=False):
         self.test_last = test_last
 
     def after_train(self):
+        # Skip final evaluation if evaluate is disabled
+        if not self.trainer.cfg.get("evaluate", True):
+            self.trainer.logger.info(
+                "Skipping final evaluation (evaluate=False)"
+            )
+            return
+
+        # Import here to avoid circular import: pimm.engines.test -> pimm.models -> pimm.engines.hooks.misc
+        from pimm.engines.test import TESTERS
+
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Final Evaluation >>>>>>>>>>>>>>>>"
         )
@@ -1221,22 +1260,19 @@ class PrototypeUsageLogger(HookBase):
     def _prototype_stats_hook(self, name):
         """Create a forward hook that calculates prototype statistics."""
         def hook_fn(module, input, output):
-            # Skip if no output
+            if not module.training:
+                return
             if output is None:
                 return
                 
-            # Initialize counter for this module if it doesn't exist
             if name not in self._step_counters:
                 self._step_counters[name] = 0
                 
-            # Increment counter
             self._step_counters[name] += 1
             
-            # Only process on certain steps
             if self._step_counters[name] % self.log_frequency != 0:
                 return
             
-            # Calculate statistics
             if isinstance(output, tuple):
                 stats = {}
                 for i, o in enumerate(output):
@@ -1246,9 +1282,9 @@ class PrototypeUsageLogger(HookBase):
 
             # Log to tensorboard/wandb if available
             if hasattr(self.trainer, 'writer') and self.trainer.writer is not None:
-                import wandb
-                # use wandb step if available, fallback to trainer iter
-                global_step = wandb.run.step if wandb.run else self.trainer.comm_info.get("iter", 0)
+                current_iter = self.trainer.comm_info.get("iter", 0) + 1
+                current_epoch = self.trainer.epoch + 1
+                global_step = (current_epoch - 1) * len(self.trainer.train_loader) + current_iter
                 
                 # Log metrics
                 for stat_name, stat_value in stats.items():
@@ -1406,7 +1442,9 @@ class FeatureStdMonitor(HookBase):
     def _feature_stats_hook(self, module_name):
         """Create a forward hook function that captures feature statistics."""
         def hook_fn(module, input, output):
-            # Only process on certain steps
+            if not module.training:
+                return
+
             if not hasattr(self, '_step_counter'):
                 self._step_counter = {}
             if module_name not in self._step_counter:
@@ -1416,7 +1454,6 @@ class FeatureStdMonitor(HookBase):
             if self._step_counter[module_name] % self.log_frequency != 0:
                 return
             
-            # Get features from output (assuming Point structure or tensor)
             if hasattr(output, 'feat'):
                 features = output.feat
             elif isinstance(output, torch.Tensor):
@@ -1424,7 +1461,6 @@ class FeatureStdMonitor(HookBase):
             else:
                 return
                 
-            # Calculate statistics with proper distributed synchronization
             with torch.no_grad():
                 import torch.distributed as dist
                 from pimm.utils.comm import get_world_size
@@ -1434,7 +1470,6 @@ class FeatureStdMonitor(HookBase):
                 local_sum = features_flat.sum().to(torch.float64)
                 local_sum_sq = (features_flat ** 2).sum().to(torch.float64)
                 
-                # Synchronize across GPUs for global std
                 if get_world_size() > 1:
                     dist.all_reduce(local_n)
                     dist.all_reduce(local_sum)
@@ -1444,13 +1479,10 @@ class FeatureStdMonitor(HookBase):
                 global_var = (local_sum_sq / local_n) - (global_mean ** 2)
                 global_std = torch.sqrt(global_var.clamp(min=0)).item()
                 
-                # Batch-wise std (local is fine for this metric)
                 batch_std = torch.std(features, dim=1).mean().item()
                 
-                # Channel-wise std with distributed sync
-                # Each GPU: compute local sum and sum_sq per channel
                 local_channel_n = torch.tensor([features.shape[0]], device=features.device, dtype=torch.float64)
-                local_channel_sum = features.sum(dim=0).to(torch.float64)  # (channels,)
+                local_channel_sum = features.sum(dim=0).to(torch.float64)
                 local_channel_sum_sq = (features ** 2).sum(dim=0).to(torch.float64)
                 
                 if get_world_size() > 1:
@@ -1476,9 +1508,9 @@ class FeatureStdMonitor(HookBase):
                         
             # Log to tensorboard/wandb if available
             if hasattr(self.trainer, 'writer') and self.trainer.writer is not None:
-                import wandb
-                # use wandb step if available, fallback to trainer iter
-                global_step = wandb.run.step if wandb.run else self.trainer.comm_info.get("iter", 0)
+                current_iter = self.trainer.comm_info.get("iter", 0) + 1
+                current_epoch = self.trainer.epoch + 1
+                global_step = (current_epoch - 1) * len(self.trainer.train_loader) + current_iter
                 
                 # Log metrics
                 for stat_name, stat_value in stats.items():
@@ -1805,4 +1837,242 @@ class AttentionMaskAnnealingHook(HookBase):
             f"log_frequency={self.log_frequency}, "
             f"log_per_layer={self.log_per_layer}, "
             f"prefix='{self.prefix}')"
+        )
+
+
+@HOOKS.register_module()
+class ResourceUtilizationLogger(HookBase):
+    """
+    Hook to log GPU and CPU utilization metrics over time.
+
+    Logs GPU memory usage, GPU utilization %, CPU usage %, and system memory
+    to tensorboard/wandb for monitoring resource consumption during training.
+
+    Args:
+        log_frequency (int): Log metrics every N steps (default: 10)
+        prefix (str): Prefix for logged metrics (default: "resources")
+        log_per_gpu (bool): Log metrics per GPU or just local GPU (default: False)
+        log_cpu (bool): Log CPU utilization (default: True)
+        log_system_memory (bool): Log system RAM usage (default: True)
+        per_process (bool): If True, report only this process's resource usage
+            instead of system-wide metrics. Recommended for shared nodes where
+            other jobs may be running. (default: True)
+    """
+
+    def __init__(
+        self,
+        log_frequency=10,
+        prefix="resources",
+        log_per_gpu=False,
+        log_cpu=True,
+        log_system_memory=True,
+        per_process=True,
+    ):
+        self.log_frequency = log_frequency
+        self.prefix = prefix
+        self.log_per_gpu = log_per_gpu
+        self.log_cpu = log_cpu
+        self.log_system_memory = log_system_memory
+        self.per_process = per_process
+        self.step_count = 0
+        self._pynvml_available = False
+        self._psutil_available = False
+        self._nvml_initialized = False
+        self._process = None
+
+    def before_train(self):
+        # try importing optional dependencies
+        try:
+            import psutil
+            self._psutil_available = True
+            if self.per_process:
+                self._process = psutil.Process()
+                # prime cpu_percent so the first real call returns meaningful data
+                self._process.cpu_percent(interval=None)
+        except ImportError:
+            self.trainer.logger.warning(
+                "psutil not available - CPU metrics will not be logged"
+            )
+
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            self._pynvml_available = True
+            self._nvml_initialized = True
+        except (ImportError, Exception):
+            self.trainer.logger.info(
+                "pynvml not available - using torch.cuda for GPU metrics"
+            )
+
+        if self.per_process:
+            self.trainer.logger.info(
+                "ResourceUtilizationLogger: per_process=True — reporting "
+                "only this process's CPU/RAM and torch.cuda GPU memory"
+            )
+
+    def after_train(self):
+        if self._nvml_initialized:
+            try:
+                import pynvml
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
+
+    def _get_gpu_metrics(self):
+        """Get GPU memory and utilization metrics."""
+        metrics = {}
+
+        if not torch.cuda.is_available():
+            return metrics
+
+        local_rank = comm.get_local_rank()
+
+        if self.per_process:
+            # Per-process GPU metrics via torch.cuda (only our allocations)
+            metrics["gpu_memory_allocated_gb"] = torch.cuda.memory_allocated(local_rank) / 1e9
+            metrics["gpu_memory_reserved_gb"] = torch.cuda.memory_reserved(local_rank) / 1e9
+            metrics["gpu_memory_max_allocated_gb"] = torch.cuda.max_memory_allocated(local_rank) / 1e9
+            metrics["gpu_memory_max_reserved_gb"] = torch.cuda.max_memory_reserved(local_rank) / 1e9
+            return metrics
+
+        # System-wide GPU metrics (original behavior)
+        if self._pynvml_available:
+            try:
+                import pynvml
+                if self.log_per_gpu:
+                    device_count = torch.cuda.device_count()
+                    for i in range(device_count):
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                        metrics[f"gpu{i}_memory_used_gb"] = mem_info.used / 1e9
+                        metrics[f"gpu{i}_memory_total_gb"] = mem_info.total / 1e9
+                        metrics[f"gpu{i}_memory_pct"] = 100.0 * mem_info.used / mem_info.total
+                        metrics[f"gpu{i}_utilization_pct"] = util.gpu
+                else:
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
+                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                    metrics["gpu_memory_used_gb"] = mem_info.used / 1e9
+                    metrics["gpu_memory_total_gb"] = mem_info.total / 1e9
+                    metrics["gpu_memory_pct"] = 100.0 * mem_info.used / mem_info.total
+                    metrics["gpu_utilization_pct"] = util.gpu
+            except Exception:
+                pass
+
+        # fallback or additional torch.cuda metrics
+        if self.log_per_gpu:
+            device_count = torch.cuda.device_count()
+            for i in range(device_count):
+                if f"gpu{i}_memory_used_gb" not in metrics:
+                    metrics[f"gpu{i}_memory_allocated_gb"] = torch.cuda.memory_allocated(i) / 1e9
+                    metrics[f"gpu{i}_memory_reserved_gb"] = torch.cuda.memory_reserved(i) / 1e9
+        else:
+            if "gpu_memory_used_gb" not in metrics:
+                metrics["gpu_memory_allocated_gb"] = torch.cuda.memory_allocated(local_rank) / 1e9
+                metrics["gpu_memory_reserved_gb"] = torch.cuda.memory_reserved(local_rank) / 1e9
+                # max memory for peak tracking
+                metrics["gpu_memory_max_allocated_gb"] = torch.cuda.max_memory_allocated(local_rank) / 1e9
+
+        return metrics
+
+    def _get_cpu_metrics(self):
+        """Get CPU and system memory metrics."""
+        metrics = {}
+
+        if not self._psutil_available:
+            return metrics
+
+        import psutil
+        import os
+
+        if self.per_process and self._process is not None:
+            # Per-process metrics
+            if self.log_cpu:
+                # cpu_percent returns total across all cores for this process
+                # e.g. 400% means 4 cores fully used
+                proc_cpu = self._process.cpu_percent(interval=None)
+                metrics["process_cpu_percent"] = proc_cpu
+                metrics["process_num_threads"] = self._process.num_threads()
+                # Approximate number of cores used by this process
+                metrics["process_cpu_cores"] = proc_cpu / 100.0
+
+            if self.log_system_memory:
+                mem_info = self._process.memory_info()
+                metrics["process_rss_gb"] = mem_info.rss / 1e9
+                metrics["process_vms_gb"] = mem_info.vms / 1e9
+
+            return metrics
+
+        # System-wide metrics (original behavior)
+        if self.log_cpu:
+            # overall cpu percent (averaged across all cores)
+            metrics["cpu_percent"] = psutil.cpu_percent(interval=None)
+
+            # load average - more useful for HPC nodes
+            # load avg / num_cpus gives utilization ratio (>1 means oversubscribed)
+            load1, load5, load15 = os.getloadavg()
+            num_cpus = psutil.cpu_count(logical=True)
+            metrics["load_avg_1min"] = load1
+            metrics["load_avg_5min"] = load5
+            metrics["load_avg_15min"] = load15
+            metrics["load_per_cpu_1min"] = load1 / num_cpus  # ~1.0 = fully utilized
+            metrics["num_cpus"] = num_cpus
+
+            # per-cpu utilization stats to see distribution
+            per_cpu = psutil.cpu_percent(interval=None, percpu=True)
+            if per_cpu:
+                metrics["cpu_max_core_pct"] = max(per_cpu)
+                metrics["cpu_min_core_pct"] = min(per_cpu)
+                active_cores = [c for c in per_cpu if c > 5.0]  # cores > 5% usage
+                metrics["cpu_active_cores"] = len(active_cores)
+                if active_cores:
+                    metrics["cpu_active_avg_pct"] = sum(active_cores) / len(active_cores)
+
+        if self.log_system_memory:
+            mem = psutil.virtual_memory()
+            metrics["system_memory_used_gb"] = mem.used / 1e9
+            metrics["system_memory_total_gb"] = mem.total / 1e9
+            metrics["system_memory_pct"] = mem.percent
+
+        return metrics
+
+    def after_step(self):
+        self.step_count += 1
+
+        if self.step_count % self.log_frequency != 0:
+            return
+
+        if not is_main_process():
+            return
+
+        if not hasattr(self.trainer, 'writer') or self.trainer.writer is None:
+            return
+
+        current_iter = self.trainer.comm_info.get("iter", 0) + 1
+        current_epoch = self.trainer.epoch + 1
+        global_step = (current_epoch - 1) * len(self.trainer.train_loader) + current_iter
+
+        # collect metrics
+        metrics = {}
+        metrics.update(self._get_gpu_metrics())
+        metrics.update(self._get_cpu_metrics())
+
+        # log to writer
+        for key, value in metrics.items():
+            self.trainer.writer.add_scalar(
+                f"{self.prefix}/{key}",
+                value,
+                global_step
+            )
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}("
+            f"log_frequency={self.log_frequency}, "
+            f"prefix='{self.prefix}', "
+            f"log_per_gpu={self.log_per_gpu}, "
+            f"log_cpu={self.log_cpu}, "
+            f"log_system_memory={self.log_system_memory}, "
+            f"per_process={self.per_process})"
         )

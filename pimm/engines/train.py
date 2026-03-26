@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.utils.data
 from packaging import version
 from functools import partial
+from itertools import islice
 import contextlib
 
 if sys.version_info >= (3, 10):
@@ -161,29 +162,41 @@ class Trainer(TrainerBase):
         
 
     def train(self):
-        from pimm.utils.sampler import SkipBatchSampler
         anomaly_context = torch.autograd.detect_anomaly() if self.cfg.detect_anomaly else contextlib.nullcontext()
         with EventStorage() as self.storage, ExceptionWriter(), anomaly_context:
-            # => before train
+            # => before train (loads checkpoint, sets start_iter and start_epoch)
             self.before_train()
+            
+            # capture start_iter for skipping (set by checkpoint hook in before_train)
+            skip_batches = self.start_iter
+            self.start_iter = 0
+            
+            # sync storage.iter with resumed position for correct wandb/tensorboard logging
+            iter_per_epoch = len(self.train_loader)
+            resumed_iter = self.start_epoch * iter_per_epoch + skip_batches
+            if resumed_iter > 0:
+                self.storage.iter = resumed_iter
+                self.logger.info(f"Resuming from iteration {resumed_iter}")
+            
             self.logger.info(">>>>>>>>>>>>>>>> Start Training >>>>>>>>>>>>>>>>")
             for self.epoch in range(self.start_epoch, self.max_epoch):
                 # => before epoch
                 if comm.get_world_size() > 1:
                     self.train_loader.sampler.set_epoch(self.epoch)
                 self.comm_info["epoch"] = self.epoch
-                self.comm_info["iter_per_epoch"] = len(self.train_loader)
+                self.comm_info["iter_per_epoch"] = iter_per_epoch
                 self.model.train()
-                self.data_iterator = enumerate(self.train_loader)
                 
-                # fast forward if resuming within an epoch
-                if self.epoch == self.start_epoch and self.start_iter > 0:
-                    self.logger.info(f"Fast forwarding data iterator to step {self.start_iter}")
-                    # use SkipBatchSampler to efficiently skip batches up until the start_iter
-                    self.train_loader.batch_sampler = SkipBatchSampler(self.train_loader.batch_sampler, self.start_iter)
-                    # re-create the iterator with the new batch_sampler
+                # skip batches if resuming mid-epoch
+                if skip_batches > 0:
+                    self.logger.info(f"Skipping first {skip_batches} batches")
+                    self.data_iterator = enumerate(
+                        islice(self.train_loader, skip_batches, None),
+                        start=skip_batches
+                    )
+                    skip_batches = 0  # only skip on first epoch
+                else:
                     self.data_iterator = enumerate(self.train_loader)
-                    self.start_iter = 0
 
                 self.before_epoch()
                 # => run_epoch
@@ -219,6 +232,9 @@ class Trainer(TrainerBase):
         ):
             output_dict = self.model(input_dict)
             loss = output_dict["loss"]
+        # Log average points per sample for throughput analysis
+        if "offset" in input_dict:
+            output_dict["avg_pts"] = input_dict["coord"].shape[0] / len(input_dict["offset"])
         self.optimizer.zero_grad()
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()
@@ -257,7 +273,6 @@ class Trainer(TrainerBase):
     def build_model(self):
         model = build_model(self.cfg.model)
         if self.cfg.sync_bn:
-            assert not self.cfg.get('use_fsdp', False), "SyncBN is not supported with FSDP"
             model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         # logger.info(f"Model: \n{self.model}")
@@ -316,8 +331,7 @@ class Trainer(TrainerBase):
             pin_memory=True,
             worker_init_fn=init_fn,
             drop_last=len(train_data) > self.cfg.batch_size,
-            persistent_workers=True,
-            # in_order=self.cfg.deterministic,
+            persistent_workers=(self.cfg.num_worker_per_gpu > 0),
         )
         return train_loader
 
@@ -435,7 +449,7 @@ class InsegTrainer(Trainer):
             pin_memory=True,
             worker_init_fn=init_fn,
             drop_last=len(train_data) > self.cfg.batch_size,
-            persistent_workers=True,
+            persistent_workers=(self.cfg.num_worker_per_gpu > 0),
             in_order=self.cfg.deterministic,
         )
         return train_loader

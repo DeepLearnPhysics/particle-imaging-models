@@ -704,6 +704,24 @@ class WandbWriter(EventWriter):
             wandb.finish()
 
 
+def _to_serializable(obj):
+    """recursively convert a config object to a plain JSON-safe structure."""
+    import types
+    if hasattr(obj, '_cfg_dict'):  # Config wrapper
+        return _to_serializable(obj._cfg_dict)
+    if hasattr(obj, 'to_dict') and callable(obj.to_dict):  # addict.Dict / ConfigDict
+        return _to_serializable(obj.to_dict())
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_serializable(v) for v in obj]
+    if isinstance(obj, set):
+        return sorted(_to_serializable(v) for v in obj)
+    if isinstance(obj, types.GeneratorType):
+        return [_to_serializable(v) for v in obj]
+    return obj
+
+
 class WandbSummaryWriter:
     """
     Emulates the TensorBoard SummaryWriter API but logs to Weights & Biases.
@@ -737,6 +755,8 @@ class WandbSummaryWriter:
                 kwargs.setdefault('dir', log_dir)
             if comment:
                 kwargs.setdefault('notes', comment)
+            if 'config' in kwargs:
+                kwargs['config'] = _to_serializable(kwargs['config'])
             self.run = wandb.init(**kwargs)
         else:
             self.run = wandb.run

@@ -15,3 +15,7 @@ from .panda_detector import *
 
 # Pretraining
 from .sonata import *
+# from .mae import *
+# from .polarmae import *
+# from .point_m2ae import *
+from .lejepa import *
