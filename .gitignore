@@ -15,5 +15,5 @@ outputs/
 .idea
 */.DS_Store
 **/*.out
-Dockerfile
+/Dockerfile
 **/exp/

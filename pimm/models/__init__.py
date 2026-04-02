@@ -10,12 +10,9 @@ from .point_transformer_v2 import *
 from .point_transformer_v3 import *
 
 # Instance Segmentation
-# from .point_group import *
+from .point_group import *
 from .panda_detector import *
 
 # Pretraining
 from .sonata import *
-# from .mae import *
-# from .polarmae import *
-# from .point_m2ae import *
 from .lejepa import *

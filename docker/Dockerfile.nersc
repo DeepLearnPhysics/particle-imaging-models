@@ -1,0 +1,91 @@
+# syntax=docker/dockerfile:1
+#
+# NERSC variant: adds MPICH (ABI-compatible with Cray MPICH for Shifter),
+# parallel HDF5, mpi4py, and h5py with MPI support.
+
+ARG TORCH_VERSION=2.5.0
+ARG CUDA_VERSION=12.4
+ARG CUDNN_VERSION=9
+FROM pytorch/pytorch:${TORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-devel
+
+# Re-declare ARGs after FROM (pre-FROM ARGs are not inherited)
+ARG TORCH_VERSION=2.5.0
+ARG CUDA_VERSION=12.4
+ARG CUDA_VERSION_NO_DOT=124
+ARG TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0"
+
+# Fix nvidia-key error
+RUN rm -f /etc/apt/sources.list.d/*.list
+
+# System packages (includes gfortran and pkg-config for MPI/HDF5 builds)
+RUN export DEBIAN_FRONTEND=noninteractive \
+  && apt-get update --no-install-recommends \
+  && apt-get install -y --no-install-recommends \
+    git wget tmux vim zsh build-essential gfortran cmake ninja-build \
+    libopenblas-dev libsparsehash-dev pkg-config \
+  && apt-get autoremove -y && apt-get clean -y \
+  && rm -rf /var/lib/apt/lists/*
+
+# Build MPICH from source (ABI-compatible with Cray MPICH for NERSC Shifter)
+ARG MPICH_VERSION=4.0.2
+RUN wget https://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz \
+  && tar xzf mpich-${MPICH_VERSION}.tar.gz \
+  && cd mpich-${MPICH_VERSION} \
+  && FFLAGS=-fallow-argument-mismatch FCFLAGS=-fallow-argument-mismatch ./configure \
+  && make -j 16 \
+  && make install \
+  && cd .. \
+  && rm -rf mpich-${MPICH_VERSION} mpich-${MPICH_VERSION}.tar.gz
+RUN /sbin/ldconfig
+
+# Build parallel HDF5 from source
+ARG HDF5_VERSION=hdf5_1.14.6
+RUN wget https://github.com/HDFGroup/hdf5/archive/refs/tags/${HDF5_VERSION}.tar.gz \
+  && tar xzf ${HDF5_VERSION}.tar.gz \
+  && cd hdf5-${HDF5_VERSION} \
+  && CC=mpicc CXX=mpicxx ./configure --enable-parallel --enable-build-mode=production \
+      --prefix=/opt/hdf5 --enable-static --enable-shared --with-pic \
+  && make -j 8 \
+  && make install \
+  && cd .. \
+  && rm -rf hdf5-${HDF5_VERSION} ${HDF5_VERSION}.tar.gz
+RUN /sbin/ldconfig
+ENV HDF5_DIR=/opt/hdf5
+ENV PATH=/opt/hdf5/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/hdf5/lib:$LD_LIBRARY_PATH
+
+# Build mpi4py and h5py against source-built MPICH and parallel HDF5.
+# NERSC Shifter swaps container MPICH with Cray MPICH at runtime via ABI compatibility.
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir cython numpy \
+  && MPICC=mpicc pip install --no-cache-dir --no-binary=mpi4py mpi4py \
+  && HDF5_MPI=ON CC=mpicc pip install --no-cache-dir --no-binary=h5py h5py
+
+# Conda packages (h5py excluded -- built from source above with MPI)
+RUN conda install -c conda-forge -y \
+    pyyaml tensorboard tensorboardx wandb yapf addict \
+    einops scipy plyfile termcolor matplotlib black open3d \
+  && conda clean -afy
+
+# Pip packages
+RUN pip install --no-cache-dir \
+    scikit-learn netifaces nvidia-ml-py rich safetensors pandas psutil \
+    peft timm huggingface_hub ftfy regex tqdm \
+    torch-geometric \
+  && pip install --no-cache-dir \
+    torch_scatter torch_sparse torch_cluster \
+    -f https://data.pyg.org/whl/torch-${TORCH_VERSION}+cu${CUDA_VERSION_NO_DOT}.html \
+  && pip install --no-cache-dir spconv-cu${CUDA_VERSION_NO_DOT} \
+  && pip install --no-cache-dir git+https://github.com/octree-nn/ocnn-pytorch.git \
+  && pip install --no-cache-dir git+https://github.com/openai/CLIP.git
+
+# FlashAttention2
+RUN MAX_JOBS=1 pip install --no-cache-dir flash-attn==2.7.3 --no-build-isolation
+
+# CUDA extensions from build context
+COPY libs/ /tmp/libs/
+RUN MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    pip install --no-cache-dir /tmp/libs/pointops -v --no-build-isolation \
+ && MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    pip install --no-cache-dir /tmp/libs/pointgroup_ops -v --no-build-isolation \
+ && rm -rf /tmp/libs
