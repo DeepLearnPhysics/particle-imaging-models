@@ -66,8 +66,8 @@ else
 fi
 
 echo "Loading config in:" $CONFIG_DIR
-#export PYTHONPATH=./$CODE_DIR
-export PYTHONPATH=./
+export PYTHONPATH=./$CODE_DIR
+# export PYTHONPATH=./
 echo "Running code in: $CODE_DIR"
 
 

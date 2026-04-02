@@ -96,7 +96,7 @@ else
   
   echo " =========> CREATE EXP DIR <========="
   echo "Experiment dir: $ROOT_DIR/$EXP_DIR"
-  cp -r scripts tools pimm "$CODE_DIR"
+  cp -r scripts tools pimm "$CODE_DIR" 2>/dev/null
   
   # Ensure physical checkpoint dir exists
   mkdir -p "$MODEL_SAVE_DIR"

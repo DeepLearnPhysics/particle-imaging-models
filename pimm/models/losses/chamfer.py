@@ -1,4 +1,3 @@
-# modified from https://github.com/facebookresearch/pytorch3d/blob/7a3c0cbc9d7b0e70ef39b7f3c35e9ce2b7376f32/pytorch3d/loss/chamfer.py
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
@@ -10,11 +9,15 @@
 from typing import Union
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import torch_scatter
-import pointops
-from pimm.models.utils import offset2bincount
+
+try:
+    from pytorch3d.ops.knn import knn_gather, knn_points
+    from pytorch3d.structures.pointclouds import Pointclouds
+except ImportError:
+    knn_gather = None
+    knn_points = None
+    Pointclouds = None
 
 
 def _validate_chamfer_reduction_inputs(
@@ -37,114 +40,134 @@ def _validate_chamfer_reduction_inputs(
     if point_reduction is None and batch_reduction is not None:
         raise ValueError("Batch reduction must be None if point_reduction is None")
 
+
+def _handle_pointcloud_input(
+    points: Union[torch.Tensor, Pointclouds],
+    lengths: Union[torch.Tensor, None],
+    normals: Union[torch.Tensor, None],
+):
+    """
+    If points is an instance of Pointclouds, retrieve the padded points tensor
+    along with the number of points per batch and the padded normals.
+    Otherwise, return the input points (and normals) with the number of points per cloud
+    set to the size of the second dimension of `points`.
+    """
+    if isinstance(points, Pointclouds):
+        X = points.points_padded()
+        lengths = points.num_points_per_cloud()
+        normals = points.normals_padded()  # either a tensor or None
+    elif torch.is_tensor(points):
+        if points.ndim != 3:
+            raise ValueError("Expected points to be of shape (N, P, D)")
+        X = points
+        if lengths is not None:
+            if lengths.ndim != 1 or lengths.shape[0] != X.shape[0]:
+                raise ValueError("Expected lengths to be of shape (N,)")
+            if lengths.max() > X.shape[1]:
+                raise ValueError("A length value was too long")
+        if lengths is None:
+            lengths = torch.full(
+                (X.shape[0],), X.shape[1], dtype=torch.int64, device=points.device
+            )
+        if normals is not None and normals.ndim != 3:
+            raise ValueError("Expected normals to be of shape (N, P, 3")
+    else:
+        raise ValueError(
+            "The input pointclouds should be either "
+            + "Pointclouds objects or torch.Tensor of shape "
+            + "(minibatch, num_points, 3)."
+        )
+    return X, lengths, normals
+
+
 def _chamfer_distance_single_direction(
     x,
     y,
-    x_offsets,
-    y_offsets,
+    x_lengths,
+    y_lengths,
     x_normals,
     y_normals,
     weights,
     point_reduction: Union[str, None],
     norm: int,
+    abs_cosine: bool,
 ):
     return_normals = x_normals is not None and y_normals is not None
 
-    # inputs are always flattened (n, D) format with batched offsets
-    if x.ndim != 2:
-        raise ValueError(f"Expected x to be 2D (n, D), got {x.ndim}D")
-    if y.ndim != 2:
-        raise ValueError(f"Expected y to be 2D (m, D), got {y.ndim}D")
-    
-    n_x, D = x.shape
-    if y.shape[1] != D:
-        raise ValueError(f"y feature dimension {y.shape[1]} != x feature dimension {D}")
-    
-    # batch size from offsets
-    N = x_offsets.shape[0]
-    if y_offsets.shape[0] != N:
-        raise ValueError(f"y_offsets batch size {y_offsets.shape[0]} != x_offsets batch size {N}")
-    
-    x_flat = x.contiguous()
-    y_flat = y.contiguous()
-    x_lengths = offset2bincount(x_offsets)
+    N, P1, D = x.shape
 
+    # Check if inputs are heterogeneous and create a lengths mask.
+    is_x_heterogeneous = (x_lengths != P1).any()
+    x_mask = (
+        torch.arange(P1, device=x.device)[None] >= x_lengths[:, None]
+    )  # shape [N, P1]
+    if y.shape[0] != N or y.shape[2] != D:
+        raise ValueError("y does not have the correct shape.")
     if weights is not None:
         if weights.size(0) != N:
-            raise ValueError(f"weights must be of shape ({N},), got {weights.shape}")
+            raise ValueError("weights must be of shape (N,).")
         if not (weights >= 0).all():
             raise ValueError("weights cannot be negative.")
         if weights.sum() == 0.0:
-            return (torch.zeros(N, device=x.device), torch.zeros(n_x, device=x.device, dtype=torch.long))
+            weights = weights.view(N, 1)
+            dummy_idx = torch.zeros((N, P1), dtype=torch.long, device=x.device)
+            return ((x.sum((1, 2)) * weights) * 0.0, (x.sum((1, 2)) * weights) * 0.0, dummy_idx)
 
-    # pointops only supports 3D coordinates
-    if D != 3:
-        raise ValueError(f"pointops requires D=3, but got D={D}")
-    # Note: pointops.knn_query uses L2 internally to find nearest neighbors,
-    # but we compute the final distance using the specified norm
-    if norm not in (1, 2):
-        raise ValueError(f"norm must be 1 or 2, got {norm}")
+    cham_norm_x = x.new_zeros(())
 
-    # use pointops for knn query: query points x, reference points y
-    # pointops.knn_query returns indices and distances, but distances don't have gradients
-    # We need to compute distances manually from indices to allow gradients to flow
-    x_idx_flat, _ = pointops.knn_query(
-        1, y_flat.float(), y_offsets.int(), x_flat.float(), x_offsets.int()
-    )  # x_idx_flat: (n_x, 1), _ is distance without gradients
+    x_nn = knn_points(x, y, lengths1=x_lengths, lengths2=y_lengths, norm=norm, K=1)
+    cham_x = x_nn.dists[..., 0]  # (N, P1)
 
-    # squeeze the K dimension
-    x_idx_flat = x_idx_flat.squeeze(-1)  # (n_x,)
-    
-    # x_idx_flat contains global indices into y_flat (the flattened target array)
-    x_idx = x_idx_flat  # (n_x,) - global indices
-    
-    # Compute distances manually to allow gradients to flow through coordinates
-    # Gather the nearest neighbor points from y_flat using the indices
-    nearest_y = y_flat[x_idx.long()]  # (n_x, 3)
-    # Compute distances using the specified norm
-    diff = x_flat - nearest_y  # (n_x, 3)
-    if norm == 1:
-        dist_flat = torch.sum(torch.abs(diff), dim=1)  # L1 norm: sum of absolute differences
-    elif norm == 2:
-        dist_flat = torch.sum(diff ** 2, dim=1)  # L2 norm squared: sum of squared differences
-    else:
-        raise ValueError(f"Unsupported norm: {norm}")
-
-    # create batch indices for x points
-    x_batch = torch.zeros(n_x, device=x.device, dtype=torch.long)
-    for i in range(N):
-        start = x_offsets[i-1] if i > 0 else 0
-        end = x_offsets[i]
-        x_batch[start:end] = i
+    if is_x_heterogeneous:
+        cham_x[x_mask] = 0.0
 
     if weights is not None:
-        cham_x = dist_flat * weights[x_batch]
-    else:
-        cham_x = dist_flat
+        cham_x *= weights.view(N, 1)
+
+    if return_normals:
+        # Gather the normals using the indices and keep only value for k=0
+        x_normals_near = knn_gather(y_normals, x_nn.idx, y_lengths)[..., 0, :]
+
+        cosine_sim = F.cosine_similarity(x_normals, x_normals_near, dim=2, eps=1e-6)
+        # If abs_cosine, ignore orientation and take the absolute value of the cosine sim.
+        cham_norm_x = 1 - (torch.abs(cosine_sim) if abs_cosine else cosine_sim)
+
+        if is_x_heterogeneous:
+            cham_norm_x[x_mask] = 0.0
+
+        if weights is not None:
+            cham_norm_x *= weights.view(N, 1)
 
     if point_reduction == "max":
         assert not return_normals
-        # group by batch and take max
-        cham_x = torch_scatter.segment_coo(cham_x, x_batch, reduce="max")  # (N,)
+        cham_x = cham_x.max(1).values  # (N,)
     elif point_reduction is not None:
-        # group by batch and sum
-        cham_x = torch_scatter.segment_coo(cham_x, x_batch, reduce="sum")  # (N,)
+        # Apply point reduction
+        cham_x = cham_x.sum(1)  # (N,)
+        if return_normals:
+            cham_norm_x = cham_norm_x.sum(1)  # (N,)
         if point_reduction == "mean":
             x_lengths_clamped = x_lengths.clamp(min=1)
             cham_x /= x_lengths_clamped
+            if return_normals:
+                cham_norm_x /= x_lengths_clamped
 
     cham_dist = cham_x
-    return cham_dist, x_idx
+    cham_normals = cham_norm_x if return_normals else None
+    idx = x_nn.idx[..., 0]  # (N, P1) nearest neighbor indices
+    return cham_dist, cham_normals, idx
 
 
 def _apply_batch_reduction(
-    cham_x, weights, batch_reduction: Union[str, None]
+    cham_x, cham_norm_x, weights, batch_reduction: Union[str, None]
 ):
     if batch_reduction is None:
-        return cham_x
+        return (cham_x, cham_norm_x)
     # batch_reduction == "sum"
     N = cham_x.shape[0]
     cham_x = cham_x.sum()
+    if cham_norm_x is not None:
+        cham_norm_x = cham_norm_x.sum()
     if batch_reduction == "mean":
         if weights is None:
             div = max(N, 1)
@@ -153,14 +176,16 @@ def _apply_batch_reduction(
         else:
             div = weights.sum()
         cham_x /= div
-    return cham_x
+        if cham_norm_x is not None:
+            cham_norm_x /= div
+    return (cham_x, cham_norm_x)
 
 
 def chamfer_distance(
     x,
     y,
-    x_offsets=None,
-    y_offsets=None,
+    x_lengths=None,
+    y_lengths=None,
     x_normals=None,
     y_normals=None,
     weights=None,
@@ -174,24 +199,26 @@ def chamfer_distance(
     Chamfer distance between two pointclouds x and y.
 
     Args:
-        x: FloatTensor of shape (n, D) or (N, P1, D) or a Pointclouds object representing
-            a batch of point clouds. If flattened (n, D), x_offsets must be provided.
-        y: FloatTensor of shape (m, D) or (N, P2, D) or a Pointclouds object representing
-            a batch of point clouds. If flattened (m, D), y_offsets must be provided.
-        x_offsets: Optional LongTensor of shape (batch_size,) giving cumulative offsets
-            for point cloud x. Required if x is flattened, otherwise computed from shape.
-        y_offsets: Optional LongTensor of shape (batch_size,) giving cumulative offsets
-            for point cloud y. Required if y is flattened, otherwise computed from shape.
-        x_normals: Optional FloatTensor of shape (n, 3) or (N, P1, 3).
-        y_normals: Optional FloatTensor of shape (m, 3) or (N, P2, 3).
-        weights: Optional FloatTensor of shape (batch_size,) giving weights for
+        x: FloatTensor of shape (N, P1, D) or a Pointclouds object representing
+            a batch of point clouds with at most P1 points in each batch element,
+            batch size N and feature dimension D.
+        y: FloatTensor of shape (N, P2, D) or a Pointclouds object representing
+            a batch of point clouds with at most P2 points in each batch element,
+            batch size N and feature dimension D.
+        x_lengths: Optional LongTensor of shape (N,) giving the number of points in each
+            cloud in x.
+        y_lengths: Optional LongTensor of shape (N,) giving the number of points in each
+            cloud in y.
+        x_normals: Optional FloatTensor of shape (N, P1, D).
+        y_normals: Optional FloatTensor of shape (N, P2, D).
+        weights: Optional FloatTensor of shape (N,) giving weights for
             batch elements for reduction operation.
         batch_reduction: Reduction operation to apply for the loss across the
             batch, can be one of ["mean", "sum"] or None.
         point_reduction: Reduction operation to apply for the loss across the
             points, can be one of ["mean", "sum", "max"] or None. Using "max" leads to the
             Hausdorff distance.
-        norm: int indicates the norm used for the distance. Only supports 2 for L2 (required by pointops).
+        norm: int indicates the norm used for the distance. Supports 1 for L1 and 2 for L2.
         single_directional: If False (default), loss comes from both the distance between
             each point in x and its nearest neighbor in y and each point in y and its nearest
             neighbor in x. If True, loss is the distance between each point in x and its
@@ -202,7 +229,7 @@ def chamfer_distance(
             equivalent to exactly matching normals, i.e. sign does not matter.
 
     Returns:
-        2-element tuple containing
+        3-element tuple containing
 
         - **loss**: Tensor giving the reduced distance between the pointclouds
           in x and the pointclouds in y. If point_reduction is None, a 2-element
@@ -215,6 +242,10 @@ def chamfer_distance(
           tuple of Tensors containing forward and backward loss terms shaped (N, P1)
           and (N, P2) (if single_directional is False) or a Tensor containing loss
           terms shaped (N, P1) (if single_directional is True) is returned.
+        - **idx**: LongTensor of nearest neighbor indices. If single_directional is True,
+          shape (N, P1) giving index into y for each point in x. If single_directional
+          is False, a 2-element tuple (idx_x, idx_y) where idx_x has shape (N, P1) and
+          idx_y has shape (N, P2).
     """
     _validate_chamfer_reduction_inputs(batch_reduction, point_reduction)
 
@@ -224,111 +255,53 @@ def chamfer_distance(
     if point_reduction == "max" and (x_normals is not None or y_normals is not None):
         raise ValueError('Normals must be None if point_reduction is "max"')
 
-    cham_x, x_idx = _chamfer_distance_single_direction(
+    x, x_lengths, x_normals = _handle_pointcloud_input(x, x_lengths, x_normals)
+    y, y_lengths, y_normals = _handle_pointcloud_input(y, y_lengths, y_normals)
+
+    cham_x, cham_norm_x, idx_x = _chamfer_distance_single_direction(
         x,
         y,
-        x_offsets,
-        y_offsets,
+        x_lengths,
+        y_lengths,
         x_normals,
         y_normals,
         weights,
         point_reduction,
         norm,
+        abs_cosine,
     )
     if single_directional:
         loss = cham_x
+        loss_normals = cham_norm_x
+        idx = idx_x
     else:
-        cham_y, y_idx = _chamfer_distance_single_direction(
+        cham_y, cham_norm_y, idx_y = _chamfer_distance_single_direction(
             y,
             x,
-            y_offsets,
-            x_offsets,
+            y_lengths,
+            x_lengths,
             y_normals,
             x_normals,
             weights,
             point_reduction,
             norm,
+            abs_cosine,
         )
+        idx = (idx_x, idx_y)
         if point_reduction == "max":
             loss = torch.maximum(cham_x, cham_y)
+            loss_normals = None
         elif point_reduction is not None:
             loss = cham_x + cham_y
+            if cham_norm_x is not None:
+                loss_normals = cham_norm_x + cham_norm_y
+            else:
+                loss_normals = None
         else:
             loss = (cham_x, cham_y)
-    return _apply_batch_reduction(loss, weights, batch_reduction), x_idx
-
-
-class ChamferLoss(nn.Module):
-    """
-    Chamfer distance loss for point cloud coordinate reconstruction,
-    with optional matched feature (energy) loss.
-    
-    Uses pointops for efficient KNN computation with offsets.
-    """
-    
-    def __init__(
-        self,
-        loss_weight: float = 1.0,
-        coord_weight: float = 1.0,
-        feat_weight: float = 0.1,
-        norm=2,
-    ):
-        """
-        Args:
-            loss_weight: overall loss weight
-            coord_weight: weight for coordinate chamfer distance
-            feat_weight: weight for matched feature MSE loss
-        """
-        super().__init__()
-        self.loss_weight = loss_weight
-        self.coord_weight = coord_weight
-        self.feat_weight = feat_weight
-        self.norm = norm
-    
-    def forward(
-        self,
-        pred_coord: torch.Tensor,
-        target_coord: torch.Tensor,
-        pred_feat: torch.Tensor,
-        target_feat: torch.Tensor,
-        pred_offset: torch.Tensor,
-        target_offset: torch.Tensor,
-    ) -> dict:
-        """
-        Compute reconstruction loss using chamfer distance with offsets.
-        
-        Args:
-            pred_coord: (N, 3) or (B, K, 3) predicted coordinates
-            target_coord: (M, 3) or (B, K, 3) target coordinates
-            pred_feat: (N, D) or (B, K, D) predicted features (e.g., energy)
-            target_feat: (M, D) or (B, K, D) target features
-            pred_offset: (B,) cumulative offsets for pred_coord (required if flattened)
-            target_offset: (B,) cumulative offsets for target_coord (required if flattened)
-        
-        Returns:
-            dict with 'loss', 'coord_loss', 'feat_loss'
-        """
-        # compute chamfer distance
-        coord_loss, pred_to_target_idx = chamfer_distance(
-            pred_coord,
-            target_coord,
-            x_offsets=pred_offset,
-            y_offsets=target_offset,
-            batch_reduction="mean",
-            point_reduction="mean",
-            norm=self.norm,
-        )
-        
-        # matched feature loss if provided
-        if self.feat_weight > 0:
-            matched_target_feat = target_feat[pred_to_target_idx]
-            feat_loss = F.smooth_l1_loss(pred_feat, matched_target_feat, reduction='mean')
-        else:
-            feat_loss = torch.tensor(0.0, device=coord_loss.device)
-        
-        total_loss = self.coord_weight * coord_loss + self.feat_weight * feat_loss
-        return {
-            "loss": self.loss_weight * total_loss,
-            "coord_loss": coord_loss,
-            "feat_loss": feat_loss
-        }
+            if cham_norm_x is not None:
+                loss_normals = (cham_norm_x, cham_norm_y)
+            else:
+                loss_normals = None
+    loss, loss_normals = _apply_batch_reduction(loss, loss_normals, weights, batch_reduction)
+    return loss, loss_normals, idx

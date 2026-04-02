@@ -13,7 +13,7 @@ except ImportError:
 
 import torch.nn.functional as F
 import torch_scatter
-from timm.models.layers import DropPath, trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 
 from pimm.models.builder import MODELS, build_model
 from pimm.models.losses import build_criteria

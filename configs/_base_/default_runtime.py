@@ -34,7 +34,7 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator"),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="FinalEvaluator", test_last=False),
 ]
 
 # Trainer

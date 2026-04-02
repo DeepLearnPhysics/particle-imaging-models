@@ -22,8 +22,112 @@ except ImportError:
 
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModule, PointSequential
-from pimm.models.utils.misc import offset2bincount, offset2batch
+from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
+
+
+class Point3DRoPE(nn.Module):
+    """3D rotary position embedding for serialized point cloud attention.
+
+    Splits each head into 3 equal sub-vectors (x, y, z) and applies 1D RoPE
+    per axis. head_dim must be divisible by 6 (3 axes * 2 for rotation pairs).
+
+    Optional coordinate augmentation during training (DINOv3-style):
+      - jitter: axis-wise multiplicative perturbation, j = exp(U(-log γ, log γ)^3)
+      - rescale: isotropic multiplicative perturbation, r = exp(U(-log η, log η))
+    """
+
+    def __init__(self, head_dim, base=10000, jitter_degree=None, rescale_degree=None):
+        super().__init__()
+        assert head_dim % 6 == 0, (
+            f"head_dim must be divisible by 6 for 3D RoPE, got {head_dim}"
+        )
+        self.head_dim = head_dim
+        self.chunk_dim = head_dim // 3
+        self.base = base
+        self.jitter_degree = jitter_degree
+        self.rescale_degree = rescale_degree
+
+        inv_freq = 1.0 / (
+            self.base ** (torch.arange(0, self.chunk_dim, 2).float() / self.chunk_dim)
+        )
+        self.register_buffer("inv_freq", inv_freq)
+
+    @torch.no_grad()
+    def _augment_coords(self, xyz):
+        if not self.training:
+            return xyz
+
+        if self.jitter_degree is not None and self.jitter_degree > 1:
+            log_gamma = torch.tensor(
+                self.jitter_degree, device=xyz.device, dtype=xyz.dtype
+            ).log()
+            eps_j = torch.empty(3, device=xyz.device, dtype=xyz.dtype).uniform_(
+                -log_gamma, log_gamma
+            )
+            xyz = xyz * eps_j.exp()
+
+        if self.rescale_degree is not None and self.rescale_degree > 1:
+            log_eta = torch.tensor(
+                self.rescale_degree, device=xyz.device, dtype=xyz.dtype
+            ).log()
+            eps_s = torch.empty(1, device=xyz.device, dtype=xyz.dtype).uniform_(
+                -log_eta, log_eta
+            )
+            xyz = xyz * eps_s.exp()
+
+        return xyz
+
+    def _compute_cos_sin(self, xyz):
+        """xyz: (..., 3) -> cos, sin each (..., head_dim)."""
+        x, y, z = xyz[..., 0:1], xyz[..., 1:2], xyz[..., 2:3]
+
+        emb_x = x * self.inv_freq
+        emb_y = y * self.inv_freq
+        emb_z = z * self.inv_freq
+
+        emb_x = torch.cat((emb_x, emb_x), dim=-1)
+        emb_y = torch.cat((emb_y, emb_y), dim=-1)
+        emb_z = torch.cat((emb_z, emb_z), dim=-1)
+
+        emb = torch.cat((emb_x, emb_y, emb_z), dim=-1)
+        return emb.cos(), emb.sin()
+
+    @staticmethod
+    def _rotate_half(x):
+        x1, x2 = x.chunk(2, dim=-1)
+        return torch.cat((-x2, x1), dim=-1)
+
+    def forward(self, q, k, xyz):
+        """Apply 3D RoPE to q and k.
+
+        q, k: (..., H, [K,] D) with head dim at position 1
+        xyz:  (matching leading dims, [K,] 3)
+        """
+        dtype = q.dtype
+        xyz = self._augment_coords(xyz)
+        cos, sin = self._compute_cos_sin(xyz)
+
+        # broadcast across heads (always dim 1)
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+
+        q_chunks = q.split(self.chunk_dim, dim=-1)
+        k_chunks = k.split(self.chunk_dim, dim=-1)
+        cos_chunks = cos.split(self.chunk_dim, dim=-1)
+        sin_chunks = sin.split(self.chunk_dim, dim=-1)
+
+        q_out, k_out = [], []
+        for i in range(3):
+            q_out.append(
+                q_chunks[i] * cos_chunks[i]
+                + self._rotate_half(q_chunks[i]) * sin_chunks[i]
+            )
+            k_out.append(
+                k_chunks[i] * cos_chunks[i]
+                + self._rotate_half(k_chunks[i]) * sin_chunks[i]
+            )
+        return torch.cat(q_out, dim=-1).to(dtype), torch.cat(k_out, dim=-1).to(dtype)
 
 
 class LayerScale(nn.Module):
@@ -77,7 +181,9 @@ class SerializedAttention(PointModule):
         enable_flash=True,
         upcast_attention=True,
         upcast_softmax=True,
-        full_attention=False,
+        rope_base=10,
+        rope_jitter=None,
+        rope_rescale=None,
     ):
         super().__init__()
         assert channels % num_heads == 0
@@ -89,7 +195,6 @@ class SerializedAttention(PointModule):
         self.upcast_softmax = upcast_softmax
         self.enable_rpe = enable_rpe
         self.enable_flash = enable_flash
-        self.full_attention = full_attention
         if enable_flash:
             assert (
                 enable_rpe is False
@@ -104,9 +209,6 @@ class SerializedAttention(PointModule):
             self.patch_size = patch_size
             self.attn_drop = attn_drop
         else:
-            # when disable flash attention, we still don't want to use mask
-            # consequently, patch size will auto set to the
-            # min number of patch_size_max and number of points
             self.patch_size_max = patch_size
             self.patch_size = 0
             self.attn_drop = torch.nn.Dropout(attn_drop)
@@ -116,6 +218,10 @@ class SerializedAttention(PointModule):
         self.proj_drop = torch.nn.Dropout(proj_drop)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.rpe = RPE(patch_size, num_heads) if self.enable_rpe else None
+        self.rope = Point3DRoPE(
+            channels // num_heads, rope_base,
+            jitter_degree=rope_jitter, rescale_degree=rope_rescale,
+        )
 
     @torch.no_grad()
     def get_rel_pos(self, point, order):
@@ -146,82 +252,49 @@ class SerializedAttention(PointModule):
         
             offset = point.offset
             bincount = offset2bincount(offset)
-            B = len(bincount)
-            K = self.patch_size
-            device = offset.device
-
             bincount_pad = (
-                torch.div(bincount + K - 1, K, rounding_mode="trunc") * K
+                torch.div(
+                    bincount + self.patch_size - 1,
+                    self.patch_size,
+                    rounding_mode="trunc",
+                )
+                * self.patch_size
             )
-            mask_pad = bincount > K
+            # only pad point when num of points larger than patch_size
+            mask_pad = bincount > self.patch_size
             bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
-
             _offset = nn.functional.pad(offset, (1, 0))
-            _offset_pad = nn.functional.pad(
-                torch.cumsum(bincount_pad, dim=0), (1, 0)
-            )
-            N_total = _offset[-1]
-            N_pad_total = _offset_pad[-1]
-            shift = _offset_pad[:-1] - _offset[:-1]
-
-            # --- unpad: searchsorted for view lookup ---
-            idx_unpad = torch.arange(N_total, device=device)
-            unpad = idx_unpad + shift[
-                torch.searchsorted(offset, idx_unpad, right=True)
-            ]
-
-            # --- pad: searchsorted + vectorized partial-patch ---
-            pad = torch.arange(N_pad_total, device=device)
-            remainder = bincount % K
-            needs_pad = mask_pad & (remainder != 0)
-            if needs_pad.any():
-                pad_views = torch.where(needs_pad)[0]
-                r = remainder[pad_views]
-                copy_lens = K - r
-                total_copies = copy_lens.sum()
-                view_of_copy = torch.arange(
-                    len(pad_views), device=device
-                ).repeat_interleave(copy_lens)
-                local_idx = torch.arange(total_copies, device=device)
-                copy_cumsum = nn.functional.pad(
-                    torch.cumsum(copy_lens, dim=0), (1, 0)
+            _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
+            pad = torch.arange(_offset_pad[-1], device=offset.device)
+            unpad = torch.arange(_offset[-1], device=offset.device)
+            cu_seqlens = []
+            for i in range(len(offset)):
+                unpad[_offset[i] : _offset[i + 1]] += _offset_pad[i] - _offset[i]
+                if bincount[i] != bincount_pad[i]:
+                    pad[
+                        _offset_pad[i + 1]
+                        - self.patch_size
+                        + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
+                    ] = pad[
+                        _offset_pad[i + 1]
+                        - 2 * self.patch_size
+                        + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
+                        - self.patch_size
+                    ]
+                pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
+                cu_seqlens.append(
+                    torch.arange(
+                        _offset_pad[i],
+                        _offset_pad[i + 1],
+                        step=self.patch_size,
+                        dtype=torch.int32,
+                        device=offset.device,
+                    )
                 )
-                local_idx = local_idx - copy_cumsum[view_of_copy]
-                dst = (
-                    _offset_pad[pad_views[view_of_copy] + 1]
-                    - K + r[view_of_copy] + local_idx
-                )
-                pad[dst] = pad[dst - K]
-
-            offset_pad_cumsum = torch.cumsum(bincount_pad, dim=0)
-            idx_pad = torch.arange(N_pad_total, device=device)
-            pad = pad - shift[
-                torch.searchsorted(offset_pad_cumsum, idx_pad, right=True)
-            ]
-
-            # --- cu_seqlens: searchsorted for patch view lookup ---
-            patches_per_view = torch.div(
-                bincount_pad + K - 1, K, rounding_mode="trunc"
-            ).int()
-            total_patches = patches_per_view.sum()
-            patches_cumsum = nn.functional.pad(
-                torch.cumsum(patches_per_view, dim=0), (1, 0)
-            )
-            patch_idx = torch.arange(
-                total_patches, device=device, dtype=torch.int32
-            )
-            patch_view = torch.searchsorted(
-                patches_cumsum[1:], patch_idx, right=True
-            ).int()
-            patch_local = patch_idx - patches_cumsum[patch_view].int()
-            cu_seqlens_vals = (
-                _offset_pad[patch_view].int() + patch_local * K
-            )
-
             point[pad_key] = pad
             point[unpad_key] = unpad
             point[cu_seqlens_key] = nn.functional.pad(
-                cu_seqlens_vals.int(), (0, 1), value=int(N_pad_total)
+                torch.concat(cu_seqlens), (0, 1), value=_offset_pad[-1]
             )
         return point[pad_key], point[unpad_key], point[cu_seqlens_key]
 
@@ -243,19 +316,21 @@ class SerializedAttention(PointModule):
             order = order[pad]
             inverse = unpad[point.serialized_inverse[self.order_index]]
 
-        # padding and reshape feat and batch for serialized point patch
         qkv = self.qkv(point.feat)[order]
+        rope_coord = point.coord[order].clone()
 
         if not self.enable_flash:
-            # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
+            # (N', K, 3, H, C') => (3, N', H, K, C')
             q, k, v = (
                 qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
             )
-            # attn
+            # q: (P, H, K, D), rope_coord: (N_pad, 3) -> (P, K, 3)
+            q, k = self.rope(q, k, rope_coord.reshape(-1, K, 3))
+
             if self.upcast_attention:
                 q = q.float()
                 k = k.float()
-            attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
+            attn = (q * self.scale) @ k.transpose(-2, -1)
             if self.enable_rpe:
                 attn = attn + self.rpe(self.get_rel_pos(point, order))
             if self.upcast_softmax:
@@ -264,10 +339,16 @@ class SerializedAttention(PointModule):
             attn = self.attn_drop(attn).to(qkv.dtype)
             feat = (attn @ v).transpose(1, 2).reshape(-1, C)
         else:
-            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-                qkv.to(torch.bfloat16).reshape(-1, 3, H, C // H),
-                cu_seqlens,
-                max_seqlen=max_seqlen,
+            # split q/k/v so we can apply RoPE before flash attention
+            qkv_bf = qkv.to(torch.bfloat16).reshape(-1, 3, H, C // H)
+            q, k, v = qkv_bf.unbind(dim=1)  # each (N_pad, H, D)
+            q, k = self.rope(q, k, rope_coord)  # rope_coord: (N_pad, 3)
+            feat = flash_attn.flash_attn_varlen_func(
+                q, k, v,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
                 dropout_p=self.attn_drop if self.training else 0,
                 softmax_scale=self.scale,
             ).reshape(-1, C)
@@ -276,7 +357,6 @@ class SerializedAttention(PointModule):
         if pad is not None:
             feat = feat[inverse]
 
-        # ffn
         feat = self.proj(feat)
         feat = self.proj_drop(feat)
         point.feat = feat
@@ -329,11 +409,13 @@ class Block(PointModule):
         cpe_indice_key=None,
         enable_rpe=False,
         enable_flash=True,
-        full_attention=False,
         upcast_attention=True,
         upcast_softmax=True,
         enable_cpe=True,
         shared_cpe_conv=None,
+        rope_base=10,
+        rope_jitter=None,
+        rope_rescale=None,
     ):
         super().__init__()
         self.channels = channels
@@ -378,11 +460,13 @@ class Block(PointModule):
             attn_drop=attn_drop,
             proj_drop=proj_drop,
             order_index=order_index,
-            full_attention=full_attention,
             enable_rpe=enable_rpe,
             enable_flash=enable_flash,
             upcast_attention=upcast_attention,
             upcast_softmax=upcast_softmax,
+            rope_base=rope_base,
+            rope_jitter=rope_jitter,
+            rope_rescale=rope_rescale,
         )
         self.norm2 = PointSequential(norm_layer(channels))
         self.ls2 = PointSequential(
@@ -619,7 +703,7 @@ class Embedding(PointModule):
         return point
 
 
-@MODELS.register_module("PT-v3m2")
+@MODELS.register_module("PT-v3m7")
 class PointTransformerV3(PointModule):
     def __init__(
         self,
@@ -646,7 +730,6 @@ class PointTransformerV3(PointModule):
         enable_rpe=False,
         enable_flash=True,
         enable_cpe=True,
-        full_attention=False,
         upcast_attention=False,
         upcast_softmax=False,
         traceable=False,
@@ -659,6 +742,9 @@ class PointTransformerV3(PointModule):
         add_iso_features=False,
         iso_k=8,
         iso_r=None,
+        rope_base=10,
+        rope_jitter=None,
+        rope_rescale=None,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -671,6 +757,10 @@ class PointTransformerV3(PointModule):
         self.add_iso_features = add_iso_features
         self.iso_k = iso_k
         self.iso_r = iso_r
+
+        self.rope_base = rope_base
+        self.rope_jitter = rope_jitter
+        self.rope_rescale = rope_rescale
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
@@ -756,13 +846,15 @@ class PointTransformerV3(PointModule):
                         pre_norm=pre_norm,
                         order_index=i % len(self.order),
                         cpe_indice_key=f"stage{s}",
-                        full_attention=full_attention,
                         enable_rpe=enable_rpe,
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
                         upcast_softmax=upcast_softmax,
                         enable_cpe=(False if cpe_first_layer_only and i != 0 else True) and enable_cpe,
                         shared_cpe_conv=self.shared_cpe_convs[f"enc_stage{s}"] if cpe_shared_weight else None,
+                        rope_base=rope_base,
+                        rope_jitter=rope_jitter,
+                        rope_rescale=rope_rescale,
                     ),
                     name=f"block{i}",
                 )
@@ -811,13 +903,15 @@ class PointTransformerV3(PointModule):
                             pre_norm=pre_norm,
                             order_index=i % len(self.order),
                             cpe_indice_key=f"stage{s}",
-                            full_attention=full_attention,
                             enable_rpe=enable_rpe,
                             enable_flash=enable_flash,
                             upcast_attention=upcast_attention,
                             upcast_softmax=upcast_softmax,
                             enable_cpe=(False if cpe_first_layer_only and i != 0 else True) and enable_cpe,
                             shared_cpe_conv=self.shared_cpe_convs[f"dec_stage{s}"] if cpe_shared_weight else None,
+                            rope_base=rope_base,
+                            rope_jitter=rope_jitter,
+                            rope_rescale=rope_rescale,
                         ),
                         name=f"block{i}",
                     )

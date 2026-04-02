@@ -6,6 +6,7 @@ This module handles the PILArNet-M dataset for particle physics point cloud segm
 
 import os
 import glob
+import random
 import numpy as np
 import h5py
 from copy import deepcopy
@@ -15,6 +16,10 @@ from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS
 from .hepdataset import HEPDataset
+
+# priority for voxel deduplication: track (1) > shower (0) > michel (2) > delta (3) > led (4)
+DEFAULT_LABEL_PRIORITY = {1: 0, 0: 1, 2: 2, 3: 3, 4: 4}
+
 
 @DATASETS.register_module()
 class PILArNetH5Dataset(HEPDataset):
@@ -41,6 +46,11 @@ class PILArNetH5Dataset(HEPDataset):
     which contains PID, momentum, and vertex information, and is used in the Panda paper. Note that
     the events in the splits are different between v1 and v2, so care needs to be taken when evaluating a model
     that was trained on v1 on v2.
+
+    Event Overlay:
+        Set overlay_n_events > 1 to overlay multiple events into a single point cloud.
+        Overlapping voxels are deduplicated with priority: track > shower > michel > delta > led.
+        Overlay events are randomly rotated by 90-degree increments.
     """
 
     def __init__(
@@ -57,7 +67,11 @@ class PILArNetH5Dataset(HEPDataset):
         max_len=-1,
         remove_low_energy_scatters=False,
         old_pid_mapping=False,
-        revision: Literal["v1", "v2"] = "v2"
+        revision: Literal["v1", "v2"] = "v2",
+        # event overlay parameters
+        overlay_n_events=1,
+        overlay_prob=1.0,
+        overlay_allow_repeats=True,
     ):
         super().__init__()
         self.data_root = data_root
@@ -82,6 +96,11 @@ class PILArNetH5Dataset(HEPDataset):
             self.post_transform = Compose(self.test_cfg.post_transform)
             self.aug_transform = [Compose(aug) for aug in self.test_cfg.aug_transform]
 
+        # event overlay parameters
+        self.overlay_n_events = overlay_n_events
+        self.overlay_prob = overlay_prob
+        self.overlay_allow_repeats = overlay_allow_repeats
+
         # PILArNet specific parameters
         self.energy_threshold = energy_threshold
         self.min_points = min_points
@@ -102,6 +121,8 @@ class PILArNetH5Dataset(HEPDataset):
                 self.cumulative_lengths[-1], self.loop, split
             )
         )
+        if self.overlay_n_events > 1 or (isinstance(self.overlay_n_events, (tuple, list)) and self.overlay_n_events[1] > 1):
+            logger.info(f"Event overlay enabled: n_events={self.overlay_n_events}, prob={self.overlay_prob}")
 
     def get_h5_files(self):
         """Get list of h5 files based on the split."""
@@ -312,15 +333,181 @@ class PILArNetH5Dataset(HEPDataset):
 
         return f"{h5_name}_{file_idx}"
 
+    def _sample_overlay_n_events(self):
+        """Sample the number of events to overlay."""
+        if isinstance(self.overlay_n_events, (tuple, list)):
+            return random.randint(self.overlay_n_events[0], self.overlay_n_events[1])
+        return self.overlay_n_events
+
+    @staticmethod
+    def _get_rotation_matrix_90(axis, n_rotations):
+        """Get rotation matrix for n * 90 degree rotation around axis."""
+        angle = n_rotations * np.pi / 2
+        c, s = np.cos(angle), np.sin(angle)
+        if axis == "x":
+            return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], dtype=np.float32)
+        elif axis == "y":
+            return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=np.float32)
+        else:  # z
+            return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float32)
+
+    def _apply_random_90_rotation(self, coord, center=None):
+        """Apply random 90-degree rotations around x, y, z axes centered at given point."""
+        if center is None:
+            center = np.array([384.0, 384.0, 384.0], dtype=np.float32)
+        coord = coord - center
+        for axis in ["x", "y", "z"]:
+            n_rot = random.randint(0, 3)
+            if n_rot > 0:
+                rot_mat = self._get_rotation_matrix_90(axis, n_rot)
+                coord = coord @ rot_mat.T
+        coord = coord + center
+        return coord
+
+    def _deduplicate_voxels(self, data_dict, concat_keys):
+        """
+        Deduplicate overlapping voxels based on segment_motif priority.
+        Priority: track (1) > shower (0) > michel (2) > delta (3) > led (4)
+        """
+        coord = data_dict.get("coord")
+        if coord is None:
+            return data_dict
+
+        coord_int = np.round(coord).astype(np.int64)
+        segment = data_dict.get("segment_motif")
+        
+        if segment is None:
+            _, unique_idx = np.unique(coord_int, axis=0, return_index=True)
+            unique_idx = np.sort(unique_idx)
+            for key in concat_keys:
+                if key in data_dict and data_dict[key] is not None:
+                    data_dict[key] = data_dict[key][unique_idx]
+            return data_dict
+
+        segment = segment.flatten()
+        n_points = coord_int.shape[0]
+        priorities = np.array([DEFAULT_LABEL_PRIORITY.get(int(s), 999) for s in segment], dtype=np.int32)
+
+        coord_min = coord_int.min(axis=0)
+        coord_shifted = coord_int - coord_min
+        coord_max = coord_shifted.max(axis=0) + 1
+
+        voxel_hash = (
+            coord_shifted[:, 0].astype(np.int64) * (coord_max[1] * coord_max[2]) +
+            coord_shifted[:, 1].astype(np.int64) * coord_max[2] +
+            coord_shifted[:, 2].astype(np.int64)
+        )
+
+        unique_hashes, inverse_indices = np.unique(voxel_hash, return_inverse=True)
+        n_unique = len(unique_hashes)
+
+        best_idx = np.full(n_unique, -1, dtype=np.int64)
+        best_priority = np.full(n_unique, 1000, dtype=np.int32)
+
+        for i in range(n_points):
+            voxel_idx = inverse_indices[i]
+            if priorities[i] < best_priority[voxel_idx]:
+                best_priority[voxel_idx] = priorities[i]
+                best_idx[voxel_idx] = i
+
+        keep_idx = best_idx[best_idx >= 0]
+        keep_idx = np.sort(keep_idx)
+
+        for key in concat_keys:
+            if key in data_dict and data_dict[key] is not None:
+                data_dict[key] = data_dict[key][keep_idx]
+
+        return data_dict
+
+    def _apply_overlay(self, data_dict):
+        """Overlay multiple events into a single point cloud."""
+        n_events = self._sample_overlay_n_events()
+        if n_events <= 1:
+            return data_dict
+
+        concat_keys = [
+            "coord", "energy", "segment_motif", "segment_pid",
+            "instance_particle", "instance_interaction",
+            "momentum", "vertex", "segment_interaction",
+        ]
+        instance_keys = ("instance_particle", "instance_interaction")
+
+        dataset_len = len(self)
+        if self.overlay_allow_repeats:
+            indices = [random.randint(0, dataset_len - 1) for _ in range(n_events - 1)]
+        else:
+            indices = random.sample(range(dataset_len), min(n_events - 1, dataset_len))
+
+        additional_dicts = []
+        for idx in indices:
+            try:
+                extra = self.get_data(idx)
+                additional_dicts.append(extra)
+            except Exception:
+                continue
+
+        if not additional_dicts:
+            return data_dict
+
+        # track max instance ID for offsetting
+        max_instance = {}
+        for key in instance_keys:
+            if key in data_dict and data_dict[key] is not None:
+                vals = data_dict[key]
+                max_instance[key] = int(vals[vals != -1].max()) + 1 if (vals != -1).any() else 0
+            else:
+                max_instance[key] = 0
+
+
+        for extra in additional_dicts:
+            # offset instance IDs
+            for key in instance_keys:
+                if key in extra and extra[key] is not None:
+                    inst = extra[key]
+                    mask = inst != -1
+                    inst[mask] += max_instance[key]
+                    if mask.any():
+                        max_instance[key] = int(inst[mask].max()) + 1
+
+            # apply random 90-degree rotation around detector center
+            if "coord" in extra:
+                # rotation center is the detector volume center
+                detector_center = np.array([384.0, 384.0, 384.0], dtype=np.float32)
+                extra["coord"] = self._apply_random_90_rotation(extra["coord"], center=detector_center)
+
+            # concatenate arrays
+            for key in concat_keys:
+                if key in data_dict and key in extra:
+                    if data_dict[key] is not None and extra[key] is not None:
+                        data_dict[key] = np.concatenate([data_dict[key], extra[key]], axis=0)
+
+        # deduplicate overlapping voxels
+        data_dict = self._deduplicate_voxels(data_dict, concat_keys)
+
+        if "name" in data_dict:
+            data_dict["name"] = f"{data_dict['name']}_overlay{n_events}"
+
+        return data_dict
+
     def prepare_train_data(self, idx):
         """Prepare training data with transforms."""
         data_dict = self.get_data(idx % len(self))
+        # apply event overlay if enabled
+        if self.overlay_n_events > 1 or (isinstance(self.overlay_n_events, (tuple, list)) and self.overlay_n_events[1] > 1):
+            if random.random() < self.overlay_prob:
+                data_dict = self._apply_overlay(data_dict)
         return self.transform(data_dict)
 
     def prepare_test_data(self, idx):
         """Prepare test data with test transforms."""
         # Load data
         data_dict = self.get_data(idx % len(self))
+
+        # apply event overlay if enabled
+        if self.overlay_n_events > 1 or (isinstance(self.overlay_n_events, (tuple, list)) and self.overlay_n_events[1] > 1):
+            if random.random() < self.overlay_prob:
+                data_dict = self._apply_overlay(data_dict)
+
 
         # Apply transforms
         if self.transform is not None:

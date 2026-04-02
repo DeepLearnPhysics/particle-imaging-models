@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import torch_scatter
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 import pointops
 from pimm.models.utils.structure import Point

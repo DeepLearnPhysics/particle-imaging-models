@@ -1,0 +1,88 @@
+name: Docker
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'docker/**'
+      - 'libs/**'
+      - '.github/workflows/docker.yml'
+  pull_request:
+    paths:
+      - 'docker/**'
+      - 'libs/**'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-standard:
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      output: image
+      file: docker/Dockerfile
+      push: ${{ github.event_name != 'pull_request' }}
+      cache: true
+      cache-mode: max
+      cache-scope: standard
+      meta-images: youngsm/pimm
+      meta-tags: |
+        type=ref,event=branch
+        type=ref,event=pr
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        type=raw,value=pytorch2.5.0-cuda12.4
+      build-args: |
+        TORCH_VERSION=2.5.0
+        CUDA_VERSION=12.4
+        CUDA_VERSION_NO_DOT=124
+        CUDNN_VERSION=9
+        TORCH_CUDA_ARCH_LIST=8.0 8.6 8.9 9.0
+    secrets:
+      registry-auths: |
+        - registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  build-nersc:
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      output: image
+      file: docker/Dockerfile.nersc
+      push: ${{ github.event_name != 'pull_request' }}
+      cache: true
+      cache-mode: max
+      cache-scope: nersc
+      meta-images: youngsm/pimm-nersc
+      meta-tags: |
+        type=ref,event=branch
+        type=ref,event=pr
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
+        type=raw,value=pytorch2.5.0-cuda12.4
+      build-args: |
+        TORCH_VERSION=2.5.0
+        CUDA_VERSION=12.4
+        CUDA_VERSION_NO_DOT=124
+        CUDNN_VERSION=9
+        TORCH_CUDA_ARCH_LIST=8.0 8.6 8.9 9.0
+    secrets:
+      registry-auths: |
+        - registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}

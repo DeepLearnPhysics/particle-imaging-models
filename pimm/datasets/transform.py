@@ -1044,6 +1044,7 @@ class GridSample(object):
         return_min_coord=False,
         return_displacement=False,
         project_displacement=False,
+        sum_keys=None,
     ):
         self.grid_size = grid_size
         self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
@@ -1054,6 +1055,7 @@ class GridSample(object):
         self.return_min_coord = return_min_coord
         self.return_displacement = return_displacement
         self.project_displacement = project_displacement
+        self.sum_keys = sum_keys or []
 
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
@@ -1081,7 +1083,20 @@ class GridSample(object):
                 mask = np.zeros_like(data_dict["segment"]).astype(bool)
                 mask[data_dict["sampled_index"]] = True
                 data_dict["sampled_index"] = np.where(mask[idx_unique])[0]
+            summed = {}
+            if self.sum_keys:
+                voxel_of_point = np.empty(len(key), dtype=inverse.dtype)
+                voxel_of_point[idx_sort] = inverse
+                num_voxels = len(count)
+                for sk in self.sum_keys:
+                    if sk in data_dict:
+                        vals = data_dict[sk]
+                        agg = np.zeros((num_voxels,) + vals.shape[1:], dtype=vals.dtype)
+                        np.add.at(agg, voxel_of_point, vals)
+                        summed[sk] = agg
             data_dict = index_operator(data_dict, idx_unique)
+            for sk, agg in summed.items():
+                data_dict[sk] = agg
             if self.return_inverse:
                 data_dict["inverse"] = np.zeros_like(inverse)
                 data_dict["inverse"][idx_sort] = inverse
@@ -2003,6 +2018,21 @@ class HMAECollate(object):
 
         return data_dict
 
+
+@TRANSFORMS.register_module()
+class RandomDrop(object):
+    def __init__(self, key: str, p_apply: float = 0.5, p_drop: float = 0.2, value: float = 0.0):
+        self.key = key
+        self.p_apply = p_apply
+        self.p_drop = p_drop
+        self.value = value
+
+    def __call__(self, data_dict):
+        if self.key in data_dict.keys() and np.random.rand() < self.p_apply:
+            n = data_dict[self.key].shape[0]
+            idx = np.random.choice(n, int(n*self.p_drop), replace=False)
+            data_dict[self.key][idx][:] = self.value
+        return data_dict
 
 class Compose(object):
     def __init__(self, cfg=None):
