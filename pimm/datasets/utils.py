@@ -43,6 +43,7 @@ def collate_fn(batch, mix_prob=0):
                 )
             )
             for key in batch[0]
+            if not key.startswith("_")  # skip non-tensor metadata
         }
         return batch
     else:

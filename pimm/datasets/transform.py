@@ -53,6 +53,21 @@ def index_operator(data_dict, index, duplicate=False):
             "instance_particle",
             "instance_interaction",
             "momentum",
+            # LArTPCDataset keys (JAXTPC)
+            "track_ids",
+            "group_ids",
+            "pdg",
+            "volume_id",
+            "interaction_ids",
+            "ancestor_track_ids",
+            "charge",
+            "photons",
+            "qs_fractions",
+            "t0_us",
+            "dx",
+            "theta",
+            "phi",
+            "segment_interaction",
         ]
     if not duplicate:
         for key in data_dict["index_valid_keys"]:
