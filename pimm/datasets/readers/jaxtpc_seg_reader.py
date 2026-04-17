@@ -1,8 +1,8 @@
 """
-LArTPCSegReader — reads 3D truth deposits from JAXTPC seg files.
+JAXTPCSegReader — reads 3D truth deposits from JAXTPC seg files.
 
 Produces raw geometry, physics, and IDs. Labels come from the labl file
-via LArTPCLablReader + LArTPCDataset._apply_labl_to_3d(), or from
+via JAXTPCLablReader + JAXTPCDataset._apply_labl_to_3d(), or from
 PDGToSemantic transform as a fallback.
 
 Output dict:
@@ -19,7 +19,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class LArTPCSegReader:
+class JAXTPCSegReader:
     """Reads 3D truth deposits from JAXTPC seg HDF5 files.
 
     Concatenates volumes into a single point cloud with a volume_id feature.
@@ -109,7 +109,7 @@ class LArTPCSegReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"LArTPCSegReader: {self.cumulative_lengths[-1]} events "
+        log.info(f"JAXTPCSegReader: {self.cumulative_lengths[-1]} events "
                  f"from {len(self.h5_files)} files "
                  f"(min_deposits={self.min_deposits})")
 

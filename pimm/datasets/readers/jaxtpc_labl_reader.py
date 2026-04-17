@@ -1,5 +1,5 @@
 """
-LArTPCLablReader — reads per-volume track_id → label lookup tables.
+JAXTPCLablReader — reads per-volume track_id → label lookup tables.
 
 The labl file stores a mapping from track_id to labels (particle, cluster,
 interaction) per volume. This is used for:
@@ -20,7 +20,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class LArTPCLablReader:
+class JAXTPCLablReader:
     """Reads per-volume track_id → label lookup tables.
 
     Parameters
@@ -80,7 +80,7 @@ class LArTPCLablReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"LArTPCLablReader: {self.cumulative_lengths[-1]} events "
+        log.info(f"JAXTPCLablReader: {self.cumulative_lengths[-1]} events "
                  f"from {len(self.h5_files)} files")
 
     def h5py_worker_init(self):

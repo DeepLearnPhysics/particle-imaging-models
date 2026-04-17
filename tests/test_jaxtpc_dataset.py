@@ -1,7 +1,7 @@
 """
-Verification script for LArTPCDataset — all modality combinations.
+Verification script for JAXTPCDataset — all modality combinations.
 
-Run: /usr/bin/python3 tools/test_detector_dataset.py
+Run: /usr/bin/python3 tests/test_jaxtpc_dataset.py
 """
 
 import sys
@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 import torch.nn as nn
-from pimm.datasets.lartpc_dataset import LArTPCDataset
+from pimm.datasets.jaxtpc_dataset import JAXTPCDataset
 from pimm.datasets.utils import collate_fn
 from pimm.datasets.transform import Compose
 
@@ -37,7 +37,7 @@ def check(condition, msg):
 def make_ds(**kwargs):
     defaults = dict(data_root=DATA_ROOT, split='', dataset_name='sim', max_len=MAX_LEN)
     defaults.update(kwargs)
-    return LArTPCDataset(**defaults)
+    return JAXTPCDataset(**defaults)
 
 
 def test_seg_only():
@@ -210,7 +210,7 @@ def test_toy_model():
 
 
 if __name__ == '__main__':
-    print(f"Testing LArTPCDataset\nData root: {DATA_ROOT}")
+    print(f"Testing JAXTPCDataset\nData root: {DATA_ROOT}")
 
     test_seg_only()
     test_seg_labl()

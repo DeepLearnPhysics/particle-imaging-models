@@ -4,7 +4,7 @@ Detector-specific transforms for multimodal detector data.
 PDGToSemantic: derives semantic labels from PDG codes in seg data (3D tasks).
     Used when no label file is available (fallback).
     For production training, labels come from the labl file via
-    LArTPCDataset._apply_labl_to_3d() or _build_corr_pointcloud().
+    JAXTPCDataset._apply_labl_to_3d() or _build_corr_pointcloud().
 """
 
 import numpy as np
@@ -16,7 +16,7 @@ class PDGToSemantic:
     """Fallback: derive approximate semantic labels from PDG codes.
 
     Use this only when no labl file is available. For production training,
-    use modalities=('seg', 'labl') which applies labels via LArTPCLablReader.
+    use modalities=('seg', 'labl') which applies labels via JAXTPCLablReader.
 
     Schemes
     -------

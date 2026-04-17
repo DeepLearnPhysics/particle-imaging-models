@@ -1,7 +1,7 @@
 """
-Verification script for WCDataset — all output modes.
+Verification script for LUCiDDataset — all output modes.
 
-Run: /usr/bin/python3 tools/test_wc_dataset.py
+Run: /usr/bin/python3 tests/test_lucid_dataset.py
 """
 
 import sys
@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 import torch.nn as nn
-from pimm.datasets.wc_dataset import WCDataset
+from pimm.datasets.lucid_dataset import LUCiDDataset
 from pimm.datasets.utils import collate_fn
 from pimm.datasets.transform import Compose
 
@@ -33,7 +33,7 @@ def check(condition, msg):
 def make_ds(**kwargs):
     defaults = dict(data_root=DATA_ROOT, split='', dataset_name='wc', max_len=4)
     defaults.update(kwargs)
-    return WCDataset(**defaults)
+    return LUCiDDataset(**defaults)
 
 
 def test_sensor_response():
@@ -178,7 +178,7 @@ def test_dataloader():
 
 
 if __name__ == '__main__':
-    print(f"Testing WCDataset\nData root: {DATA_ROOT}")
+    print(f"Testing LUCiDDataset\nData root: {DATA_ROOT}")
 
     test_sensor_response()
     test_sensor_labels()

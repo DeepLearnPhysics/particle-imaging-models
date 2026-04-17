@@ -1,5 +1,5 @@
 """
-LArTPCRespReader — reads sparse wire signals from JAXTPC resp files.
+JAXTPCRespReader — reads sparse wire signals from JAXTPC resp files.
 
 Decodes delta-encoded (wire, time, value) triples per plane.
 Output keys are dot-namespaced: plane.{plane_label}.wire/time/value
@@ -15,7 +15,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class LArTPCRespReader:
+class JAXTPCRespReader:
     """Reads sparse wire signals from JAXTPC resp HDF5 files.
 
     Parameters
@@ -80,7 +80,7 @@ class LArTPCRespReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"LArTPCRespReader: {self.cumulative_lengths[-1]} events "
+        log.info(f"JAXTPCRespReader: {self.cumulative_lengths[-1]} events "
                  f"from {len(self.h5_files)} files")
 
     def h5py_worker_init(self):

@@ -53,7 +53,7 @@ def index_operator(data_dict, index, duplicate=False):
             "instance_particle",
             "instance_interaction",
             "momentum",
-            # LArTPCDataset keys (JAXTPC)
+            # JAXTPCDataset keys (JAXTPC)
             "track_ids",
             "group_ids",
             "pdg",

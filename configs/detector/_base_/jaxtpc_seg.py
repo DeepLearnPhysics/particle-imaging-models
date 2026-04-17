@@ -65,7 +65,7 @@ data = dict(
     ignore_index=-1,
     names=["shower", "track", "michel", "delta", "led"],
     train=dict(
-        type="LArTPCDataset",
+        type="JAXTPCDataset",
         data_root=_data_root,
         split="train",
         dataset_name="sim",
@@ -75,7 +75,7 @@ data = dict(
         max_len=-1,
     ),
     val=dict(
-        type="LArTPCDataset",
+        type="JAXTPCDataset",
         data_root=_data_root,
         split="val",
         dataset_name="sim",

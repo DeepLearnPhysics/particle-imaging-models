@@ -2,7 +2,7 @@
 
 pimm supports multiple detector types through dedicated dataset classes. Each loads from co-indexed HDF5 files and produces flat dicts that flow through pimm's standard pipeline (transforms → Collect → collate → Point → model).
 
-## LArTPCDataset
+## JAXTPCDataset
 
 For Liquid Argon TPC detectors (JAXTPC production output).
 
@@ -45,7 +45,7 @@ Raw per-plane keys (`plane.*`, `corr.*`) are always passed through for per-plane
 ### Config Parameters
 ```python
 data = dict(train=dict(
-    type="LArTPCDataset",
+    type="JAXTPCDataset",
     data_root="/path/to/dataset",
     split="",
     dataset_name="sim",
@@ -68,7 +68,7 @@ GridSample, ToTensor, Copy, Collect, RandomDropout, ShufflePoint, RandomJitter, 
 
 ---
 
-## WCDataset
+## LUCiDDataset
 
 For Water Cherenkov detectors (PMT-based).
 
@@ -88,7 +88,7 @@ matching the PhotonSim/LUCiD production output.
 ### Task → Config
 
 `coord` shape depends on whether PMT 3D positions are provided
-(via `pmt_positions` / `pmt_positions_file` on WCSensorReader, or stored
+(via `pmt_positions` / `pmt_positions_file` on LUCiDSensorReader, or stored
 in the file's `config/pmt_positions` dataset). Without positions,
 `coord` falls back to `(N, 1)` with sensor indices.
 
@@ -102,7 +102,7 @@ in the file's `config/pmt_positions` dataset). Without positions,
 ### Config Parameters
 ```python
 data = dict(train=dict(
-    type="WCDataset",
+    type="LUCiDDataset",
     data_root="/path/to/dataset_wc",
     dataset_name="wc",
     modalities=("sensor",),
@@ -135,6 +135,6 @@ No changes needed to transforms, collation, models, or training infrastructure.
 
 ## Running Tests
 ```bash
-/usr/bin/python3 tools/test_detector_dataset.py   # LArTPC (38 tests)
-/usr/bin/python3 tools/test_wc_dataset.py          # Water Cherenkov (32 tests)
+/usr/bin/python3 tests/test_jaxtpc_dataset.py     # JAXTPC / LArTPC (38 tests)
+/usr/bin/python3 tests/test_lucid_dataset.py      # LUCiD / Water Cherenkov (32 tests)
 ```

@@ -1,5 +1,5 @@
 """
-LArTPCCorrReader — reads 3D→2D correspondence from JAXTPC corr files.
+JAXTPCCorrReader — reads 3D→2D correspondence from JAXTPC corr files.
 
 Decodes CSR-encoded per-plane correspondence into flat arrays:
 per pixel entry: (wire, time, group_id, charge).
@@ -16,7 +16,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class LArTPCCorrReader:
+class JAXTPCCorrReader:
     """Reads 3D→2D correspondence from JAXTPC corr HDF5 files.
 
     Parameters
@@ -76,7 +76,7 @@ class LArTPCCorrReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"LArTPCCorrReader: {self.cumulative_lengths[-1]} events "
+        log.info(f"JAXTPCCorrReader: {self.cumulative_lengths[-1]} events "
                  f"from {len(self.h5_files)} files")
 
     def h5py_worker_init(self):

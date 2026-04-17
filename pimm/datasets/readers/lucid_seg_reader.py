@@ -1,5 +1,5 @@
 """
-WCSegReader — reads 3D track segments from Water Cherenkov segment files.
+LUCiDSegReader — reads 3D track segments from Water Cherenkov segment files.
 
 Format: flat CSR arrays (no per-event groups).
   - track_event_offset (n_events+1,) — CSR into track arrays
@@ -19,7 +19,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class WCSegReader:
+class LUCiDSegReader:
     """Reads 3D track segments from WC segment HDF5 files.
 
     Parameters
@@ -104,7 +104,7 @@ class WCSegReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"WCSegReader: {self.cumulative_lengths[-1]} events "
+        log.info(f"LUCiDSegReader: {self.cumulative_lengths[-1]} events "
                  f"from {len(self.h5_files)} files")
 
     def h5py_worker_init(self):

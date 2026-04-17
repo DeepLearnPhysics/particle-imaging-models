@@ -1,5 +1,5 @@
 """
-WCDataset — dataset for Water Cherenkov detector simulation output.
+LUCiDDataset — dataset for Water Cherenkov detector simulation output.
 
 Loads PMT sensor data and/or 3D track segments from co-indexed HDF5 files.
 Produces flat dicts compatible with pimm's transform/collation pipeline.
@@ -7,15 +7,15 @@ Produces flat dicts compatible with pimm's transform/collation pipeline.
 Example configs:
 
     # PMT event classification (sensor response as fixed-geometry point cloud)
-    data = dict(train=dict(type="WCDataset", data_root="dataset_wc",
+    data = dict(train=dict(type="LUCiDDataset", data_root="dataset_wc",
         modalities=("sensor",), dataset_name="wc", ...))
 
     # Per-sensor instance separation (sparse per-particle entries)
-    data = dict(train=dict(type="WCDataset", data_root="dataset_wc",
+    data = dict(train=dict(type="LUCiDDataset", data_root="dataset_wc",
         modalities=("sensor",), include_labels=True, ...))
 
     # 3D track reconstruction
-    data = dict(train=dict(type="WCDataset", data_root="dataset_wc",
+    data = dict(train=dict(type="LUCiDDataset", data_root="dataset_wc",
         modalities=("seg",), ...))
 """
 
@@ -27,12 +27,12 @@ from torch.utils.data import Dataset
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS
-from .readers.wc_seg_reader import WCSegReader
-from .readers.wc_sensor_reader import WCSensorReader
+from .readers.lucid_seg_reader import LUCiDSegReader
+from .readers.lucid_sensor_reader import LUCiDSensorReader
 
 
 @DATASETS.register_module()
-class WCDataset(Dataset):
+class LUCiDDataset(Dataset):
     """Water Cherenkov detector dataset.
 
     Parameters
@@ -107,13 +107,13 @@ class WCDataset(Dataset):
 
         if 'seg' in self.modalities:
             seg_root = self._modality_root('seg')
-            self.seg_reader = WCSegReader(
+            self.seg_reader = LUCiDSegReader(
                 data_root=seg_root, split=split,
                 dataset_name=dataset_name, min_segments=min_segments)
 
         if 'sensor' in self.modalities:
             sensor_root = self._modality_root('sensor')
-            self.sensor_reader = WCSensorReader(
+            self.sensor_reader = LUCiDSensorReader(
                 data_root=sensor_root, split=split,
                 dataset_name=dataset_name,
                 include_labels=include_labels,
@@ -128,7 +128,7 @@ class WCDataset(Dataset):
         self._n_events = min(len(r) for r in active_readers)
 
         logger = get_root_logger()
-        logger.info(f"WCDataset: {self._n_events} events, "
+        logger.info(f"LUCiDDataset: {self._n_events} events, "
                     f"modalities={self.modalities}, output_mode={output_mode}")
 
     def _modality_root(self, modality):

@@ -1,5 +1,5 @@
 """
-WCSensorReader — reads PMT sensor data from Water Cherenkov sensor files.
+LUCiDSensorReader — reads PMT sensor data from Water Cherenkov sensor files.
 
 Format: flat CSR arrays (no per-event groups).
   - event_hit_offsets (n_events+1,) — CSR into hit arrays
@@ -28,7 +28,7 @@ import h5py
 from pimm.utils.logger import get_root_logger
 
 
-class WCSensorReader:
+class LUCiDSensorReader:
     """Reads PMT sensor data from WC sensor HDF5 files.
 
     Parameters
@@ -112,7 +112,7 @@ class WCSensorReader:
             self.indices.append(index)
 
         self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
-        log.info(f"WCSensorReader: {self.cumulative_lengths[-1]} events, "
+        log.info(f"LUCiDSensorReader: {self.cumulative_lengths[-1]} events, "
                  f"{self._n_sensors} sensors from {len(self.h5_files)} files")
 
     def h5py_worker_init(self):

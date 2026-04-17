@@ -1,5 +1,5 @@
 """
-LArTPCDataset — multimodal dataset for LArTPC detector simulation output.
+JAXTPCDataset — multimodal dataset for LArTPC detector simulation output.
 
 Loads from co-indexed HDF5 files produced by JAXTPC's production pipeline:
 seg (3D deposits), resp (2D wire signals), corr (3D→2D correspondence),
@@ -14,15 +14,15 @@ Who owns ``coord``/``energy`` is determined by which modalities are loaded:
 Example configs::
 
     # 3D segmentation
-    data = dict(train=dict(type="LArTPCDataset",
+    data = dict(train=dict(type="JAXTPCDataset",
         modalities=("seg", "labl"), label_key="particle", ...))
 
     # 2D segmentation (all planes)
-    data = dict(train=dict(type="LArTPCDataset",
+    data = dict(train=dict(type="JAXTPCDataset",
         modalities=("resp", "corr", "labl"), label_key="particle", ...))
 
     # Mixed 3D + 2D
-    data = dict(train=dict(type="LArTPCDataset",
+    data = dict(train=dict(type="JAXTPCDataset",
         modalities=("seg", "resp", "corr", "labl"), ...))
 """
 
@@ -34,14 +34,14 @@ from torch.utils.data import Dataset
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS
-from .readers.lartpc_seg_reader import LArTPCSegReader
-from .readers.lartpc_resp_reader import LArTPCRespReader
-from .readers.lartpc_labl_reader import LArTPCLablReader
-from .readers.lartpc_corr_reader import LArTPCCorrReader
+from .readers.jaxtpc_seg_reader import JAXTPCSegReader
+from .readers.jaxtpc_resp_reader import JAXTPCRespReader
+from .readers.jaxtpc_labl_reader import JAXTPCLablReader
+from .readers.jaxtpc_corr_reader import JAXTPCCorrReader
 
 
 @DATASETS.register_module()
-class LArTPCDataset(Dataset):
+class JAXTPCDataset(Dataset):
     """Multimodal dataset for LArTPC detector simulation output.
 
     Parameters
@@ -129,23 +129,23 @@ class LArTPCDataset(Dataset):
                       f'volume_{volume}_Y']
 
         if 'seg' in self.modalities:
-            self.seg_reader = LArTPCSegReader(
+            self.seg_reader = JAXTPCSegReader(
                 data_root=self._modality_root('seg'), split=split,
                 dataset_name=dataset_name, min_deposits=min_deposits,
                 include_physics=include_physics, volume=volume)
 
         if 'resp' in self.modalities:
-            self.resp_reader = LArTPCRespReader(
+            self.resp_reader = JAXTPCRespReader(
                 data_root=self._modality_root('resp'), split=split,
                 dataset_name=dataset_name, planes=planes)
 
         if 'labl' in self.modalities:
-            self.labl_reader = LArTPCLablReader(
+            self.labl_reader = JAXTPCLablReader(
                 data_root=self._modality_root('labl'), split=split,
                 dataset_name=dataset_name, label_keys=label_keys)
 
         if 'corr' in self.modalities:
-            self.corr_reader = LArTPCCorrReader(
+            self.corr_reader = JAXTPCCorrReader(
                 data_root=self._modality_root('corr'), split=split,
                 dataset_name=dataset_name, planes=planes)
 
@@ -171,7 +171,7 @@ class LArTPCDataset(Dataset):
                 "Add 'corr' for 2D labels or 'seg' for 3D labels.")
 
         logger.info(
-            f"LArTPCDataset: {self._n_events} events, "
+            f"JAXTPCDataset: {self._n_events} events, "
             f"modalities={self.modalities}, "
             f"volume={volume}, split={split}")
 
