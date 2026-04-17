@@ -73,19 +73,30 @@ GridSample, ToTensor, Copy, Collect, RandomDropout, ShufflePoint, RandomJitter, 
 For Water Cherenkov detectors (PMT-based).
 
 ### Data Layout
+
+Two HDF5 files per dataset; readers accept both naming conventions:
+
 ```
 dataset_root/
-├── seg/    wc_seg_0000.h5    — 3D track segments
-└── sensor/ wc_sensor_0000.h5 — PMT response + per-particle labels
+├── seg/    {dataset_name}_seg_NNNN.h5   or  segment_events_NNNN.h5
+└── sensor/ {dataset_name}_sensor_NNNN.h5 or  sensor_events_NNNN.h5
 ```
+
+Format is flat CSR arrays (events indexed via `*_offsets` datasets),
+matching the PhotonSim/LUCiD production output.
 
 ### Task → Config
 
+`coord` shape depends on whether PMT 3D positions are provided
+(via `pmt_positions` / `pmt_positions_file` on WCSensorReader, or stored
+in the file's `config/pmt_positions` dataset). Without positions,
+`coord` falls back to `(N, 1)` with sensor indices.
+
 | Task | `modalities` | `output_mode` | Output |
 |------|-------------|--------------|--------|
-| Event classification | `('sensor',)` | `'response'` | `coord (N_pmt,3)`, `energy (N_pmt,1)`, `time (N_pmt,1)` |
-| Per-sensor instance separation | `('sensor',)` | `'labels'` | `coord (E,3)`, `segment (E,)`, `instance (E,)` |
-| 3D track reconstruction | `('seg',)` | any | `coord (N_seg,3)`, `energy (N_seg,1)`, `track_ids`, `pdg` |
+| Event classification | `('sensor',)` | `'response'` | `coord (N_pmt, 3\|1)`, `energy (N_pmt,1)` [PE], `time (N_pmt,1)` [T] |
+| Per-sensor instance separation | `('sensor',)` | `'labels'` | `coord (E, 3\|1)`, `energy (E,1)`, `segment (E,)`, `instance (E,)` |
+| 3D track reconstruction | `('seg',)` | any | `coord (N_seg,3)`, `energy (N_seg,1)`, `time`, `track_ids`, `pdg`, `parent_ids` |
 | Joint 3D + sensor | `('seg', 'sensor')` | `'separate'` | `seg3d.*` + `pmt_*` + `pp_*` keys |
 
 ### Config Parameters
@@ -97,6 +108,7 @@ data = dict(train=dict(
     modalities=("sensor",),
     output_mode="response",     # 'response', 'labels', 'separate'
     include_labels=True,
+    pe_threshold=0.0,           # optional: filter per-particle entries below this PE
     transform=[...],
 ))
 ```
@@ -105,15 +117,24 @@ data = dict(train=dict(
 
 ## Adding a New Detector
 
-1. Write reader(s) in `pimm/datasets/readers/` — implement `__init__`, `_find_files`, `_build_index`, `h5py_worker_init`, `read_event(idx) → dict`, `__len__`, `close`.
-2. Write a dataset class in `pimm/datasets/` — inherit `HEPDataset`, register via `@DATASETS.register_module()`.
-3. The dataset's `get_data()` calls readers and maps output to `coord`/`energy`/`segment`.
-4. Add imports in `pimm/datasets/__init__.py` and `pimm/datasets/readers/__init__.py`.
+Each dataset class is self-contained — no base class. Copy the closest existing
+dataset as a template and modify.
+
+1. **Write reader(s)** in `pimm/datasets/readers/`. Readers follow a lightweight
+   convention (not a forced ABC): `__init__` discovers files and builds an event
+   index; `h5py_worker_init` lazily opens HDF5 handles (DataLoader-fork safe);
+   `read_event(idx)` returns a `dict[str, np.ndarray]`; `__len__` returns the
+   event count; `close` releases handles. Copy an existing reader to start.
+2. **Write a dataset class** in `pimm/datasets/`, inheriting
+   `torch.utils.data.Dataset` directly, registered via `@DATASETS.register_module()`.
+   Orchestrate readers in `get_data`; define `__init__`, `__len__`, `__getitem__`.
+3. **Add imports** in `pimm/datasets/__init__.py` and
+   `pimm/datasets/readers/__init__.py`.
 
 No changes needed to transforms, collation, models, or training infrastructure.
 
 ## Running Tests
 ```bash
 /usr/bin/python3 tools/test_detector_dataset.py   # LArTPC (38 tests)
-/usr/bin/python3 tools/test_wc_dataset.py          # Water Cherenkov (37 tests)
+/usr/bin/python3 tools/test_wc_dataset.py          # Water Cherenkov (32 tests)
 ```

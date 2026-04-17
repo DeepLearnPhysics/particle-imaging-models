@@ -15,14 +15,13 @@ from typing import Literal
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS
-from .hepdataset import HEPDataset
 
 # priority for voxel deduplication: track (1) > shower (0) > michel (2) > delta (3) > led (4)
 DEFAULT_LABEL_PRIORITY = {1: 0, 0: 1, 2: 2, 3: 3, 4: 4}
 
 
 @DATASETS.register_module()
-class PILArNetH5Dataset(HEPDataset):
+class PILArNetH5Dataset(Dataset):
     """
     PILArNet-M Dataset that loads directly from h5 files, avoiding the need for preprocessing to individual files.
 

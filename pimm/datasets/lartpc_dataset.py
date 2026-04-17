@@ -29,11 +29,11 @@ Example configs::
 import os
 import numpy as np
 from copy import deepcopy
+from torch.utils.data import Dataset
 
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
 from .transform import Compose, TRANSFORMS
-from .hepdataset import HEPDataset
 from .readers.lartpc_seg_reader import LArTPCSegReader
 from .readers.lartpc_resp_reader import LArTPCRespReader
 from .readers.lartpc_labl_reader import LArTPCLablReader
@@ -41,7 +41,7 @@ from .readers.lartpc_corr_reader import LArTPCCorrReader
 
 
 @DATASETS.register_module()
-class LArTPCDataset(HEPDataset):
+class LArTPCDataset(Dataset):
     """Multimodal dataset for LArTPC detector simulation output.
 
     Parameters
@@ -92,7 +92,6 @@ class LArTPCDataset(HEPDataset):
         label_keys=None,
         test_mode=False,
         test_cfg=None,
-        ignore_index=-1,
     ):
         super().__init__()
         self.data_root = data_root
@@ -104,7 +103,6 @@ class LArTPCDataset(HEPDataset):
         self.min_deposits = min_deposits
         self.max_len = max_len
         self.loop = loop if not test_mode else 1
-        self.ignore_index = ignore_index
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
 
