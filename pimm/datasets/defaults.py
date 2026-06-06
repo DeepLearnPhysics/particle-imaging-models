@@ -1,5 +1,9 @@
-"""
-Default Datasets
+"""Default point-cloud datasets and dataset containers.
+
+These generic adapters load preprocessed per-event directories of ``.npy``
+assets, then hand flat dictionaries to the configured transform pipeline. More
+detector-specific datasets in this package preserve the same output contract so
+the model and collation code can stay shared.
 
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
@@ -11,7 +15,6 @@ import json
 from re import split
 
 import numpy as np
-from copy import deepcopy
 from torch.utils.data import Dataset
 from collections.abc import Sequence
 
@@ -19,11 +22,19 @@ from pimm.utils.logger import get_root_logger
 from pimm.utils.cache import shared_dict
 
 from .builder import DATASETS, build_dataset
+from .test_fragments import build_test_fragments
 from .transform import Compose, TRANSFORMS
 
 
 @DATASETS.register_module()
 class DefaultDataset(Dataset):
+    """Load a directory or split-file collection of numpy assets.
+
+    Each item is a flat dict keyed by asset name, with at minimum ``coord``,
+    ``segment``, ``instance``, ``name``, and ``split``. Missing segmentation or
+    instance labels are filled with ``ignore_index``-style ``-1`` arrays.
+    """
+
     VALID_ASSETS = [
         "coord",
         "color",
@@ -45,6 +56,7 @@ class DefaultDataset(Dataset):
         ignore_index=-1,
         loop=1,
     ):
+        """Initialize data discovery, transform pipeline, and test transforms."""
         super(DefaultDataset, self).__init__()
         self.data_root = data_root
         self.split = split
@@ -74,6 +86,7 @@ class DefaultDataset(Dataset):
         )
 
     def get_data_list(self):
+        """Resolve split names or split JSON files into event directories."""
         if isinstance(self.split, str):
             split_list = [self.split]
         elif isinstance(self.split, Sequence):
@@ -93,6 +106,7 @@ class DefaultDataset(Dataset):
         return data_list
 
     def get_data(self, idx):
+        """Read one event directory into a flat numpy dictionary."""
         data_path = self.data_list[idx % len(self.data_list)]
         name = self.get_data_name(idx)
         split = self.get_split_name(idx)
@@ -136,21 +150,23 @@ class DefaultDataset(Dataset):
         return data_dict
 
     def get_data_name(self, idx):
+        """Return the basename used for logs, predictions, and cache keys."""
         return os.path.basename(self.data_list[idx % len(self.data_list)])
 
     def get_split_name(self, idx):
+        """Return the split directory name for the indexed sample."""
         return os.path.basename(
             os.path.dirname(self.data_list[idx % len(self.data_list)])
         )
 
     def prepare_train_data(self, idx):
-        # load data
+        """Load one sample and apply the train transform chain."""
         data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         return data_dict
 
     def prepare_test_data(self, idx):
-        # load data
+        """Build augmented and voxelized fragments for test-time inference."""
         data_dict = self.get_data(idx)
         data_dict = self.transform(data_dict)
         result_dict = dict(segment=data_dict.pop("segment"), name=data_dict.pop("name"))
@@ -159,42 +175,39 @@ class DefaultDataset(Dataset):
             result_dict["origin_segment"] = data_dict.pop("origin_segment")
             result_dict["inverse"] = data_dict.pop("inverse")
 
-        data_dict_list = []
-        for aug in self.aug_transform:
-            data_dict_list.append(aug(deepcopy(data_dict)))
-
-        fragment_list = []
-        for data in data_dict_list:
-            if self.test_voxelize is not None:
-                data_part_list = self.test_voxelize(data)
-            else:
-                data["index"] = np.arange(data["coord"].shape[0])
-                data_part_list = [data]
-            for data_part in data_part_list:
-                if self.test_crop is not None:
-                    data_part = self.test_crop(data_part)
-                else:
-                    data_part = [data_part]
-                fragment_list += data_part
-
-        for i in range(len(fragment_list)):
-            fragment_list[i] = self.post_transform(fragment_list[i])
-        result_dict["fragment_list"] = fragment_list
+        result_dict["fragment_list"] = build_test_fragments(
+            data_dict,
+            aug_transform=self.aug_transform,
+            test_voxelize=self.test_voxelize,
+            test_crop=self.test_crop,
+            post_transform=self.post_transform,
+            add_index_without_voxelize=True,
+        )
         return result_dict
 
     def __getitem__(self, idx):
+        """Return a transformed train item or a fragmented test item."""
         if self.test_mode:
             return self.prepare_test_data(idx)
         else:
             return self.prepare_train_data(idx)
 
     def __len__(self):
+        """Return length after applying the train-time loop multiplier."""
         return len(self.data_list) * self.loop
 
 
 @DATASETS.register_module()
 class ConcatDataset(Dataset):
+    """Concatenate configured datasets while preserving per-dataset ratios.
+
+    ``loop`` is used by ``MultiDatasetDataloader`` as the epoch multiplier for
+    the main dataset; child dataset ``loop`` values can also act as sampling
+    ratios when mixed batches are built.
+    """
+
     def __init__(self, datasets, loop=1):
+        """Build child datasets from configs and flatten their index space."""
         super(ConcatDataset, self).__init__()
         self.datasets = [build_dataset(dataset) for dataset in datasets]
         self.loop = loop
@@ -207,6 +220,7 @@ class ConcatDataset(Dataset):
         )
 
     def get_data_list(self):
+        """Return ``(dataset_index, local_index)`` pairs for all children."""
         data_list = []
         for i in range(len(self.datasets)):
             data_list.extend(
@@ -218,15 +232,19 @@ class ConcatDataset(Dataset):
         return data_list
 
     def get_data(self, idx):
+        """Dispatch a global index to the owning child dataset."""
         dataset_idx, data_idx = self.data_list[idx % len(self.data_list)]
         return self.datasets[dataset_idx][data_idx]
 
     def get_data_name(self, idx):
+        """Return the child dataset's sample name for a global index."""
         dataset_idx, data_idx = self.data_list[idx % len(self.data_list)]
         return self.datasets[dataset_idx].get_data_name(data_idx)
 
     def __getitem__(self, idx):
+        """Return the child dataset item for a global index."""
         return self.get_data(idx)
 
     def __len__(self):
+        """Return concatenated length after this container's loop multiplier."""
         return len(self.data_list) * self.loop

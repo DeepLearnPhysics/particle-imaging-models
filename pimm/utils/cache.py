@@ -22,6 +22,13 @@ import numpy as np
 
 
 def shared_array(name, var=None):
+    """Create or attach to an array stored in POSIX shared memory.
+
+    Args:
+        name (str): SharedArray name without the ``shm://`` prefix.
+        var (np.ndarray | None): Array to cache. If None, attach and return a
+            private copy of an existing shared array.
+    """
     if var is not None:
         # check exist
         if os.path.exists(f"/dev/shm/{name}"):
@@ -36,6 +43,7 @@ def shared_array(name, var=None):
 
 
 def shared_dict(name, var=None):
+    """Create or attach to a dict of shared memory NumPy arrays."""
     name = str(name)
     assert "." not in name  # '.' is used as sep flag
     data = {}

@@ -306,6 +306,14 @@ hooks = [
         sort_by_params=True,
         min_params=1,
     ),
+    dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
+    ),
     dict(type="CheckpointLoader"),
     dict(
         type="DtypeOverrider",
@@ -327,14 +335,6 @@ hooks = [
     ),
     dict(type="CheckpointSaverIteration", save_freq=1000),
     dict(type="GradientNormLogger", log_frequency=10, log_per_layer=False),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     # dict(type="RuntimeProfiler", forward=True, backward=True, interrupt=True, warm_up=2, sort_by="cuda_time_total", row_limit=30, memory=True),
 ]
 

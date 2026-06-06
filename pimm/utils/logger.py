@@ -86,7 +86,7 @@ def get_logger(name, log_file=None, log_level=logging.INFO, file_mode="a", color
         handlers.append(file_handler)
 
     plain_formatter = logging.Formatter(
-        "[%(asctime)s %(levelname)s %(filename)s line %(lineno)d %(process)d] %(message)s"
+        "[%(asctime)s %(levelname)s %(filename)s line %(lineno)d] %(message)s"
     )
     if color:
         formatter = _ColorfulFormatter(
@@ -165,8 +165,5 @@ def get_root_logger(log_file=None, log_level=logging.INFO, file_mode="a"):
 
 
 def _log_api_usage(identifier: str):
-    """
-    Internal function used to log the usage of different detectron2 components
-    inside facebook's infra.
-    """
+    """Record one-time API usage through PyTorch's internal logger."""
     torch._C._log_api_usage_once("pimm." + identifier)

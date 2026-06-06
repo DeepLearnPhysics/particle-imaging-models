@@ -234,6 +234,14 @@ hooks = [
         extra="fft",
     ),
     dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
+    ),
+    dict(
         type="CheckpointLoader",
         keywords="module.student.backbone",
         replacement="module.backbone",
@@ -258,14 +266,6 @@ hooks = [
         require_class_for_match=False,
     ),
     dict(type="CheckpointSaver", save_freq=None, evaluator_every_n_steps=1000),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     dict(
         type="AttentionMaskAnnealingHook",
         log_frequency=100,

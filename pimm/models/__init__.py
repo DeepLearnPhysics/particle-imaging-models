@@ -8,6 +8,7 @@ from .sparse_unet import *
 from .point_transformer import *
 from .point_transformer_v2 import *
 from .point_transformer_v3 import *
+from .litept import *
 
 # Instance Segmentation
 from .point_group import *

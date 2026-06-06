@@ -11,7 +11,6 @@ Please cite our work if you use any part of the code.
 import functools
 import os
 import logging
-import socket
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -19,21 +18,12 @@ import torch.distributed as dist
 _LOCAL_PROCESS_GROUP = None
 """
 A torch process group which only includes processes that on the same machine as the current process.
-This variable is set when processes are spawned by `launch()` in "engine/launch.py".
+This variable is set by setup_distributed() when running under torchrun or Slurm.
 """
 
 
-def _find_free_port():
-    """Find a free port on localhost."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
 def _parse_tasks_per_node(value: str, default_nodes: int):
-    """parse SLURM *_TASKS_PER_NODE strings into a list of ints."""
+    """Parse SLURM *_TASKS_PER_NODE strings into one task count per node."""
     if not value:
         return [1] * max(1, default_nodes)
     value = value.strip()
@@ -63,7 +53,7 @@ def _parse_tasks_per_node(value: str, default_nodes: int):
 
 
 def get_slurm_env():
-    """Extract SLURM environment variables."""
+    """Extract the SLURM fields needed to initialize torch.distributed."""
     nnodes = int(os.environ.get('SLURM_NNODES', 1))
     tpn_str = (
         os.environ.get('SLURM_TASKS_PER_NODE')
@@ -91,19 +81,35 @@ def get_slurm_env():
 
 
 def setup_distributed():
-    """Initialize distributed training."""
+    """Initialize torch.distributed from torchrun or SLURM environment."""
     logger = logging.getLogger(__name__)
-    if "SLURM_PROCID" not in os.environ:
-        logger.info("No SLURM environment found")
+    if "SLURM_PROCID" not in os.environ and "RANK" not in os.environ:
+        logger.info("No distributed environment found")
         return
 
-    slurm_env = get_slurm_env()
+    # Prefer torchrun's explicit rank env, then fall back to SLURM variables.
+    slurm_env = get_slurm_env() if "SLURM_PROCID" in os.environ else None
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        rank = int(os.environ.get('RANK', 0))
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', world_size))
+        tasks_per_node_list = [local_world_size]
+        node_id = int(os.environ.get('GROUP_RANK', os.environ.get('SLURM_NODEID', 0)))
+    elif slurm_env is not None:
+        world_size = slurm_env['ntasks']
+        rank = slurm_env['proc_id']
+        local_rank = slurm_env['local_id']
+        tasks_per_node_list = slurm_env.get('tasks_per_node_list', [world_size])
+        node_id = slurm_env['node_id']
+    else:
+        world_size = 1
+        rank = 0
+        local_rank = 0
+        tasks_per_node_list = [1]
+        node_id = 0
     
-    world_size = slurm_env['ntasks']
-    rank = slurm_env['proc_id']
-    local_rank = slurm_env['local_id']
-    
-    # set cuda device respecting visible devices
+    # Set CUDA device while respecting CUDA_VISIBLE_DEVICES.
     num_visible = torch.cuda.device_count()
     if num_visible == 0:
         raise RuntimeError("no CUDA devices available")
@@ -112,46 +118,50 @@ def setup_distributed():
         device_index = device_index % num_visible
     torch.cuda.set_device(device_index)
     
-    # Get master address from SLURM_NODELIST
+    # Get master address from SLURM_NODELIST when torchrun/env did not set it.
     if 'MASTER_ADDR' not in os.environ:
-        nodelist = slurm_env['nodelist']
-        if '[' in nodelist:
-            base = nodelist.split('[')[0]
-            indices = nodelist.split('[')[1].split(']')[0]
-            first_index = indices.split(',')[0].split('-')[0]
-            master_addr = f"{base}{first_index}"
-        elif ',' in nodelist:
-            master_addr = nodelist.split(',')[0]
+        if slurm_env is not None:
+            nodelist = slurm_env['nodelist']
+            if '[' in nodelist:
+                base = nodelist.split('[')[0]
+                indices = nodelist.split('[')[1].split(']')[0]
+                first_index = indices.split(',')[0].split('-')[0]
+                master_addr = f"{base}{first_index}"
+            elif ',' in nodelist:
+                master_addr = nodelist.split(',')[0]
+            else:
+                master_addr = nodelist
         else:
-            master_addr = nodelist
+            master_addr = '127.0.0.1'
         os.environ['MASTER_ADDR'] = master_addr
     
-    # Set master port
+    # Derive a stable port for SLURM jobs so all ranks rendezvous together.
     if 'MASTER_PORT' not in os.environ:
-        job_id = slurm_env['job_id']
-        if job_id and len(job_id) >= 4:
-            port = 20000 + int(job_id[-4:]) % 10000
+        if slurm_env is not None:
+            job_id = slurm_env['job_id']
+            if job_id and len(job_id) >= 4:
+                port = 20000 + int(job_id[-4:]) % 10000
+            else:
+                port = 29500
         else:
             port = 29500
         os.environ['MASTER_PORT'] = str(port)
         
-    logger.info("Initializing SLURM distributed training:")
-    tasks_per_node_list = slurm_env.get('tasks_per_node_list', [world_size])
-    node_id = slurm_env['node_id']
+    logger.info("Initializing distributed training:")
 
     logger.info(f"  - World size: {world_size}")
     logger.info(f"  - Rank: {rank}")
     logger.info(f"  - Local rank: {local_rank}")
     logger.info(f"  - Master: {os.environ['MASTER_ADDR']}:{os.environ['MASTER_PORT']}")
 
-    # Initialize process group
+    # Initialize the global NCCL process group.
     dist.init_process_group(
         backend='nccl',
         world_size=world_size,
         rank=rank,
     )
     
-    # Setup local process group for intra-node communication
+    # Build a same-node group for local rank and local size queries.
     global _LOCAL_PROCESS_GROUP
     _LOCAL_PROCESS_GROUP = None
     offset = 0
@@ -173,6 +183,7 @@ def setup_distributed():
 
 
 def get_world_size() -> int:
+    """Return the initialized distributed world size, or 1."""
     if not dist.is_available():
         return 1
     if not dist.is_initialized():
@@ -181,6 +192,7 @@ def get_world_size() -> int:
 
 
 def get_rank() -> int:
+    """Return the initialized distributed rank, or 0."""
     if not dist.is_available():
         return 0
     if not dist.is_initialized():
@@ -199,7 +211,7 @@ def get_local_rank() -> int:
         return 0
     assert (
         _LOCAL_PROCESS_GROUP is not None
-    ), "Local process group is not created! Please use launch() to spawn processes!"
+    ), "Local process group is not created! Please initialize distributed state first."
     return dist.get_rank(group=_LOCAL_PROCESS_GROUP)
 
 
@@ -217,6 +229,7 @@ def get_local_size() -> int:
 
 
 def is_main_process() -> bool:
+    """Return whether this process is global rank zero."""
     return get_rank() == 0
 
 
@@ -348,3 +361,21 @@ def reduce_dict(input_dict, average=True):
             values /= world_size
         reduced_dict = {k: v for k, v in zip(names, values)}
     return reduced_dict
+
+
+def cleanup_distributed():
+    """Destroy the distributed process group if initialized."""
+    if not torch.distributed.is_available():
+        return
+    if not torch.distributed.is_initialized():
+        return
+
+    if get_world_size() > 1:
+        try:
+            synchronize()
+        except Exception:
+            pass
+    try:
+        torch.distributed.destroy_process_group()
+    except Exception:
+        pass

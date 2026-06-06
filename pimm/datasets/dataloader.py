@@ -1,3 +1,10 @@
+"""Dataloader adapter for ratio-mixed ``ConcatDataset`` training.
+
+This wrapper keeps each child dataset in its own PyTorch ``DataLoader`` so a
+batch contains samples from a single source, then interleaves child iterators by
+their configured loop ratios.
+"""
+
 from functools import partial
 import weakref
 import torch
@@ -10,10 +17,14 @@ from pimm.utils.env import set_seed
 
 
 class MultiDatasetDummySampler:
+    """Sampler facade used by trainers that only need ``set_epoch``."""
+
     def __init__(self):
+        """Create an unbound facade; the dataloader sets ``dataloader`` later."""
         self.dataloader = None
 
     def set_epoch(self, epoch):
+        """Forward distributed epoch updates to every child dataloader."""
         if comm.get_world_size() > 1:
             for dataloader in self.dataloader.dataloaders:
                 dataloader.sampler.set_epoch(epoch)
@@ -21,9 +32,11 @@ class MultiDatasetDummySampler:
 
 
 class MultiDatasetDataloader:
-    """
-    Multiple Datasets Dataloader, batch data from a same dataset and mix up ratio determined by loop of each sub dataset.
-    The overall length is determined by the main dataset (first) and loop of concat dataset.
+    """Interleave child dataloaders according to ``ConcatDataset`` ratios.
+
+    Batches are homogeneous by source dataset. The first child defines epoch
+    length, while child ``loop`` values define how many batches to draw from
+    each child in one interleave cycle.
     """
 
     def __init__(
@@ -34,6 +47,7 @@ class MultiDatasetDataloader:
         mix_prob=0,
         seed=None,
     ):
+        """Build one PyTorch dataloader per child dataset."""
         self.datasets = concat_dataset.datasets
         self.ratios = [dataset.loop for dataset in self.datasets]
         # reset data loop, original loop serve as ratios
@@ -80,6 +94,7 @@ class MultiDatasetDataloader:
         self.sampler.dataloader = weakref.proxy(self)
 
     def __iter__(self):
+        """Yield batches from child iterators in ratio order until main ends."""
         iterator = [iter(dataloader) for dataloader in self.dataloaders]
         while True:
             for i in range(len(self.ratios)):
@@ -95,6 +110,7 @@ class MultiDatasetDataloader:
                     yield batch
 
     def __len__(self):
+        """Return the number of mixed batches in one logical epoch."""
         main_data_loader_length = len(self.dataloaders[0])
         return (
             main_data_loader_length // self.ratios[0] * sum(self.ratios)
@@ -103,6 +119,7 @@ class MultiDatasetDataloader:
 
     @staticmethod
     def _worker_init_fn(worker_id, num_workers, dataset_id, num_datasets, rank, seed):
+        """Derive deterministic per-worker seeds across ranks and datasets."""
         worker_seed = (
             num_workers * num_datasets * rank
             + num_workers * dataset_id

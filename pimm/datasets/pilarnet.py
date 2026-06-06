@@ -80,6 +80,7 @@ class PILArNetH5Dataset(Dataset):
         self.data_root = data_root
         if self.data_root is None:
             env_var = f"PILARNET_DATA_ROOT_{revision.upper()}"
+            # Revision-specific env vars keep v1/v2/v3 roots independent.
             self.data_root = os.environ.get(env_var)
         if self.data_root is None:
             # Fall back to the default download location
@@ -89,11 +90,11 @@ class PILArNetH5Dataset(Dataset):
             else:
                 raise RuntimeError(
                     f"\nPILArNet data root not found for revision '{revision}'.\n\n"
-                    f"Option 1 — Download the dataset (saves to ~/.cache/pimm/pilarnet/{revision}):\n"
+                    f"Option 1 - Download the dataset (saves to ~/.cache/pimm/pilarnet/{revision}):\n"
                     f"    python tools/download_pilarnet.py --version {revision}\n\n"
-                    f"Option 2 — Set the environment variable:\n"
+                    f"Option 2 - Set the environment variable:\n"
                     f'    export {env_var}="/path/to/pilarnet/{revision}/data"\n\n'
-                    f"Option 3 — Pass data_root directly in your config:\n"
+                    f"Option 3 - Pass data_root directly in your config:\n"
                     f'    --options data.train.data_root="/path/to/data"\n'
                 )
         self.split = split
@@ -528,7 +529,7 @@ class PILArNetH5Dataset(Dataset):
                 extra["coord"] = self._apply_random_90_rotation(
                     extra["coord"], center=detector_center, rotations=rotations
                 )
-                if self.revision == "v3" and "vertex" in extra:
+                if self.revision in ("v2", "v3") and "vertex" in extra:
                     valid_vertex = ~(extra["vertex"] == -1).all(axis=1)
                     extra["vertex"][valid_vertex] = self._apply_random_90_rotation(
                         extra["vertex"][valid_vertex],

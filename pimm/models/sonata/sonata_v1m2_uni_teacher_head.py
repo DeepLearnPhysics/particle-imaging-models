@@ -190,7 +190,9 @@ class Sonata(PointModel):
     def before_train(self):
         # make ModelHook after CheckPointLoader
         total_steps = self.trainer.cfg.scheduler.total_steps
-        curr_step = self.trainer.start_epoch * len(self.trainer.train_loader)
+        curr_step = getattr(self.trainer, "global_step", 0) or (
+            self.trainer.start_epoch * len(self.trainer.train_loader)
+        )
         # mask size scheduler
         self.mask_size_scheduler = CosineScheduler(
             start_value=self.mask_size_start,

@@ -1,5 +1,5 @@
 """
-pimm-data backed LUCiD event datasets for SSL.
+pimm-data LUCiD event datasets for SSL.
 
 This adapter keeps the pimm-data reader boundary intact and returns flat
 point-cloud dictionaries compatible with pimm's existing transform and

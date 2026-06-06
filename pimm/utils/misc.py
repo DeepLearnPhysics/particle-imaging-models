@@ -5,7 +5,6 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
-import os
 import warnings
 from collections import abc
 import numpy as np
@@ -14,21 +13,24 @@ from importlib import import_module
 
 
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
+    """Track the latest value, cumulative sum, count, and running average."""
 
     def __init__(self):
+        """Initialize an empty meter."""
         self.val = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
 
     def reset(self):
+        """Clear all accumulated meter state."""
         self.val = 0
         self.avg = 0
         self.sum = 0
         self.count = 0
 
     def update(self, val, n=1):
+        """Add ``n`` observations with value ``val``."""
         self.val = val
         self.sum += val * n
         self.count += n
@@ -36,7 +38,8 @@ class AverageMeter(object):
 
 
 def intersection_and_union(output, target, K, ignore_index=-1):
-    # 'K' classes, output and target sizes are N or N * L or N * H * W, each value in range 0 to K - 1.
+    """Compute per-class intersection, union, and target area on NumPy arrays."""
+    # output and target are flattened labels in [0, K - 1], with ignore masked.
     assert output.ndim in [1, 2, 3]
     assert output.shape == target.shape
     output = output.reshape(output.size).copy()
@@ -51,7 +54,8 @@ def intersection_and_union(output, target, K, ignore_index=-1):
 
 
 def intersection_and_union_gpu(output, target, k, ignore_index=-1):
-    # 'K' classes, output and target sizes are N or N * L or N * H * W, each value in range 0 to K - 1.
+    """Compute per-class intersection, union, and target area on tensors."""
+    # output and target are flattened labels in [0, k - 1], with ignore masked.
     assert output.dim() in [1, 2, 3]
     assert output.shape == target.shape
     output = output.view(-1)
@@ -63,23 +67,6 @@ def intersection_and_union_gpu(output, target, k, ignore_index=-1):
     area_target = torch.histc(target, bins=k, min=0, max=k - 1)
     area_union = area_output + area_target - area_intersection
     return area_intersection, area_union, area_target
-
-
-def make_dirs(dir_name):
-    if not os.path.exists(dir_name):
-        os.makedirs(dir_name, exist_ok=True)
-
-
-def find_free_port():
-    import socket
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Binding to port 0 will cause the OS to find an available port for us
-    sock.bind(("", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    # NOTE: there is still a chance the port could be taken by other processes.
-    return port
 
 
 def is_seq_of(seq, expected_type, seq_type=None):
@@ -104,14 +91,6 @@ def is_seq_of(seq, expected_type, seq_type=None):
         if not isinstance(item, expected_type):
             return False
     return True
-
-
-def is_str(x):
-    """Whether the input is an string instance.
-
-    Note: This method is deprecated since python 2 is no longer supported.
-    """
-    return isinstance(x, str)
 
 
 def import_modules_from_strings(imports, allow_failed_imports=False):
@@ -160,5 +139,7 @@ def import_modules_from_strings(imports, allow_failed_imports=False):
 
 
 class DummyClass:
+    """Placeholder class used where an object-like sentinel is required."""
+
     def __init__(self):
         pass

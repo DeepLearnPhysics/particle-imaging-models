@@ -106,6 +106,7 @@ def postprocess_panoptic(
     num_points: int,
     stuff_probs: Optional[torch.Tensor] = None,
     pred_momentum: Optional[torch.Tensor] = None,
+    pred_regression: Optional[Dict[str, torch.Tensor]] = None,
     pred_iou: Optional[torch.Tensor] = None,
     stuff_classes: Optional[Set[int]] = None,
     stuff_threshold: float = 0.5,
@@ -159,16 +160,18 @@ def postprocess_panoptic(
         (num_points,), -1, dtype=torch.long, device=device
     )
     
-    # Initialize point-wise momentum output if momentum predictions are provided
-    pred_instance_momentum = None
+    regression_inputs = dict(pred_regression or {})
     if pred_momentum is not None:
-        # Assuming pred_momentum is (Q,) or (Q, D)
-        momentum_dim = pred_momentum.shape[1] if pred_momentum.dim() > 1 else 1
-        pred_instance_momentum = torch.full(
-            (num_points, momentum_dim), float('nan'), dtype=torch.float, device=device
+        regression_inputs.setdefault("momentum", pred_momentum)
+    pred_instance_regression = {}
+    for name, values in regression_inputs.items():
+        value_dim = values.shape[1] if values.dim() > 1 else 1
+        out = torch.full(
+            (num_points, value_dim), float("nan"), dtype=torch.float, device=device
         )
-        if pred_momentum.dim() == 1:
-            pred_instance_momentum = pred_instance_momentum.squeeze(-1)
+        if values.dim() == 1:
+            out = out.squeeze(-1)
+        pred_instance_regression[name] = out
 
     if keep.any():
         num_queries = query_classes.shape[0]
@@ -180,9 +183,9 @@ def postprocess_panoptic(
         sel_scores = pred_scores[keep]
         sel_sigmoid = mask_sigmoid[keep]
         
-        sel_momentum = None
-        if pred_momentum is not None:
-            sel_momentum = pred_momentum[keep]
+        sel_regression = {
+            name: values[keep] for name, values in regression_inputs.items()
+        }
         
         sel_iou = None
         if pred_iou is not None:
@@ -212,9 +215,9 @@ def postprocess_panoptic(
         )
         
         nms_query_indices = sel_query_indices[keep_inds]
-        nms_momentum = None
-        if sel_momentum is not None:
-            nms_momentum = sel_momentum[keep_inds]
+        nms_regression = {
+            name: values[keep_inds] for name, values in sel_regression.items()
+        }
 
         # greedy assignment: process masks in order, mark points as taken
         taken = torch.zeros(num_points, dtype=torch.bool, device=device)
@@ -231,8 +234,8 @@ def postprocess_panoptic(
             pred_confidences[unique_mask] = nms_scores[i]
             pred_query_labels[unique_mask] = nms_query_indices[i]
             
-            if nms_momentum is not None:
-                pred_instance_momentum[unique_mask] = nms_momentum[i]
+            for name, values in nms_regression.items():
+                pred_instance_regression[name][unique_mask] = values[i]
                 
             taken = taken | unique_mask
 
@@ -262,8 +265,8 @@ def postprocess_panoptic(
                     pred_confidences[candidate] = combined_scores[q]
                     pred_query_labels[candidate] = sel_query_indices[q]
                     
-                    if sel_momentum is not None:
-                        pred_instance_momentum[candidate] = sel_momentum[q]
+                    for name, values in sel_regression.items():
+                        pred_instance_regression[name][candidate] = values[q]
                         
                     taken = taken | candidate
                     uncovered = ~taken
@@ -278,17 +281,22 @@ def postprocess_panoptic(
         pred_confidences[stuff_mask] = stuff_probs[stuff_mask]
         pred_query_labels[stuff_mask] = -1
         
-        if pred_instance_momentum is not None:
-            pred_instance_momentum[stuff_mask] = float('nan')
+        for values in pred_instance_regression.values():
+            values[stuff_mask] = float("nan")
 
-    return {
+    output = {
         "instance_labels": pred_instance_labels,
         "class_labels": pred_class_labels,
         "confidences": pred_confidences,
         "query_labels": pred_query_labels,
-        "instance_momentum": pred_instance_momentum,
+        "instance_regression": pred_instance_regression,
         "pred_iou": pred_iou,  # original per-query IoU predictions
     }
+    for name, values in pred_instance_regression.items():
+        output[f"instance_{name}"] = values
+        output[f"pred_{name}"] = values
+    output["instance_momentum"] = pred_instance_regression.get("momentum")
+    return output
 
 
 @torch.no_grad()
@@ -297,6 +305,7 @@ def postprocess_batch(
     pred_logits: List[torch.Tensor],
     stuff_probs: Optional[torch.Tensor] = None,
     pred_momentum: Optional[List[torch.Tensor]] = None,
+    pred_regression: Optional[Dict[str, List[torch.Tensor]]] = None,
     pred_iou: Optional[List[torch.Tensor]] = None,
     point_counts: Optional[torch.Tensor] = None,
     stuff_classes: Optional[Set[int]] = None,
@@ -310,6 +319,7 @@ def postprocess_batch(
         pred_logits: list of (Q, C+1) class logits per batch
         stuff_probs: (N_total,) stuff probabilities (optional)
         pred_momentum: list of (Q,) or (Q, D) momentum predictions per batch (optional)
+        pred_regression: dict mapping target name to per-batch query predictions
         pred_iou: list of (Q,) predicted IoU scores per batch (optional)
         point_counts: (B,) number of points per batch element
         stuff_classes: set of stuff class indices
@@ -320,7 +330,7 @@ def postprocess_batch(
             instance_labels: (N_total,) instance IDs (-1 for stuff/uncovered)
             class_labels: (N_total,) class predictions
             confidences: (N_total,) confidence scores
-            instance_momentum: (N_total, [D]) momentum predictions (optional)
+            instance_regression: dict of point-wise regression predictions
             pred_iou: list of (Q,) original IoU predictions per batch (optional)
     """
     batch_size = len(pred_masks)
@@ -329,7 +339,7 @@ def postprocess_batch(
     all_class_labels = []
     all_confidences = []
     all_query_labels = []
-    all_instance_momentum = []
+    all_instance_regression = {}
     all_pred_iou = []
 
     if stuff_probs is not None and point_counts is not None:
@@ -346,6 +356,11 @@ def postprocess_batch(
         pred_momentum_b = None
         if pred_momentum is not None:
             pred_momentum_b = pred_momentum[b]
+        pred_regression_b = None
+        if pred_regression is not None:
+            pred_regression_b = {
+                name: values[b] for name, values in pred_regression.items()
+            }
         
         pred_iou_b = None
         if pred_iou is not None:
@@ -363,6 +378,7 @@ def postprocess_batch(
             num_points=num_points_b,
             stuff_probs=stuff_probs_b,
             pred_momentum=pred_momentum_b,
+            pred_regression=pred_regression_b,
             pred_iou=pred_iou_b,
             stuff_classes=stuff_classes,
             **kwargs,
@@ -379,8 +395,8 @@ def postprocess_batch(
         all_class_labels.append(result["class_labels"])
         all_confidences.append(result["confidences"])
         all_query_labels.append(result["query_labels"])
-        if result["instance_momentum"] is not None:
-            all_instance_momentum.append(result["instance_momentum"])
+        for name, values in result.get("instance_regression", {}).items():
+            all_instance_regression.setdefault(name, []).append(values)
         if pred_iou_b is not None:
             all_pred_iou.append(pred_iou_b)
 
@@ -391,8 +407,14 @@ def postprocess_batch(
         "query_labels": torch.cat(all_query_labels, dim=0),
     }
     
-    if all_instance_momentum:
-        output["instance_momentum"] = torch.cat(all_instance_momentum, dim=0)
+    if all_instance_regression:
+        output["instance_regression"] = {}
+        for name, chunks in all_instance_regression.items():
+            values = torch.cat(chunks, dim=0)
+            output["instance_regression"][name] = values
+            output[f"instance_{name}"] = values
+            output[f"pred_{name}"] = values
+        output["instance_momentum"] = output["instance_regression"].get("momentum")
     
     # keep pred_iou as list for loss computation
     if all_pred_iou:

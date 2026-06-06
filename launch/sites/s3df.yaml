@@ -1,23 +1,22 @@
+_base_: slurm.yaml
+
 site: s3df
 
 paths:
   repo_root: /sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models
-  exp_root: "{repo_root}/exp"
 
 submit:
-  host: iana
   setup:
     - source ~/.bashrc >/dev/null 2>&1
     - mamba activate pointcept-torch2.5.0-cu12.4
 
 resources:
-  cpus_per_task: 12
+  nproc_per_node: 1 # 1 gpus
   mem: 512G
 
 slurm:
   account: mli:nu-ml-dev
   partition: ampere
-  gpu_directive: gres
 
 container:
   runtime: singularity
@@ -32,8 +31,6 @@ container:
     - mamba activate pointcept-torch2.5.0-cu12.4
 
 env:
-  PYTHONFAULTHANDLER: "1"
   NCCL_SOCKET_IFNAME: "^docker0,lo"
   REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
-  PILARNET_DATA_ROOT_V1: /sdf/group/neutrino/youngsam/data/pilarnet/v1

@@ -50,31 +50,48 @@ cd particle-imaging-models
 apptainer pull /path/to/pimm.sif docker://youngsm/pimm:pytorch2.5.0-cuda12.4
 ```
 
+The image installs `pimm` as an editable package at `/opt/pimm/src`. Bind your
+own local clone over that path so the `pimm` console script imports your local clone,
+not the global install baked into the image.
+
 #### Train (single GPU):
 
 ```bash
-apptainer exec --nv --bind XXX /path/to/pimm.sif \
-  sh scripts/train.sh -g 1 -d panda/pretrain -c pretrain-sonata-v1m1-pilarnet-smallmask
+apptainer exec --nv \
+  --bind "$PWD:/opt/pimm/src" \
+  --pwd /opt/pimm/src \
+  /path/to/pimm.sif \
+  pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+    -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False
 ```
 
-where XXX is a directory (not including your home path) you'd like to ensure that pimm will be able to see inside the container. This is not needed unless you are working on an HPC with directories organized in a non-standard way. For example, at SLAC National Laboratory's S3DF cluster, you must `--bind /sdf,/lscratch`.
+Add extra binds for data/checkpoint filesystems when needed. For example, at
+SLAC National Laboratory's S3DF cluster, include `--bind /sdf,/lscratch`.
 
 #### Multi-GPU:
 
-Change `-g 1` (1 GPU) to `-g 4` (4 GPUs), or omit `-g` to use all available GPUs.
+Use `--resources.nproc-per-node 4` for four local GPUs:
+
+```bash
+pimm launch --resources.nproc-per-node 4 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8
+```
 
 #### Multi-Node:
 
-For training on Slurm configurations, you can use the `multinode.slurm.sbatch` file in `scripts/slurm/` to submit your sbatch job.
-
-To get started just adjust the number of nodes and GPUs
+Inside a user-authored Slurm script, allocate one task per node and run:
 
 ```
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks-per-node=1
 #SBATCH --nodes=2
 ```
 
-Then modify `-m` and `-g` to the number of nodes and number of tasks (i.e., GPUs) per node: `-m 2 -g 4`
+```bash
+srun pimm launch \
+  --resources.nnodes "$SLURM_NNODES" \
+  --resources.nproc-per-node "$SLURM_GPUS_ON_NODE" \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8
+```
 
 > See [Dataset Preparation](#dataset-preparation) to download PILArNet-M.
 
@@ -83,100 +100,147 @@ Then modify `-m` and `-g` to the number of nodes and number of tasks (i.e., GPUs
 ```bash
 git clone https://github.com/youngsm/particle-imaging-models.git
 cd particle-imaging-models
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0 8.6 8.9 9.0}"
 conda env create -f environment.yml
 conda activate pimm-torch2.5.0-cu12.4
-sh scripts/train.sh -g 1 -d panda/pretrain -c pretrain-sonata-v1m1-pilarnet-smallmask
+pip install -e .
+pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+  -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False
 ```
 
 Requires CUDA 11.6+ for FlashAttention (set `enable_flash=False` in configs if unavailable).
+The `TORCH_CUDA_ARCH_LIST` export lets the LitePT/PointROPE CUDA extension build
+on login or container build hosts without a visible GPU.
 
 ## Multi-Node Training
 
-SLURM templates are provided for multi-node training:
+You can either run `pimm launch` inside your own Slurm script or use the
+managed submitit path:
 
 ```bash
-cp scripts/slurm/multinode.slurm.sbatch my_job.sh   # generic / SLAC cluster
-cp scripts/slurm/multinode.nersc.sbatch my_job.sh   # NERSC Perlmutter
-# edit SBATCH headers + experiment section, then:
-sbatch my_job.sh
+pimm submit --site s3df \
+  --resources.nnodes 2 \
+  --resources.nproc-per-node 4 \
+  --resources.time 02:00:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8
 ```
 
-The key rule: `--ntasks-per-node` must equal the number of GPUs per node. The training script handles distributed setup automatically via SLURM environment variables.
+The key rule is one Slurm task per node. `torchrun` launches one process per
+GPU on each node.
 
 ## HPC Launching
 
-For routine Slurm runs, prefer the site-aware launcher over copying and editing
-one-off Slurm scripts. It composes common defaults, a site profile, and
-optionally a run recipe into the final Slurm job.
+For routine Slurm runs, prefer `pimm submit` over copying one-off Slurm
+scripts. It composes common defaults, a site profile, and optional run settings
+into a submitit job.
 
 If you just made a normal Python config and want to submit it with site
 defaults:
 
 ```bash
-scripts/launch.py submit --site s3df \
-  --config-dir panda/pretrain_geometry_combos \
-  --config pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
+pimm submit --site s3df \
+  --resources.nnodes 1 \
+  --resources.nproc-per-node 4 \
+  --resources.time 00:30:00 \
+  --train.config panda/pretrain_geometry_combos/pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
 ```
 
 For a saved run recipe with launch-time state such as checkpoint weights,
 resource overrides, or W&B naming:
 
 ```bash
-scripts/launch.py submit --site s3df launch/runs/e050_tail.yaml
-scripts/launch.py submit --site nersc launch/runs/e050_tail.yaml
+pimm submit --site s3df --recipe launch/runs/e050_tail.yaml --train.config panda/pretrain_geometry_combos/pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
+pimm submit --site nersc --recipe launch/runs/e050_tail.yaml --train.config panda/pretrain_geometry_combos/pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
 ```
 
 Always dry-run first when changing sites or resources:
 
 ```bash
-scripts/launch.py dry-run --site s3df launch/runs/e050_tail.yaml
+pimm submit --dry-run --site s3df \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8
 ```
 
-`--site s3df` submits through `ssh iana`, activates the
-`pointcept-torch2.5.0-cu12.4` mamba environment, and runs `sbatch` from the
-configured `paths.repo_root`. `--site nersc` currently assumes the launcher is run on a
-NERSC login node and renders a Shifter/Perlmutter job. See
-`launch/README.md` for the YAML layer details and override syntax.
+To run directly on the current node without Slurm:
+
+```bash
+pimm launch \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+  --resources.nproc-per-node 4
+```
+
+`pimm launch` is local or in-allocation execution. `pimm submit` is managed
+Slurm submission.
+
+Slurm submission uses submitit. `--site s3df --submit.host iana` SSHes to `iana`,
+activates the `pointcept-torch2.5.0-cu12.4` mamba environment, and submits from
+the configured `paths.repo_root`. `--site nersc` assumes the launcher is run on a
+NERSC login node and uses the Shifter/Perlmutter settings from
+`launch/sites/nersc.yaml`. See `launch/README.md` for the YAML layer details and
+override syntax.
+
+Because `pimm` is a console-script entry point, every login/submit host where
+you type `pimm launch` or `pimm submit` needs the checkout installed in the
+active environment with `pip install -e .`. Containerized jobs additionally bind
+`paths.repo_root` over `/opt/pimm/src` by default so the in-image editable install
+also resolves to the same checkout.
 
 ## Training & Testing
 
-The entry point is `scripts/train.sh`:
+The primary entry point is `pimm launch`:
 
 ```bash
-sh scripts/train.sh -d <dataset> -c <config> [options]
+pimm launch --train.config <config-path> [-- TRAIN_OVERRIDES...]
 ```
+
+The launcher invokes `scripts/train.sh`, which prepares experiment paths, code
+snapshots, resume checkpoints, and then calls `torchrun`.
+
+Useful flags:
 
 | Flag | Description |
 |------|-------------|
-| `-d` | Config directory (e.g., `panda/pretrain`, `panda/semseg`) |
-| `-c` | Config name without `.py` |
-| `-n` | Experiment name (default: auto-generated) |
-| `-g` | GPUs per machine (default: all available) |
-| `-m` | Number of machines (default: 1) |
-| `-w` | Path to checkpoint (to be used by CheckpointLoader) |
-| `-r true` | Resume training from last checkpoint |
-| `-C` | Dev mode: skip code snapshot, run from repo source |
-| `-h` | Show full help |
+| `--train.config` | Config path under `configs/`, with or without `.py` |
+| `--run.name` | Experiment name (default: auto-generated) |
+| `--resources.nproc-per-node` | Torchrun processes per node |
+| `--resources.nnodes` | Number of nodes |
+| `--train.weight` | Path to checkpoint |
+| `--train.resume` | Resume training from last checkpoint |
+| `--train.no-code-copy` | Skip code snapshot, run from repo source |
+| `--dry-run` | Print rendered command/script |
 
 ```bash
 # Override config values
-sh scripts/train.sh -d panda/pretrain -c pretrain-sonata-v1m1-pilarnet-smallmask \
-  -- --options epoch=10 data.train.max_len=1000
+pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+  -- epoch=10 data.train.max_len=1000
 
 # Fine-tune from pre-trained checkpoint
-sh scripts/train.sh -g 4 -d panda/semseg -c semseg-pt-v3m2-pilarnet-ft-5cls-lin \
-  -w /path/to/checkpoint.pth
+pimm launch --resources.nproc-per-node 4 \
+  --train.config panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-lin \
+  --train.weight /path/to/checkpoint.pth
 
 # Resume
-sh scripts/train.sh -d panda/pretrain -c pretrain-sonata-v1m1-pilarnet-smallmask \
-  -n my_experiment -r true
+pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+  --run.name my_experiment --train.resume
 ```
 
 See [Config Structure](#config-structure) for more on how configs work.
 
-By default, `train.sh` snapshots the codebase into `exp/<dataset>/<name>/code/` and runs the code from this snapshot for reproducibility. Use `-C` to skip this during development.
+By default, the launcher snapshots the codebase into
+`exp/<dataset>/<name>/code/` and runs the code from this snapshot for
+reproducibility. Use `--train.no-code-copy` to run directly from the repo source.
 
 Model checkpoints, which can be quite large, are saved to `exp/<dataset>/<name>/model/`. To redirect to a separate disk, set `MODEL_DIR` in your `.env` file or environment; this will save the checkpoint to `MODEL_DIR` and symlink it to `exp/<dataset>/<name>/model`.
+
+Export a training checkpoint to a portable pretrained directory for fine-tuning
+or Hugging Face upload:
+
+```bash
+pimm export --run-dir exp/panda/pretrain/my_run last ./artifacts/my-model
+```
+
+This supports split checkpoint directories such as `model/last` and legacy
+`.pth` checkpoints. Use `pimm export --help` for direct checkpoint paths, safe
+serialization, and Hub upload options.
 
 ## Configuration System
 
@@ -199,9 +263,9 @@ data = dict(train=dict(...), val=dict(...))
 You can modify configs in two ways:
 
 1. Edit the config file directly
-2. Override via command line using `--options`:
+2. Override via command line after `--`:
    ```bash
-   sh scripts/train.sh ... -- --options epoch=50 data.train.max_len=500000
+   pimm launch --train.config panda/pretrain/x -- epoch=50 data.train.max_len=500000
    ```
 
 Example configs can be found in:
@@ -216,10 +280,10 @@ Example configs can be found in:
 Download the 168GB dataset from Hugging Face:
 
 ```bash
-python tools/download_pilarnet.py --version v2 --output_dir /path/to/dir
+python tools/download_pilarnet.py --version v2 --output-dir /path/to/dir
 ```
 
-Data saves to `~/.cache/pimm/pilarnet/v2` if `output_dir` is not provided. After downloading the dataset, run `cp example.env .env` and set `PILARNET_DATA_ROOT_V2`. This will allow the dataloader to automatically find the data.
+Data saves to `~/.cache/pimm/pilarnet/v2` if `--output-dir` is not provided. After downloading the dataset, run `cp example.env .env` and set `PILARNET_DATA_ROOT_V2`. This will allow the dataloader to automatically find the data.
 
 PILArNet has two revisions. **v2** is recommended for new models (adds PID, momentum, and vertex information). **v1** is the original dataset from the PoLAr-MAE paper. Events differ between splits, so models trained on v1 should be evaluated on v1.
 
@@ -291,7 +355,21 @@ Models use `vXmY` naming (version X, mode Y). Different modes indicate small arc
 
 ## Logging
 
-Both TensorBoard and Weights & Biases are enabled by default. Set `use_wandb=False` to disable W&B. To authenticate, either run `wandb login` or add `WANDB_API_KEY=your_key` to your `.env` file (see `example.env`).
+pimm writes either Weights & Biases or TensorBoard logs from rank 0. Configs that
+set `use_wandb=True` use W&B; set `use_wandb=False` to write TensorBoard events
+under the experiment directory instead. W&B run names and projects can be
+supplied from the launcher:
+
+```bash
+export WANDB_API_KEY=...
+pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8 \
+  --run.name test \
+  --run.wandb-name test-display \
+  --run.wandb-project Pretraining-Sonata-PILArNet-M
+```
+
+You can also authenticate with `wandb login` or by adding
+`WANDB_API_KEY=your_key` to `.env` (see `example.env`).
 
 ```python
 hooks = [

@@ -6,27 +6,72 @@ Please cite our work if the code is helpful to you.
 """
 
 import os
+import csv
+import json
 import numpy as np
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict
+from datetime import datetime, timezone
 import torch
 import torch.distributed as dist
 import pointops
 from sklearn.metrics import adjusted_rand_score
 
-from .defaults import create_ddp_model
 import pimm.utils.comm as comm
+from pimm.engines.metrics import (
+    aggregate_instance_results,
+    compute_semseg_metrics,
+    eval_instances,
+)
+from pimm.distributed import create_parallel_context, prepare_model, unwrap_model
 from pimm.datasets import build_dataset, collate_fn
 from pimm.models import build_model
 from pimm.utils.logger import get_root_logger
 from pimm.utils.registry import Registry
 from pimm.utils.misc import (
     intersection_and_union_gpu,
-    make_dirs,
 )
 from pimm.models.utils.misc import offset2bincount
 
 
 TESTERS = Registry("testers")
+
+
+def _jsonable(value):
+    """Convert tensors and numpy values to JSON-compatible containers."""
+    if isinstance(value, torch.Tensor):
+        return _jsonable(value.detach().cpu())
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _write_json(path, payload):
+    """Write newline-terminated JSON."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_jsonable(payload), f, indent=2, default=str)
+        f.write("\n")
+
+
+def _write_csv(path, rows):
+    """Write rows with the union of all keys as CSV columns."""
+    if not rows:
+        return
+    fieldnames = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: _jsonable(row.get(key, "")) for key in fieldnames})
 
 
 class TesterBase:
@@ -38,6 +83,7 @@ class TesterBase:
         )
         self.logger.info("=> Loading config ...")
         self.cfg = cfg
+        self.parallel_context = create_parallel_context(cfg)
         self.verbose = verbose
         if self.verbose:
             self.logger.info(f"Save path: {cfg.save_path}")
@@ -53,31 +99,70 @@ class TesterBase:
         else:
             self.test_loader = test_loader
 
+    def eval_output_dir(self):
+        """Return the per-run eval artifact directory for this test process."""
+        explicit_path = getattr(self.cfg, "eval_save_path", None)
+        if explicit_path:
+            path = explicit_path
+        else:
+            timestamp = getattr(self.cfg, "_eval_timestamp", None)
+            if timestamp is None:
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                object.__setattr__(self.cfg, "_eval_timestamp", timestamp)
+            path = os.path.join(self.cfg.save_path, "eval", timestamp)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def write_eval_artifacts(self, task, metrics, rows=None):
+        """Write structured test metrics from rank zero."""
+        if not comm.is_main_process():
+            return
+        output_dir = self.eval_output_dir()
+        payload = {
+            "task": task,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "save_path": self.cfg.save_path,
+            "weight": getattr(self.cfg, "weight", None),
+            "config_file": getattr(self.cfg, "_config_file", None),
+            "metrics": metrics,
+        }
+        json_path = os.path.join(output_dir, "test_metrics.json")
+        csv_path = os.path.join(output_dir, "test_metrics.csv")
+        _write_json(json_path, payload)
+        if rows:
+            _write_csv(csv_path, rows)
+        self.logger.info(f"Wrote eval artifacts: {output_dir}")
+
     def build_model(self):
         model = build_model(self.cfg.model)
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         self.logger.info(f"Num params: {n_parameters}")
-        model = create_ddp_model(
-            model.cuda(),
-            broadcast_buffers=False,
-            find_unused_parameters=self.cfg.find_unused_parameters,
-        )
+        model = prepare_model(model, self.cfg, self.parallel_context)
         if os.path.isfile(self.cfg.weight):
             self.logger.info(f"Loading weight at: {self.cfg.weight}")
-            checkpoint = torch.load(self.cfg.weight)
+            checkpoint = torch.load(self.cfg.weight, map_location="cpu", weights_only=False)
+            state_dict = checkpoint
+            if isinstance(checkpoint, dict):
+                model_state = checkpoint.get("model", None)
+                if isinstance(model_state, dict) and "state_dict" in model_state:
+                    state_dict = model_state["state_dict"]
+                elif "state_dict" in checkpoint:
+                    state_dict = checkpoint["state_dict"]
+                elif model_state is not None:
+                    state_dict = model_state
             weight = OrderedDict()
-            for key, value in checkpoint["state_dict"].items():
+            for key, value in state_dict.items():
                 if key.startswith("module."):
                     if comm.get_world_size() == 1:
                         key = key[7:]  # module.xxx.xxx -> xxx.xxx
                 else:
-                    if comm.get_world_size() > 1:
+                    if comm.get_world_size() > 1 and hasattr(model, "module"):
                         key = "module." + key  # xxx.xxx -> module.xxx.xxx
                 weight[key] = value
             model.load_state_dict(weight, strict=True)
             self.logger.info(
                 "=> Loaded weight '{}' (epoch {})".format(
-                    self.cfg.weight, checkpoint.get("epoch", "unknown")
+                    self.cfg.weight, checkpoint.get("epoch", "unknown") if isinstance(checkpoint, dict) else "unknown"
                 )
             )
         else:
@@ -97,16 +182,12 @@ class TesterBase:
             num_workers=self.cfg.batch_size_test_per_gpu,
             pin_memory=True,
             sampler=test_sampler,
-            collate_fn=self.__class__.collate_fn,
+            collate_fn=collate_fn,
         )
         return test_loader
 
     def test(self):
         raise NotImplementedError
-
-    @staticmethod
-    def collate_fn(batch):
-        return collate_fn(batch)
 
 
 @TESTERS.register_module()
@@ -201,69 +282,24 @@ class SemSegTester(TesterBase):
         all_segments = torch.cat(all_segments, dim=0).numpy()
 
         num_classes = self.cfg.data.num_classes
-        precision_class = np.zeros(num_classes)
-        recall_class = np.zeros(num_classes)
-        f1_class = np.zeros(num_classes)
-
-        for i in range(num_classes):
-            pred_i = all_preds == i
-            gt_i = all_segments == i
-            if gt_i.sum() > 0 or pred_i.sum() > 0:
-                tp = np.logical_and(pred_i, gt_i).sum()
-                fp = np.logical_and(pred_i, np.logical_not(gt_i)).sum()
-                fn = np.logical_and(np.logical_not(pred_i), gt_i).sum()
-
-                precision = tp / (tp + fp + 1e-10)
-                recall = tp / (tp + fn + 1e-10)
-                f1 = 2 * precision * recall / (precision + recall + 1e-10)
-
-                precision_class[i] = precision
-                recall_class[i] = recall
-                f1_class[i] = f1
-
-        # compute intersection/union/target for IoU and accuracy
-        intersection = np.zeros(num_classes)
-        union = np.zeros(num_classes)
-        target = np.zeros(num_classes)
-
-        for i in range(num_classes):
-            pred_i = all_preds == i
-            gt_i = all_segments == i
-            intersection[i] = np.logical_and(pred_i, gt_i).sum()
-            union[i] = np.logical_or(pred_i, gt_i).sum()
-            target[i] = gt_i.sum()
-
-        iou_class = intersection / (union + 1e-10)
-        acc_class = intersection / (target + 1e-10)
-
-        macro_mask = np.ones(num_classes, dtype=bool)
-        for idx in self.macro_ignore_class_ids:
-            if 0 <= idx < num_classes:
-                macro_mask[idx] = False
-
-        precision_valid = precision_class[macro_mask]
-        recall_valid = recall_class[macro_mask]
-        f1_valid = f1_class[macro_mask]
-        iou_valid = iou_class[macro_mask]
-        acc_valid = acc_class[macro_mask]
-
-        if precision_valid.size == 0:
-            precision_valid = precision_class
-        if recall_valid.size == 0:
-            recall_valid = recall_class
-        if f1_valid.size == 0:
-            f1_valid = f1_class
-        if iou_valid.size == 0:
-            iou_valid = iou_class
-        if acc_valid.size == 0:
-            acc_valid = acc_class
-
-        m_precision = np.mean(precision_valid)
-        m_recall = np.mean(recall_valid)
-        m_f1 = np.mean(f1_valid)
-        m_iou = np.mean(iou_valid)
-        m_acc = np.mean(acc_valid)
-        all_acc = sum(intersection) / (sum(target) + 1e-10)
+        metrics = compute_semseg_metrics(
+            all_preds,
+            all_segments,
+            num_classes,
+            macro_ignore_class_ids=self.macro_ignore_class_ids,
+        )
+        precision_class = metrics.precision_class
+        recall_class = metrics.recall_class
+        f1_class = metrics.f1_class
+        iou_class = metrics.iou_class
+        acc_class = metrics.acc_class
+        macro_mask = metrics.macro_mask
+        m_precision = metrics.m_precision
+        m_recall = metrics.m_recall
+        m_f1 = metrics.m_f1
+        m_iou = metrics.m_iou
+        m_acc = metrics.m_acc
+        all_acc = metrics.all_acc
 
         self.logger.info(
             "Test result: mIoU/mAcc/allAcc/mPrec/mRec/mF1 {:.4f}/{:.4f}/{:.4f}/{:.4f}/{:.4f}/{:.4f}.".format(
@@ -311,12 +347,39 @@ class SemSegTester(TesterBase):
                 )
             )
 
+        class_names = list(getattr(self.cfg.data, "names", []))
+        per_class = []
+        for i in range(num_classes):
+            name = class_names[i] if i < len(class_names) else f"class_{i}"
+            per_class.append(
+                {
+                    "class_id": i,
+                    "class_name": name,
+                    "macro_included": bool(macro_mask[i]),
+                    "iou": float(iou_class[i]),
+                    "accuracy": float(acc_class[i]),
+                    "precision": float(precision_class[i]),
+                    "recall": float(recall_class[i]),
+                    "f1": float(f1_class[i]),
+                }
+            )
+        summary = {
+            "m_iou": float(m_iou),
+            "m_acc": float(m_acc),
+            "all_acc": float(all_acc),
+            "m_precision": float(m_precision),
+            "m_recall": float(m_recall),
+            "m_f1": float(m_f1),
+        }
+        self.write_eval_artifacts(
+            "semseg",
+            {"summary": summary, "per_class": per_class},
+            [{"row_type": "summary", **summary}]
+            + [{"row_type": "per_class", **row} for row in per_class],
+        )
+
         self.logger.info("<<<<<<<<<<<<<<<<< End Semantic Segmentation Test <<<<<<<<<<<<<<<<<")
         self.model.train()
-
-    @staticmethod
-    def collate_fn(batch):
-        return collate_fn(batch)
 
 
 @TESTERS.register_module()
@@ -343,11 +406,6 @@ class InstanceSegTester(TesterBase):
         self.require_class_for_match = bool(require_class_for_match)
         self.class_names = tuple(class_names or [])
         self.stuff_classes = tuple(sorted(stuff_classes or ()))
-
-    def _unwrap(self, obj):
-        if isinstance(obj, torch.nn.parallel.DistributedDataParallel):
-            return obj.module
-        return obj
 
     def test(self):
         self.logger.info(
@@ -401,7 +459,7 @@ class InstanceSegTester(TesterBase):
                 self.logger.warning("InstanceSegTester: missing predictions")
                 continue
 
-            model = self._unwrap(self.model)
+            model = unwrap_model(self.model)
 
             stuff_probs = (
                 point.outputs.get("stuff_probs")
@@ -436,7 +494,7 @@ class InstanceSegTester(TesterBase):
             pr_inst = pred_instance_labels.numpy().astype(np.int64)
             pr_pid = pred_pid_labels.numpy().astype(np.int64)
 
-            stats = self._eval_instances(
+            stats = eval_instances(
                 gt_inst,
                 pr_inst,
                 gt_pid,
@@ -497,7 +555,7 @@ class InstanceSegTester(TesterBase):
             self.model.train()
             return
 
-        aggregated = self._aggregate_instance_results(
+        aggregated = aggregate_instance_results(
             all_stats, require_class_for_match=self.require_class_for_match
         )
 
@@ -555,273 +613,67 @@ class InstanceSegTester(TesterBase):
                 )
             )
 
+        momentum_aggregated = None
         if momentum_stats:
             momentum_aggregated = self._aggregate_momentum_results(momentum_stats, class_names)
             self._log_momentum_metrics(momentum_aggregated, class_names)
+
+        summary = {
+            "det_precision": float(det_prec),
+            "det_recall": float(det_rec),
+            "det_f1": float(det_f1),
+            "det_mean_iou": float(det_iou),
+            "total_gt": total_gt,
+            "total_pred": total_pred,
+            "total_matched": total_matched,
+            "fp": fp_det,
+            "fn": fn_det,
+            "fp_per_gt": float(fp_per_gt),
+            "fn_per_gt": float(fn_per_gt),
+            "class_precision_macro": float(precision_macro),
+            "class_recall_macro": float(recall_macro),
+            "class_f1_macro": float(f1_macro),
+            "ari_mean": float(ari_mean) if not np.isnan(ari_mean) else None,
+        }
+        if self.require_class_for_match and "pq" in aggregated:
+            summary.update({key.lower(): float(value) for key, value in aggregated["pq"].items()})
+        if momentum_aggregated is not None:
+            overall = momentum_aggregated["overall"]
+            summary.update(
+                {
+                    "momentum_mae": float(overall["mae"]),
+                    "momentum_rmse": float(overall["rmse"]),
+                    "momentum_count": int(overall["count"]),
+                }
+            )
+
+        per_class = []
+        for cls_idx, class_name in enumerate(class_names):
+            per_class.append(
+                {
+                    "class_id": cls_idx,
+                    "class_name": class_name,
+                    "support": int(cls["support"][cls_idx]),
+                    "precision": float(cls["precision"][cls_idx]),
+                    "recall": float(cls["recall"][cls_idx]),
+                    "f1": float(cls["f1"][cls_idx]),
+                }
+            )
+        self.write_eval_artifacts(
+            "instance",
+            {
+                "summary": summary,
+                "aggregated": aggregated,
+                "momentum": momentum_aggregated,
+            },
+            [{"row_type": "summary", **summary}]
+            + [{"row_type": "per_class", **row} for row in per_class],
+        )
 
         self.logger.info(
             "<<<<<<<<<<<<<<<<< End Panoptic/Instance Segmentation Test <<<<<<<<<<<<<<<<<"
         )
         self.model.train()
-
-    def _eval_instances(
-        self,
-        gt_inst,
-        pr_inst,
-        gt_pid,
-        pr_pid,
-        class_names,
-        iou_thresh=0.5,
-        require_class_for_match=False,
-    ):
-        """Evaluate instance segmentation metrics for a single event."""
-        K = len(class_names)
-        N = gt_inst.shape[0]
-        assert pr_inst.shape[0] == N
-
-        valid_mask = (gt_inst >= 0) & (pr_inst >= 0)
-
-        pr_ids, pr_sizes = np.unique(pr_inst[pr_inst >= 0], return_counts=True)
-        gt_ids, gt_sizes = np.unique(gt_inst[gt_inst >= 0], return_counts=True)
-        pr_size = {int(i): int(c) for i, c in zip(pr_ids, pr_sizes)}
-        gt_size = {int(i): int(c) for i, c in zip(gt_ids, gt_sizes)}
-
-        if valid_mask.any():
-            pairs = np.stack([pr_inst[valid_mask], gt_inst[valid_mask]], axis=1)
-            uniq_pairs, inter_counts = np.unique(pairs, axis=0, return_counts=True)
-            inter_map = {
-                (int(p), int(g)): int(c) for (p, g), c in zip(uniq_pairs, inter_counts)
-            }
-        else:
-            inter_map = {}
-
-        def build_inst_pid_map(inst_ids_present, inst_ids_per_point, pid_array):
-            inst_ids_present = list(map(int, inst_ids_present))
-            m = int(np.max(inst_ids_present)) + 1 if inst_ids_present else 0
-
-            if pid_array.ndim == 1 and pid_array.shape[0] >= m and m > 0:
-                return {i: int(pid_array[i]) for i in inst_ids_present if 0 <= int(pid_array[i]) < K}
-
-            pid_map = {}
-            if len(inst_ids_present) == 0:
-                return pid_map
-            use = (inst_ids_per_point >= 0) & (pid_array >= 0) & (pid_array < K)
-            inst_vals = inst_ids_per_point[use].astype(np.int64)
-            pid_vals = pid_array[use].astype(np.int64)
-            ip = np.stack([inst_vals, pid_vals], axis=1)
-            uniq_ip, cnts = np.unique(ip, axis=0, return_counts=True)
-            order = np.lexsort((-cnts, uniq_ip[:, 0]))
-            uniq_ip_sorted = uniq_ip[order]
-            cnts_sorted = cnts[order]
-            _, first_idx = np.unique(uniq_ip_sorted[:, 0], return_index=True)
-            for idx in first_idx:
-                inst_i = int(uniq_ip_sorted[idx, 0])
-                pid_i = int(uniq_ip_sorted[idx, 1])
-                if 0 <= pid_i < K:
-                    pid_map[inst_i] = pid_i
-            return pid_map
-
-        gt_pid_map = build_inst_pid_map(gt_ids, gt_inst, gt_pid)
-        pr_pid_map = build_inst_pid_map(pr_ids, pr_inst, pr_pid)
-
-        def class_ok(p_id, g_id):
-            if not require_class_for_match:
-                return True
-            return pr_pid_map.get(p_id, -999) == gt_pid_map.get(g_id, -998)
-
-        cand = []
-        for (p, g), inter in inter_map.items():
-            if p not in pr_size or g not in gt_size:
-                continue
-            if not class_ok(p, g):
-                continue
-            union = pr_size[p] + gt_size[g] - inter
-            if union <= 0:
-                continue
-            iou = inter / union
-            cand.append((iou, p, g, inter))
-
-        cand.sort(reverse=True, key=lambda t: t[0])
-        used_p, used_g = set(), set()
-        matches = []
-        for iou, p, g, inter in cand:
-            if iou < iou_thresh:
-                break
-            if p in used_p or g in used_g:
-                continue
-            matches.append((p, g, iou, inter))
-            used_p.add(p)
-            used_g.add(g)
-
-        num_gt = len(gt_ids)
-        num_pred = len(pr_ids)
-        num_matched = len(matches)
-        fp = num_pred - num_matched
-        fn = num_gt - num_matched
-
-        det_prec = num_matched / (num_matched + fp) if (num_matched + fp) else 0.0
-        det_rec = num_matched / (num_matched + fn) if (num_matched + fn) else 0.0
-        det_f1 = (
-            (2 * det_prec * det_rec / (det_prec + det_rec)) if (det_prec + det_rec) else 0.0
-        )
-        mean_iou = float(np.mean([m[2] for m in matches])) if matches else 0.0
-
-        confusion = np.zeros((K, K), dtype=int)
-        out_matches = []
-        iou_sum_for_pq = 0.0
-        tp_for_pq = 0
-        for p, g, iou, inter in matches:
-            pred_cls = pr_pid_map.get(p, -1)
-            gt_cls = gt_pid_map.get(g, -1)
-            if 0 <= gt_cls < K and 0 <= pred_cls < K:
-                confusion[gt_cls, pred_cls] += 1
-            out_matches.append(
-                {
-                    "pred_id": p,
-                    "gt_id": g,
-                    "iou": float(iou),
-                    "pred_cls": int(pred_cls),
-                    "gt_cls": int(gt_cls),
-                    "intersection": int(inter),
-                    "pred_size": pr_size[p],
-                    "gt_size": gt_size[g],
-                }
-            )
-            if require_class_for_match and pred_cls == gt_cls and 0 <= pred_cls < K:
-                tp_for_pq += 1
-                iou_sum_for_pq += iou
-
-        support = np.array([confusion[i, :].sum() for i in range(K)], dtype=int)
-        precision = np.zeros(K)
-        recall = np.zeros(K)
-        f1 = np.zeros(K)
-        for i in range(K):
-            tp = confusion[i, i]
-            fp_c = confusion[:, i].sum() - tp
-            fn_c = confusion[i, :].sum() - tp
-            pr = tp / (tp + fp_c) if (tp + fp_c) else 0.0
-            rc = tp / (tp + fn_c) if (tp + fn_c) else 0.0
-            precision[i], recall[i] = pr, rc
-            f1[i] = (2 * pr * rc / (pr + rc)) if (pr + rc) else 0.0
-
-        out = {
-            "detection": {
-                "precision": det_prec,
-                "recall": det_rec,
-                "f1": det_f1,
-                "num_gt": num_gt,
-                "num_pred": num_pred,
-                "num_matched": num_matched,
-                "mean_matched_iou": mean_iou,
-                "iou_thresh": iou_thresh,
-                "matching": "class-aware" if require_class_for_match else "unlabeled",
-            },
-            "classification_on_matched": {
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "confusion": confusion,
-                "support": support,
-                "class_names": list(class_names),
-            },
-            "matches": out_matches,
-        }
-
-        if require_class_for_match:
-            sq = (iou_sum_for_pq / tp_for_pq) if tp_for_pq else 0.0
-            rq_den = tp_for_pq + 0.5 * fp + 0.5 * fn
-            rq = (tp_for_pq / rq_den) if rq_den > 0 else 0.0
-            out["pq"] = {"PQ": rq * sq, "RQ": rq, "SQ": sq}
-
-        return out
-
-    def _aggregate_instance_results(self, stats_list, require_class_for_match=False):
-        """Aggregate instance results across events."""
-        if len(stats_list) == 0:
-            raise ValueError("stats_list is empty")
-
-        cls0 = stats_list[0]["classification_on_matched"]
-        class_names = list(cls0["class_names"])
-        K = len(class_names)
-
-        total_gt = total_pred = total_matched = 0
-        iou_sum_all_matches = 0.0
-        iou_sum_pq = 0.0
-        tp_pq = 0
-
-        pooled_conf = np.zeros((K, K), dtype=int)
-        pooled_support = np.zeros(K, dtype=int)
-
-        for s in stats_list:
-            det = s["detection"]
-            total_gt += det["num_gt"]
-            total_pred += det["num_pred"]
-            total_matched += det["num_matched"]
-
-            for m in s["matches"]:
-                iou_sum_all_matches += float(m["iou"])
-                if 0 <= m["gt_cls"] < K and m["gt_cls"] == m["pred_cls"]:
-                    tp_pq += 1
-                    iou_sum_pq += float(m["iou"])
-
-            cls = s["classification_on_matched"]
-            pooled_conf += np.asarray(cls["confusion"], dtype=int)
-            pooled_support += np.asarray(cls["support"], dtype=int)
-
-        tp_det = total_matched
-        fp_det = total_pred - total_matched
-        fn_det = total_gt - total_matched
-
-        det_prec = tp_det / (tp_det + fp_det) if (tp_det + fp_det) else 0.0
-        det_rec = tp_det / (tp_det + fn_det) if (tp_det + fn_det) else 0.0
-        det_f1 = (
-            (2 * det_prec * det_rec / (det_prec + det_rec)) if (det_prec + det_rec) else 0.0
-        )
-        mean_iou = (iou_sum_all_matches / tp_det) if tp_det else 0.0
-
-        tp = np.diag(pooled_conf)
-        fp = pooled_conf.sum(axis=0) - tp
-        fn = pooled_conf.sum(axis=1) - tp
-
-        precision = np.zeros(K)
-        recall = np.zeros(K)
-        f1 = np.zeros(K)
-        for i in range(K):
-            pr = tp[i] / (tp[i] + fp[i]) if (tp[i] + fp[i]) else 0.0
-            rc = tp[i] / (tp[i] + fn[i]) if (tp[i] + fn[i]) else 0.0
-            precision[i], recall[i] = pr, rc
-            f1[i] = (2 * pr * rc / (pr + rc)) if (pr + rc) else 0.0
-
-        res_global = {
-            "detection": {
-                "precision": det_prec,
-                "recall": det_rec,
-                "f1": det_f1,
-                "num_gt": int(total_gt),
-                "num_pred": int(total_pred),
-                "num_matched": int(total_matched),
-                "mean_matched_iou": float(mean_iou),
-                "iou_thresh": stats_list[0]["detection"]["iou_thresh"],
-                "matching": stats_list[0]["detection"]["matching"],
-            },
-            "classification_on_matched": {
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "confusion": pooled_conf,
-                "support": pooled_support,
-                "class_names": class_names,
-            },
-            "matches": [],
-        }
-
-        if require_class_for_match:
-            rq_den = tp_pq + 0.5 * fp_det + 0.5 * fn_det
-            rq = (tp_pq / rq_den) if rq_den > 0 else 0.0
-            sq = (iou_sum_pq / tp_pq) if tp_pq > 0 else 0.0
-            res_global["pq"] = {"PQ": rq * sq, "RQ": rq, "SQ": sq}
-
-        return res_global
 
     def _eval_momentum(
         self,
@@ -999,7 +851,3 @@ class InstanceSegTester(TesterBase):
                         cls_name, cls_stats["mae"], cls_stats["rmse"], cls_stats["count"]
                     )
                 )
-
-    @staticmethod
-    def collate_fn(batch):
-        return collate_fn(batch)

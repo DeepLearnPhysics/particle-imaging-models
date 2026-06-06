@@ -2,7 +2,7 @@ _base_ = ["../../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 48  # bs: total bs in all gpus
-num_worker = 24
+num_worker = 12
 mix_prob = 0.0
 clip_grad = None
 empty_cache = False
@@ -97,6 +97,7 @@ transform = [
     dict(type="RandomRotate", angle=[-1, 1], axis="y", center=[0, 0, 0], p=0.8),
     dict(type="RandomFlip", p=0.5),
     dict(type="RandomJitter", sigma=grid_size / 8, clip=grid_size),
+    dict(type="Copy", keys_dict={"segment_motif": "segment"}),
     dict(type="ToTensor"),
     dict(
         type="Collect",
@@ -111,6 +112,7 @@ test_transform = [
         # return_inverse=True,
     ),
     # dict(type="CenterShift", apply_z=True),
+    dict(type="Copy", keys_dict={"segment_motif": "segment"}),
     dict(type="ToTensor"),
     dict(
         type="Collect",
@@ -128,7 +130,7 @@ data = dict(
         type="PILArNetH5Dataset",
         revision="v1",
         split="train",
-        data_root="/path/to/pilarnet-m/",
+        # data_root="/path/to/pilarnet-m/",
         transform=transform,
         test_mode=False,
         energy_threshold=0.0,
@@ -141,7 +143,7 @@ data = dict(
         type="PILArNetH5Dataset",
         revision="v1",
         split="val",
-        data_root="/path/to/pilarnet-m/",
+        # data_root="/path/to/pilarnet-m/",
         transform=transform,
         test_mode=False,
         energy_threshold=0.13,
@@ -156,10 +158,10 @@ data = dict(
         split="test",
         # data_root="/path/to/pilarnet-m/",
         transform=test_transform,
-        test_mode=True,
+        test_mode=False,
         energy_threshold=0.13,
         min_points=1024,
-        max_len=1000,
+        max_len=10_000,
     ),
 )
 
@@ -190,5 +192,5 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator", every_n_steps=1000, write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None, evaluator_every_n_steps=1000),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="FinalEvaluator", test_last=False),
 ]

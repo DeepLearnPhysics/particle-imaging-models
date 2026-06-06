@@ -182,9 +182,9 @@ data = dict(
     names=["stuff", "thing"],
     train=dict(
         type="PILArNetH5Dataset",
-        revision="v2",
+        revision="v3",
         split="train",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="/sdf/data/neutrino/youngsam/larnet/h5/reprocessed_v2/",
         transform=transform,
         test_mode=False,
         energy_threshold=0.13,
@@ -194,9 +194,9 @@ data = dict(
     ),
     val=dict(
         type="PILArNetH5Dataset",
-        revision="v2",
+        revision="v3",
         split="val",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="/sdf/data/neutrino/youngsam/larnet/h5/reprocessed_v2/",
         transform=test_transform,
         test_mode=False,
         energy_threshold=0.13,
@@ -206,16 +206,17 @@ data = dict(
     ),
     test=dict(
         type="PILArNetH5Dataset",
-        revision="v2",
+        revision="v3",
         split="test",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="/sdf/data/neutrino/youngsam/larnet/h5/reprocessed_v2/",
         transform=test_transform,
         test_mode=False,
         energy_threshold=0.13,
         min_points=1024,
         max_len=1000,
         remove_low_energy_scatters=False,
-    ),)
+    ),
+)
 
 
 # hook
@@ -225,6 +226,14 @@ hooks = [
         type="WandbNamer",
         keys=("model.type", "data.train.max_len", "amp_dtype", "seed"),
         extra="dec",
+    ),
+    dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
     ),
     dict(
         type="CheckpointLoader",
@@ -254,14 +263,6 @@ hooks = [
         require_class_for_match=False,
     ),
     dict(type="CheckpointSaver", save_freq=None, evaluator_every_n_steps=1000),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     dict(
         type="AttentionMaskAnnealingHook",
         log_frequency=100,

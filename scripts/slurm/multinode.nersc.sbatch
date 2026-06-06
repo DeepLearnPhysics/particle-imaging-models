@@ -3,7 +3,7 @@
 # Pull the image first: shifterimg pull youngsm/pimm-nersc:pytorch2.5.0-cuda12.4
 
 #SBATCH --nodes=4
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=4
 #SBATCH --constraint=gpu
@@ -28,8 +28,8 @@ EXTRA=""                          # additional --options overrides
 # ────────────────────────────────────────────────────────────────
 
 NUM_NODES=$SLURM_NNODES
-TASKS_PER_NODE=4
-WORLD_SIZE=$((NUM_NODES * TASKS_PER_NODE))
+GPUS_PER_NODE=4
+WORLD_SIZE=$((NUM_NODES * GPUS_PER_NODE))
 CURRENT_DATETIME=$(date +"%Y-%m-%d_%H-%M-%S")
 EXP_NAME="${CONFIG}-${MAX_LEN}-${EPOCH}ep-bs${BATCH_SIZE}-${CURRENT_DATETIME}"
 
@@ -41,14 +41,13 @@ fi
 TRAIN_PATH=$(pwd)/scripts/train.sh
 
 env -u LD_LIBRARY_PATH -u LD_PRELOAD \
-srun shifter /bin/bash -lc '
+shifter /bin/bash -lc '
     export LD_LIBRARY_PATH=/opt/hdf5/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-    export HDF5_USE_FILE_LOCKING=FALSE
-    exec /bin/sh "'"$TRAIN_PATH"'" \
+        export HDF5_USE_FILE_LOCKING=FALSE
+        exec /bin/sh "'"$TRAIN_PATH"'" \
         -m "'"$NUM_NODES"'" \
-        -g "'"$TASKS_PER_NODE"'" \
-        -d "'"$DATASET"'" \
-        -c "'"$CONFIG"'" \
+        -g "'"$GPUS_PER_NODE"'" \
+        -c "'"$DATASET"'/'"$CONFIG"'" \
         -n "'"$EXP_NAME"'" \
         -- --options \
             data.train.max_len="'"$MAX_LEN"'" \

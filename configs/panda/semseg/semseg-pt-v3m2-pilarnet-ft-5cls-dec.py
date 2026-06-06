@@ -170,7 +170,7 @@ data = dict(
         split="test",
         # data_root="/path/to/pilarnet-m/",
         transform=test_transform,
-        test_mode=True,
+        test_mode=False,
         energy_threshold=0.13,
         min_points=1024,
         max_len=1000,
@@ -187,11 +187,6 @@ hooks = [
         extra="dec"
     ),
     dict(
-        type="CheckpointLoader",
-        keywords="module.student.backbone",
-        replacement="module.backbone",
-    ),
-    dict(
         type="WeightDecayExclusion",
         exclude_bias_from_wd=True,
         exclude_norm_from_wd=True,
@@ -199,10 +194,15 @@ hooks = [
         exclude_token_from_wd=True,
         exclude_ndim_1_from_wd=True,
     ),
+    dict(
+        type="CheckpointLoader",
+        keywords="module.student.backbone",
+        replacement="module.backbone",
+    ),
     dict(type="GradientNormLogger", log_frequency=10),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator", every_n_steps=1000, write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None, evaluator_every_n_steps=1000),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="FinalEvaluator", test_last=False),
 ]

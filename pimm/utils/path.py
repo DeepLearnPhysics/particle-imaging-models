@@ -1,39 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import argparse
 import os
 import os.path as osp
 from pathlib import Path
-
-from .misc import is_str
-
-
-def is_filepath(x):
-    return is_str(x) or isinstance(x, Path)
-
-
-def fopen(filepath, *args, **kwargs):
-    if is_str(filepath):
-        return open(filepath, *args, **kwargs)
-    elif isinstance(filepath, Path):
-        return filepath.open(*args, **kwargs)
-    raise ValueError("`filepath` should be a string or a Path")
 
 
 def check_file_exist(filename, msg_tmpl='file "{}" does not exist'):
     if not osp.isfile(filename):
         raise FileNotFoundError(msg_tmpl.format(filename))
-
-
-def mkdir_or_exist(dir_name, mode=0o777):
-    if dir_name == "":
-        return
-    dir_name = osp.expanduser(dir_name)
-    os.makedirs(dir_name, mode=mode, exist_ok=True)
-
-
-def symlink(src, dst, overwrite=True, **kwargs):
-    if os.path.lexists(dst) and overwrite:
-        os.remove(dst)
-    os.symlink(src, dst, **kwargs)
 
 
 def scandir(dir_path, suffix=None, recursive=False, case_sensitive=True):
@@ -101,3 +75,95 @@ def find_vcs_root(path, markers=(".git",)):
             return cur
         prev, cur = cur, osp.split(cur)[0]
     return None
+
+
+def checkpoint_success_file(checkpoint_dir):
+    """Return the sentinel file path marking a complete DCP checkpoint."""
+    return osp.join(str(checkpoint_dir), ".complete")
+
+
+def is_complete_dcp_checkpoint(checkpoint_dir):
+    """Return whether a DCP checkpoint directory has a success sentinel."""
+    return osp.isdir(checkpoint_dir) and osp.isfile(checkpoint_success_file(checkpoint_dir))
+
+
+def split_checkpoint_weight_file(checkpoint_dir):
+    """Return the model-weight file path inside a split checkpoint directory."""
+    return osp.join(str(checkpoint_dir), "weights.pth")
+
+
+def split_checkpoint_trainer_dir(checkpoint_dir):
+    """Return the trainer-state DCP path inside a split checkpoint directory."""
+    return osp.join(str(checkpoint_dir), "trainer.dcp")
+
+
+def is_complete_split_checkpoint(checkpoint_dir):
+    """Return whether a split checkpoint has weights, trainer state, and success."""
+    return (
+        osp.isdir(checkpoint_dir)
+        and osp.isfile(checkpoint_success_file(checkpoint_dir))
+        and osp.isfile(split_checkpoint_weight_file(checkpoint_dir))
+        and is_complete_dcp_checkpoint(split_checkpoint_trainer_dir(checkpoint_dir))
+    )
+
+
+def resolve_model_weight_file(path):
+    """Resolve a direct or directory weight reference to a torch weight file."""
+    if osp.isfile(path):
+        return path
+    candidates = [
+        split_checkpoint_weight_file(path),
+        osp.join(str(path), "last", "weights.pth"),
+        osp.join(str(path), "model", "last", "weights.pth"),
+    ]
+    for candidate in candidates:
+        if osp.isfile(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "Weight directory must contain weights.pth, last/weights.pth, "
+        f"or model/last/weights.pth: {path}"
+    )
+
+
+def latest_complete_checkpoint(model_save_dir):
+    """Return the newest complete split, DCP, or legacy checkpoint in a model dir."""
+    model_save_dir = Path(model_save_dir)
+    latest: Path | None = None
+    for candidate in (
+        model_save_dir / "last",
+        model_save_dir / "last.prev",
+        model_save_dir / "model_last.pth",
+    ):
+        if candidate.is_dir():
+            if not (
+                is_complete_split_checkpoint(candidate)
+                or is_complete_dcp_checkpoint(candidate)
+            ):
+                continue
+        elif not candidate.is_file():
+            continue
+        if latest is None or candidate.stat().st_mtime > latest.stat().st_mtime:
+            latest = candidate
+    return latest
+
+
+def _main(argv=None):
+    parser = argparse.ArgumentParser(description="pimm path helpers")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    latest = subparsers.add_parser(
+        "latest-checkpoint",
+        help="Print latest complete checkpoint under a model directory",
+    )
+    latest.add_argument("model_save_dir")
+    args = parser.parse_args(argv)
+
+    if args.command == "latest-checkpoint":
+        checkpoint = latest_complete_checkpoint(args.model_save_dir)
+        if checkpoint is not None:
+            print(checkpoint)
+        return 0
+    raise SystemExit(f"Unknown command: {args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

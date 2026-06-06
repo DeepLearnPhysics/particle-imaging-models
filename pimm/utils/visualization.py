@@ -16,6 +16,7 @@ import torch
 
 
 def to_numpy(x):
+    """Convert a tensor or ndarray to a NumPy array on CPU."""
     if isinstance(x, torch.Tensor):
         x = x.clone().detach().cpu().numpy()
     assert isinstance(x, np.ndarray)
@@ -23,6 +24,7 @@ def to_numpy(x):
 
 
 def get_point_cloud(coord, color=None, verbose=True):
+    """Build Open3D point clouds from one or more coordinate arrays."""
     if not isinstance(coord, list):
         coord = [coord]
         if color is not None:
@@ -45,6 +47,7 @@ def get_point_cloud(coord, color=None, verbose=True):
 
 
 def get_line_set(coord, line, color=(1.0, 0.0, 0.0), verbose=True):
+    """Build an Open3D line set from points and integer edge indices."""
     coord = to_numpy(coord)
     line = to_numpy(line)
     colors = np.array([color for _ in range(len(line))])
@@ -58,6 +61,7 @@ def get_line_set(coord, line, color=(1.0, 0.0, 0.0), verbose=True):
 
 
 def save_point_cloud(coord, color=None, file_path="pc.ply", logger=None):
+    """Write a point cloud to disk as an Open3D-supported file."""
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     coord = to_numpy(coord)
     if color is not None:
@@ -75,10 +79,10 @@ def save_point_cloud(coord, color=None, file_path="pc.ply", logger=None):
 def save_bounding_boxes(
     bboxes_corners, color=(1.0, 0.0, 0.0), file_path="bbox.ply", logger=None
 ):
+    """Write box corner tensors as an Open3D line-set file."""
     bboxes_corners = to_numpy(bboxes_corners)
-    # point list
+    # Flatten box corners and offset a canonical 12-edge box per instance.
     points = bboxes_corners.reshape(-1, 3)
-    # line list
     box_lines = np.array(
         [
             [0, 1],
@@ -99,9 +103,7 @@ def save_bounding_boxes(
     for i, _ in enumerate(bboxes_corners):
         lines.append(box_lines + i * 8)
     lines = np.concatenate(lines)
-    # color list
     color = np.array([color for _ in range(len(lines))])
-    # generate line set
     line_set = o3d.geometry.LineSet()
     line_set.points = o3d.utility.Vector3dVector(points)
     line_set.lines = o3d.utility.Vector2iVector(lines)
@@ -115,6 +117,7 @@ def save_bounding_boxes(
 def save_lines(
     points, lines, color=(1.0, 0.0, 0.0), file_path="lines.ply", logger=None
 ):
+    """Write arbitrary line segments as an Open3D line-set file."""
     points = to_numpy(points)
     lines = to_numpy(lines)
     colors = np.array([color for _ in range(len(lines))])

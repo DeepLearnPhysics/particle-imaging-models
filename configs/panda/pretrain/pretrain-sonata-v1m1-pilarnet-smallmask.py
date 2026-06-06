@@ -26,7 +26,7 @@ wandb_project = "Pretraining-Sonata-PILArNet-M"  # Change to your desired projec
 grid_size = 0.001
 warmup_ratio = 0.05
 
-# model settings 
+# model settings
 model = dict(
     type="Sonata-v1m1",
     # backbone - student & teacher
@@ -92,7 +92,7 @@ model = dict(
 # scheduler settings
 # epoch: set directly here or via cli with --options epoch=X
 epoch = 100
-base_lr = 0.0026 #* (batch_size / 48) ** 0.5
+base_lr = 0.0026  # * (batch_size / 48) ** 0.5
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04  # wd scheduler enable in hooks
@@ -123,6 +123,14 @@ scheduler = dict(
 # dataset settings
 transform = [
     dict(type="NormalizeCoord", center=[384.0, 384.0, 384.0], scale=768.0 * 3**0.5 / 2),
+    dict(type="RandomScale", scale=[0.9, 1.1]),
+    dict(
+        type="GridSample",
+        grid_size=grid_size,
+        hash_type="fnv",
+        mode="train",
+        sum_keys=("energy",),
+    ),
     dict(
         type="LogTransform",
         min_val=0.01,
@@ -130,7 +138,6 @@ transform = [
         log=True,
         keys=("energy",),
     ),
-    dict(type="GridSample", grid_size=grid_size, hash_type="fnv", mode="train"),
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
     dict(
         type="MultiViewGenerator",
@@ -150,6 +157,7 @@ transform = [
         ],
         global_transform=[
             dict(type="CenterShift", apply_z=False, axes=("x", "y", "z")),
+            # dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1, 1], axis="x", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1, 1], axis="y", center=[0, 0, 0], p=0.8),
@@ -163,6 +171,7 @@ transform = [
         ],
         local_transform=[
             dict(type="CenterShift", apply_z=False, axes=("x", "y", "z")),
+            # dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1, 1], axis="x", center=[0, 0, 0], p=0.8),
             dict(type="RandomRotate", angle=[-1, 1], axis="y", center=[0, 0, 0], p=0.8),
@@ -193,8 +202,14 @@ transform = [
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_coord", "global_energy",),
-        local_feat_keys=("local_coord", "local_energy",),
+        global_feat_keys=(
+            "global_coord",
+            "global_energy",
+        ),
+        local_feat_keys=(
+            "local_coord",
+            "local_energy",
+        ),
     ),
 ]
 
@@ -225,7 +240,13 @@ data = dict(
                 center=[384.0, 384.0, 384.0],
                 scale=768.0 * 3**0.5 / 2,
             ),
-            dict(type="LogTransform", min_val=0.01, max_val=20.0, log=True, keys=("energy",)),
+            dict(
+                type="LogTransform",
+                min_val=0.01,
+                max_val=20.0,
+                log=True,
+                keys=("energy",),
+            ),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -239,13 +260,16 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "energy", "inverse", "segment"),
-                feat_keys=("coord", "energy",),
+                feat_keys=(
+                    "coord",
+                    "energy",
+                ),
             ),
         ],
-        test_mode=False,    
+        test_mode=False,
         energy_threshold=0.13,
         min_points=1024,
-        max_len=1000,
+        max_len=10000,
         remove_low_energy_scatters=False,
         loop=1,
     ),
@@ -269,6 +293,14 @@ hooks = [
         sort_by_params=True,
         min_params=1,
     ),
+    dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
+    ),
     dict(type="CheckpointLoader"),
     dict(
         type="DtypeOverrider",
@@ -278,14 +310,6 @@ hooks = [
         methods_to_override=["forward"],
     ),
     dict(type="ModelHook"),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     dict(
         type="WeightDecayScheduler",
         base_value=base_wd,
@@ -302,7 +326,7 @@ hooks = [
         every_n_steps=1000,
         train_config=dict(
             criteria=[dict(type="CrossEntropyLoss", weight=class_weights)],
-        )
+        ),
         # max_samples_per_class=15000,
     ),
     dict(
@@ -318,4 +342,12 @@ hooks = [
         monitor_teacher=True,
         track_channels=False,
     ),
-] 
+    dict(
+        type="ResourceUtilizationLogger",
+        log_frequency=10,
+        prefix="resources",
+        log_per_gpu=True,
+        log_cpu=True,
+        log_system_memory=True,
+    ),
+]

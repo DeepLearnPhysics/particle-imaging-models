@@ -8,7 +8,7 @@ v1m5: SIGReg + masked prediction (mask_loss, roll_mask_loss) + local-global.
 _base_ = ["../../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 48  # total effective bs across all gpus
+batch_size = 96  # total effective bs across all gpus
 num_worker = 24
 batch_size_val = 32
 mix_prob = 0
@@ -261,6 +261,14 @@ hooks = [
         sort_by_params=True,
         min_params=1,
     ),
+    dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
+    ),
     dict(type="CheckpointLoader"),
     dict(
         type="DtypeOverrider",
@@ -270,14 +278,6 @@ hooks = [
         methods_to_override=["forward"],
     ),
     dict(type="ModelHook"),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     dict(
         type="WeightDecayScheduler",
         base_value=base_wd,

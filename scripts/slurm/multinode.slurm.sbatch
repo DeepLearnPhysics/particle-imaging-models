@@ -4,8 +4,8 @@
 
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
-#SBATCH --ntasks-per-node=4       # must match gpu count
-#SBATCH --cpus-per-task=6
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=192G
 #SBATCH --time=48:00:00
 #SBATCH --partition=gpu
@@ -29,5 +29,5 @@ EXTRA=""  # e.g. "-- --options epoch=100 data.train.max_len=100000"
 BIND="${BIND:-}"
 # ────────────────────────────────────────────────────────────────
 
-CMD="sh scripts/train.sh -m $SLURM_NNODES -g $SLURM_GPUS_ON_NODE -d $DATASET -c $CONFIG $EXTRA"
-srun apptainer exec --nv ${BIND:+--bind $BIND} $SIF bash -c "$CMD"
+CMD="sh scripts/train.sh -m $SLURM_NNODES -g $SLURM_GPUS_ON_NODE -c $DATASET/$CONFIG $EXTRA"
+apptainer exec --nv ${BIND:+--bind $BIND} $SIF bash -c "$CMD"

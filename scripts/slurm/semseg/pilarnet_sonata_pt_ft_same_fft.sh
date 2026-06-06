@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=96G
 #SBATCH --time=60:00:00
-#SBATCH --account=neutrino:cider-nu
+#SBATCH --account=neutrno:ml-dev
 #SBATCH --partition=ampere
 #SBATCH --output=slurm_logs/%j_%n_%x_%a.txt
 #SBATCH --array=1-5
@@ -58,8 +58,8 @@ elif [ $SLURM_ARRAY_TASK_ID -eq 5 ]; then
 fi
 CKPT_PATH="${CKPT_BASE_PATH}/${CKPT_EXP}/model/model_${WHICH}.pth"
 
-TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/scripts/train.sh
-COMMAND="sh ${TRAIN_PATH} -m 1 -g 2 -d panda/semseg -c ${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
+TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models/scripts/train.sh
+COMMAND="sh ${TRAIN_PATH} -m 1 -g 2 -c panda/semseg/${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
 
 srun singularity run --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE_PATH} \
     bash -c "source ~/.bashrc && mamba activate pointcept-torch2.5.0-cu12.4 && ${COMMAND} $1"

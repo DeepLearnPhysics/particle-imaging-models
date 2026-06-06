@@ -38,6 +38,9 @@ dependencies:
     - torch
     - torchvision
     - torchaudio
+    - torchdata
+    - submitit
+    - tyro
     - einops
     - tensorboardX
     - timm
@@ -50,7 +53,9 @@ dependencies:
     - git+https://github.com/octree-nn/ocnn-pytorch.git
     - git+https://github.com/openai/CLIP.git
     - git+https://github.com/Dao-AILab/flash-attention.git
+    - ./libs/pointrope
     - ./libs/pointops
     - ./libs/pointgroup_ops
     - ./libs/cnms
     - ./libs/pytorch3d_ops
+    - -e .

@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=192G
-#SBATCH --time=96:00:00
+#SBATCH --time=128:00:00
 #SBATCH --account=mli:nu-ml-dev
 #SBATCH --partition=ampere
 #SBATCH --output=slurm_logs/%j_%n_%x_%a.txt
@@ -25,7 +25,7 @@ CURRENT_DATETIME=$(date +"%Y-%m-%d_%H-%M-%S")
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt     
 
-CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/exp/pilarnet_datascale/
+CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models/exp/pilarnet_datascale/
 EXP="pretrain-sonata-pilarnet-1m-amp-4GPU-2025-09-07_00-46-46-seed0"
 CKPT_PATH="${CKPT_BASE_PATH}/${EXP}/model/model_last.pth"
 
@@ -48,8 +48,8 @@ elif [ $SLURM_ARRAY_TASK_ID -eq 5 ]; then
     EPOCH=20
 fi
 
-TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/scripts/train.sh
-COMMAND="sh ${TRAIN_PATH} -m 2 -g 4 -d panda/panseg -c ${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
+TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models/scripts/train.sh
+COMMAND="sh ${TRAIN_PATH} -m 2 -g 4 -c panda/panseg/${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
 
 srun singularity run --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE_PATH} \
     bash -c "source ~/.bashrc && mamba activate pointcept-torch2.5.0-cu12.4 && ${COMMAND} $1"

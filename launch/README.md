@@ -1,89 +1,150 @@
-# PIM Launch Configs
+# pimm Launch Configs
 
-`scripts/launch.py` builds a Slurm job from layered launch config:
+`pimm launch` runs training locally or inside an existing allocation.
+`pimm submit` submits a managed Slurm job through submitit.
 
-1. `launch/defaults.yaml`
-2. `launch/sites/<site>.yaml`
-3. optional `launch/runs/<recipe>.yaml`
-4. CLI overrides
+Python training configs remain the source of truth for model and training
+behavior. Launch YAML describes execution policy: site resources,
+container/runtime, checkpoint/resume choices, run naming, and environment.
 
-Python training configs remain the source of truth for model/training behavior.
-Launch YAML should only describe execution: site resources, container/runtime,
-paths, checkpoint/resume choices, run naming, and explicit CLI `--options`.
+## Local Or Allocated Runs
 
-## Direct Config Mode
-
-Use this when you just made a normal Python config and want to send it with the
-site defaults.
+Run on one local process:
 
 ```bash
-scripts/launch.py submit --site s3df \
-  --config-dir panda/pretrain_geometry_combos \
-  --config pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
+pimm launch \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
-Dry-run the generated Slurm script first:
+Run on four local GPUs:
 
 ```bash
-scripts/launch.py dry-run --site s3df \
-  --config-dir panda/pretrain_geometry_combos \
-  --config pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20
+pimm launch \
+  --resources.nproc-per-node 4 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
-## Recipe Mode
-
-Use a recipe when the launch itself has meaningful state: special resources,
-checkpoint weights, resume behavior, W&B naming, or config overrides.
+Run from inside a user-authored Slurm allocation:
 
 ```bash
-scripts/launch.py submit --site s3df launch/runs/e050_tail.yaml
-scripts/launch.py submit --site nersc launch/runs/e050_tail.yaml
+srun pimm launch \
+  --resources.nnodes "$SLURM_NNODES" \
+  --resources.nproc-per-node "$SLURM_GPUS_ON_NODE" \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
-Changing `--site` swaps only the site overlay. The recipe should not need to
-know whether it is running on S3DF or NERSC.
-
-## Submission Behavior
-
-For `--site s3df`, actual submission follows the repo convention from
-`CLAUDE.md`: the launcher SSHes to `iana`, changes into the shared repo path,
-activates the `pointcept-torch2.5.0-cu12.4` mamba environment, and runs `sbatch`
-with the generated script.
-
-For `--site nersc`, the launcher currently assumes it is being run on a NERSC
-login node and submits locally with `sbatch`. The rendered job uses Shifter and
-Perlmutter-style Slurm options from `launch/sites/nersc.yaml`.
-
-## Overrides
-
-Resource/site overrides:
+Training config overrides go after `--` as plain `key=value` arguments:
 
 ```bash
-scripts/launch.py submit --site s3df launch/runs/e050_tail.yaml \
-  --account neutrino:ml-dev \
-  --partition ampere \
-  --set resources.time=00:30:00
+pimm launch \
+  --resources.nproc-per-node 4 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  -- epoch=1 data.train.max_len=1000 batch_size=8
 ```
 
-Training `--options` overrides:
+Use `--dry-run` to print the rendered local launch script.
+
+## Managed Slurm Submission
+
+Submit through the site-aware submitit path:
 
 ```bash
-scripts/launch.py submit --site s3df launch/runs/e050_tail.yaml \
-  --option epoch=1 \
-  --option data.train.max_len=1000
+pimm submit \
+  --site s3df \
+  --resources.nnodes 1 \
+  --resources.nproc-per-node 4 \
+  --resources.time 00:30:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  -- epoch=1 data.train.max_len=1000 batch_size=8
 ```
 
-Render without submitting:
+For NERSC:
 
 ```bash
-scripts/launch.py submit --dry-run --site s3df launch/runs/e050_tail.yaml
+pimm submit \
+  --site nersc \
+  --resources.nnodes 1 \
+  --resources.nproc-per-node 4 \
+  --resources.time 00:30:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+```
+
+Use `--dry-run` to print the submitit manifest and `--output PATH` to write it.
+`--submit.host iana` can be used when submission should happen from a remote login host.
+
+## Container Repo Mounts
+
+The Docker images install `pimm` as an editable package at `/opt/pimm/src`.
+Containerized launch configs bind the host checkout at `paths.repo_root` onto
+`container.repo_mount`, which defaults to `/opt/pimm/src`, and run
+`scripts/train.sh` from that mounted path. This keeps `pimm launch`, imports, and
+training code pointed at the user's clone rather than the source snapshot baked
+into the image.
+
+Manual Apptainer/Singularity use should preserve the same mount:
+
+```bash
+apptainer exec --nv \
+  --bind "$PWD:/opt/pimm/src" \
+  --pwd /opt/pimm/src \
+  /path/to/pimm.sif \
+  pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+```
+
+Manual Shifter use should do the equivalent volume mount:
+
+```bash
+shifter --image=youngsm/pimm:v1.0.0-pytorch2.5.0-cuda12.4-cudnn9-devel \
+  --volume="$PWD:/opt/pimm/src" \
+  /bin/bash -lc 'cd /opt/pimm/src && pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask'
+```
+
+## Requeue Attempts
+
+Use `--chain.jobs N` for managed short-walltime runs. pimm submits one submitit job,
+and submitit requeues it on timeout up to `N - 1` times.
+
+```bash
+pimm submit \
+  --site nersc \
+  --chain.jobs 4 \
+  --resources.nnodes 32 \
+  --resources.nproc-per-node 4 \
+  --resources.time 02:00:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+```
+
+Attempt 1 starts normally unless resume is requested. Requeued attempts resume
+from the newest complete checkpoint in the stable experiment directory.
+
+## Checkpoint Backend Policy
+
+`pimm launch` and `pimm submit` default `CheckpointSaverIteration` to DCP when
+the rendered run is multi-rank, submitit-requeued, or requests
+`parallel.strategy=fsdp2`.
+
+Plain `.pth` checkpoints remain supported for local/simple runs, legacy loading,
+and export-style artifacts. To force the legacy backend:
+
+```bash
+pimm submit \
+  --site s3df \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  -- hooks.CheckpointSaverIteration.backend=torch
 ```
 
 ## File Ownership
 
 - `launch/defaults.yaml`: common launcher defaults.
-- `launch/sites/s3df.yaml`: S3DF paths, account/partition, Singularity, `iana`
-  submit behavior, and S3DF environment variables.
+- `launch/sites/slurm.yaml`: generic Slurm defaults for resources, logs, and
+  environment; cluster-specific Slurm sites inherit from this with `_base_`.
+- `launch/sites/s3df.yaml`: S3DF repo/checkpoint paths, account/partition,
+  Singularity, optional remote submit setup, and S3DF environment variables.
 - `launch/sites/nersc.yaml`: NERSC paths, account/qos/constraint, Shifter, and
   Perlmutter environment variables.
-- `launch/runs/*.yaml`: optional named launch recipes. 
+- `container.repo_mount`: in-container path where `paths.repo_root` is mounted
+  for editable `pimm` imports; defaults to `/opt/pimm/src`.
+- `launch/sites/local.yaml`: no scheduler/container wrapper; runs directly on
+  the current node.
+- `launch/runs/*.yaml`: optional named launch recipes focused on execution
+  choices, not model architecture.

@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=lin_data_scaling
 #SBATCH --nodes=1
-#SBATCH --gpus=4
-#SBATCH --ntasks-per-node=4
+#SBATCH --gpus=2
+#SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=192G
-#SBATCH --time=60:00:00
+#SBATCH --time=5:00:00
 #SBATCH --account=mli:nu-ml-dev
 #SBATCH --partition=ampere
 #SBATCH --output=slurm_logs/%j_%n_%x_%a.txt
-#SBATCH --array=1-5
+#SBATCH --array=5
 
 set -e
 
@@ -25,7 +25,7 @@ CURRENT_DATETIME=$(date +"%Y-%m-%d_%H-%M-%S")
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt     
 
-CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/exp/pilarnet_datascale/
+CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/Pointcept/exp/pilarnet_datascale/
 
 # single config, override max_len and epoch based on array task ID
 CONFIG="semseg-pt-v3m2-pilarnet-ft-5cls-lin"
@@ -58,8 +58,8 @@ elif [ $SLURM_ARRAY_TASK_ID -eq 5 ]; then
 fi
 CKPT_PATH="${CKPT_BASE_PATH}/${CKPT_EXP}/model/model_${WHICH}.pth"
 
-TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/scripts/train.sh
-COMMAND="sh ${TRAIN_PATH} -m 1 -g 2 -d panda/semseg -c ${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
+TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models/scripts/train.sh
+COMMAND="sh ${TRAIN_PATH} -m 1 -g 2 -c panda/semseg/${CONFIG} -w ${CKPT_PATH} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
 
 srun singularity run --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE_PATH} \
     bash -c "source ~/.bashrc && mamba activate pointcept-torch2.5.0-cu12.4 && ${COMMAND} $1"

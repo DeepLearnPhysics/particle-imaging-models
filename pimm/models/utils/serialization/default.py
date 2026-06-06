@@ -1,3 +1,5 @@
+"""Front-end helpers for z-order and Hilbert point serialization."""
+
 import torch
 import numpy as np
 from .z_order import xyz2key as z_order_encode_
@@ -7,6 +9,7 @@ from .hilbert import decode as hilbert_decode_
 
 @torch.inference_mode()
 def encode(grid_coord, batch=None, depth=16, order="z"):
+    """Encode integer grid coordinates into one serialization code per point."""
     assert order in {"z", "z-trans", "hilbert", "hilbert-trans"}
     if order == "z":
         code = z_order_encode(grid_coord, depth=depth)
@@ -105,6 +108,7 @@ def encode_batch(grid_coord, batch=None, depth=16, orders=("z",)):
 
 @torch.inference_mode()
 def decode(code, depth=16, order="z"):
+    """Decode serialized point codes into grid coordinates and batch ids."""
     assert order in {"z", "hilbert"}
     batch = code >> depth * 3
     code = code & ((1 << depth * 3) - 1)
@@ -118,6 +122,7 @@ def decode(code, depth=16, order="z"):
 
 
 def z_order_encode(grid_coord: torch.Tensor, depth: int = 16):
+    """Encode ``(N, 3)`` grid coordinates with Morton z-order keys."""
     x, y, z = grid_coord[:, 0].long(), grid_coord[:, 1].long(), grid_coord[:, 2].long()
     # we block the support to batch, maintain batched code in Point class
     code = z_order_encode_(x, y, z, b=None, depth=depth)
@@ -125,14 +130,17 @@ def z_order_encode(grid_coord: torch.Tensor, depth: int = 16):
 
 
 def z_order_decode(code: torch.Tensor, depth):
+    """Decode Morton z-order keys into ``(N, 3)`` grid coordinates."""
     x, y, z = z_order_decode_(code, depth=depth)
     grid_coord = torch.stack([x, y, z], dim=-1)  # (N,  3)
     return grid_coord
 
 
 def hilbert_encode(grid_coord: torch.Tensor, depth: int = 16):
+    """Encode ``(N, 3)`` grid coordinates with Hilbert curve keys."""
     return hilbert_encode_(grid_coord, num_dims=3, num_bits=depth)
 
 
 def hilbert_decode(code: torch.Tensor, depth: int = 16):
+    """Decode Hilbert curve keys into ``(N, 3)`` grid coordinates."""
     return hilbert_decode_(code, num_dims=3, num_bits=depth)

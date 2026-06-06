@@ -27,7 +27,7 @@ use_wandb = True
 wandb_project = "Pretraining-LeJEPA-PILArNet"
 
 grid_size = 0.001
-warmup_ratio = 0.05
+warmup_ratio = 0.05 / 10
 
 # model settings
 model = dict(
@@ -263,6 +263,14 @@ hooks = [
         sort_by_params=True,
         min_params=1,
     ),
+    dict(
+        type="WeightDecayExclusion",
+        exclude_bias_from_wd=True,
+        exclude_norm_from_wd=True,
+        exclude_gamma_from_wd=True,
+        exclude_token_from_wd=True,
+        exclude_ndim_1_from_wd=True,
+    ),
     dict(type="CheckpointLoader"),
     dict(
         type="DtypeOverrider",
@@ -272,14 +280,6 @@ hooks = [
         methods_to_override=["forward"],
     ),
     dict(type="ModelHook"),
-    dict(
-        type="WeightDecayExclusion",
-        exclude_bias_from_wd=True,
-        exclude_norm_from_wd=True,
-        exclude_gamma_from_wd=True,
-        exclude_token_from_wd=True,
-        exclude_ndim_1_from_wd=True,
-    ),
     dict(
         type="WeightDecayScheduler",
         base_value=base_wd,

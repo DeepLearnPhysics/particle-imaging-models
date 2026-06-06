@@ -14,6 +14,8 @@ SCHEDULERS = Registry("schedulers")
 
 @SCHEDULERS.register_module()
 class MultiStepLR(lr_scheduler.MultiStepLR):
+    """Multi-step scheduler that accepts milestone ratios of total steps."""
+
     def __init__(
         self,
         optimizer,
@@ -22,6 +24,7 @@ class MultiStepLR(lr_scheduler.MultiStepLR):
         gamma=0.1,
         last_epoch=-1,
     ):
+        """Convert fractional milestones to integer optimizer steps."""
         super().__init__(
             optimizer=optimizer,
             milestones=[int(rate * total_steps) for rate in milestones],
@@ -32,6 +35,8 @@ class MultiStepLR(lr_scheduler.MultiStepLR):
 
 @SCHEDULERS.register_module()
 class MultiStepWithWarmupLR(lr_scheduler.LambdaLR):
+    """Multi-step decay with linear warmup expressed as total-step ratios."""
+
     def __init__(
         self,
         optimizer,
@@ -42,9 +47,11 @@ class MultiStepWithWarmupLR(lr_scheduler.LambdaLR):
         warmup_scale=1e-6,
         last_epoch=-1,
     ):
+        """Create a lambda schedule with warmup followed by milestone decay."""
         milestones = [rate * total_steps for rate in milestones]
 
         def multi_step_with_warmup(s):
+            """Return the lr multiplier at scheduler step ``s``."""
             factor = 1.0
             for i in range(len(milestones)):
                 if s < milestones[i]:
@@ -68,6 +75,8 @@ class MultiStepWithWarmupLR(lr_scheduler.LambdaLR):
 
 @SCHEDULERS.register_module()
 class PolyLR(lr_scheduler.LambdaLR):
+    """Polynomial decay scheduler over a fixed number of steps."""
+
     def __init__(
         self,
         optimizer,
@@ -75,6 +84,7 @@ class PolyLR(lr_scheduler.LambdaLR):
         power=0.9,
         last_epoch=-1,
     ):
+        """Create a polynomial lr multiplier."""
         super().__init__(
             optimizer=optimizer,
             lr_lambda=lambda s: (1 - s / (total_steps + 1)) ** power,
@@ -84,6 +94,8 @@ class PolyLR(lr_scheduler.LambdaLR):
 
 @SCHEDULERS.register_module()
 class ExpLR(lr_scheduler.LambdaLR):
+    """Exponential decay scheduler normalized by total training steps."""
+
     def __init__(
         self,
         optimizer,
@@ -91,6 +103,7 @@ class ExpLR(lr_scheduler.LambdaLR):
         gamma=0.9,
         last_epoch=-1,
     ):
+        """Create an exponential lr multiplier."""
         super().__init__(
             optimizer=optimizer,
             lr_lambda=lambda s: gamma ** (s / total_steps),
@@ -100,6 +113,8 @@ class ExpLR(lr_scheduler.LambdaLR):
 
 @SCHEDULERS.register_module()
 class CosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
+    """Cosine annealing scheduler using total training steps as ``T_max``."""
+
     def __init__(
         self,
         optimizer,
@@ -107,6 +122,7 @@ class CosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
         eta_min=0,
         last_epoch=-1,
     ):
+        """Initialize cosine annealing for the configured step budget."""
         super().__init__(
             optimizer=optimizer,
             T_max=total_steps,
@@ -153,6 +169,8 @@ class OneCycleLR(lr_scheduler.OneCycleLR):
 
 
 class CosineScheduler(object):
+    """Standalone cosine value schedule with warmup and optional freeze phase."""
+
     def __init__(
         self,
         base_value,
@@ -163,6 +181,7 @@ class CosineScheduler(object):
         freeze_value=None,
         freeze_iters=0,
     ):
+        """Precompute a scalar schedule for direct indexing or stepping."""
         self.base_value = base_value
         self.final_value = final_value
         self.total_iters = total_iters
@@ -181,23 +200,28 @@ class CosineScheduler(object):
         self.iter = 0
 
     def get(self, it):
+        """Return the scheduled value at iteration ``it``."""
         if it >= self.total_iters:
             return self.final_value
         else:
             return self.schedule[it]
 
     def step(self):
+        """Return the current value and advance the internal cursor."""
         value = self.get(self.iter)
         self.iter += 1
         return value
 
     def reset(self):
+        """Reset the internal cursor to the first schedule element."""
         self.iter = 0
 
     def __getitem__(self, it):
+        """Return the scheduled value at iteration ``it``."""
         return self.get(it)
 
 
 def build_scheduler(cfg, optimizer):
+    """Build a registered scheduler from config and attach the optimizer."""
     cfg.optimizer = optimizer
     return SCHEDULERS.build(cfg=cfg)

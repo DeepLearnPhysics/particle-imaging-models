@@ -1,15 +1,14 @@
-"""
-JAXTPCDataset — multimodal dataset for LArTPC detector simulation output.
+"""JAXTPCDataset: multimodal dataset for LArTPC detector simulation output.
 
 Loads from co-indexed HDF5 files produced by JAXTPC's production pipeline:
-seg (3D deposits), resp (2D wire signals), corr (3D→2D correspondence),
-labl (track_id→label lookup tables).
+seg (3D deposits), resp (2D wire signals), corr (3D-to-2D correspondence),
+labl (track_id-to-label lookup tables).
 
 Who owns ``coord``/``energy`` is determined by which modalities are loaded:
 
-- seg present → coord is 3D (N,3) from deposits. Resp/corr stay namespaced.
-- seg absent, resp present → all planes merged into coord (M,2) with plane_id.
-- seg absent, corr+labl present → corr entries become coord (E,2) with labels.
+- seg present: coord is 3D (N,3) from deposits. Resp/corr stay namespaced.
+- seg absent, resp present: all planes are merged into coord (M,2) with plane_id.
+- seg absent, corr+labl present: corr entries become coord (E,2) with labels.
 
 Example configs::
 
@@ -28,11 +27,11 @@ Example configs::
 
 import os
 import numpy as np
-from copy import deepcopy
 from torch.utils.data import Dataset
 
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
+from .test_fragments import build_test_fragments
 from .transform import Compose, TRANSFORMS
 from .readers.jaxtpc_seg_reader import JAXTPCSegReader
 from .readers.jaxtpc_resp_reader import JAXTPCRespReader
@@ -93,6 +92,7 @@ class JAXTPCDataset(Dataset):
         test_mode=False,
         test_cfg=None,
     ):
+        """Create modality readers and derive the co-indexed dataset length."""
         super().__init__()
         self.data_root = data_root
         self.split = split
@@ -116,7 +116,7 @@ class JAXTPCDataset(Dataset):
             self.aug_transform = [
                 Compose(aug) for aug in self.test_cfg.aug_transform]
 
-        # Build readers
+        # Readers own raw HDF5 decoding; this wrapper owns modality fusion.
         self.seg_reader = None
         self.resp_reader = None
         self.labl_reader = None
@@ -166,7 +166,7 @@ class JAXTPCDataset(Dataset):
                 and not self.corr_reader and not self.seg_reader):
             logger.warning(
                 "modalities=('resp','labl') without 'corr': labl provides "
-                "track_id→label tables but resp pixels can't be mapped to "
+                "track_id-to-label tables but resp pixels can't be mapped to "
                 "track_ids without corr. No 'segment' will be produced. "
                 "Add 'corr' for 2D labels or 'seg' for 3D labels.")
 
@@ -176,7 +176,7 @@ class JAXTPCDataset(Dataset):
             f"volume={volume}, split={split}")
 
     def _modality_root(self, modality):
-        """Resolve root directory for a modality."""
+        """Resolve root directory for a modality shard family."""
         mod_dir = os.path.join(self.data_root, modality)
         if os.path.isdir(mod_dir):
             return mod_dir
@@ -194,11 +194,11 @@ class JAXTPCDataset(Dataset):
         """
         data_dict = {}
 
-        # --- Seg (3D point cloud) → owns coord if present ---
+        # Seg 3D point cloud owns coord if present.
         if self.seg_reader is not None:
             data_dict.update(self.seg_reader.read_event(idx))
 
-        # --- Labl (track_id → label lookup) ---
+        # Labl track_id-to-label lookup.
         labl_data = {}
         if self.labl_reader is not None:
             labl_data = self.labl_reader.read_event(idx)
@@ -226,17 +226,17 @@ class JAXTPCDataset(Dataset):
         has_resp = bool(resp_data)
         has_corr = bool(corr_data)
 
-        # Resp → resp_coord/resp_energy/resp_plane_id
+        # Resp maps to resp_coord/resp_energy/resp_plane_id.
         if has_resp:
             self._merge_resp_planes(data_dict, resp_data, prefix='resp_')
             # Also keep raw namespaced keys for per-plane access
             data_dict.update(resp_data)
 
-        # Corr+labl → corr_coord/corr_energy/corr_segment/corr_instance
+        # Corr+labl maps to corr_coord/corr_energy/corr_segment/corr_instance.
         if has_corr and labl_data:
             self._build_corr_pointcloud(data_dict, corr_data, labl_data, prefix='corr_')
         elif has_corr:
-            # corr without labl — keep as namespaced keys only
+            # Corr without labl stays namespaced because labels are unavailable.
             data_dict.update(corr_data)
 
         # --- Set standard coord/energy from the primary spatial source ---
@@ -358,8 +358,8 @@ class JAXTPCDataset(Dataset):
             all_gid.append(gid.astype(np.int32))
             all_plane_id.append(np.full((n, 1), pi, dtype=np.int32))
 
-            # group_id → g2t → track_id → labl → label
-            vol_idx = plane.split('_')[1]  # 'volume_0_U' → '0'
+            # group_id to g2t to track_id to labl to label.
+            vol_idx = plane.split('_')[1]  # "volume_0_U" maps to "0".
             g2t = corr_data.get(f'g2t_v{vol_idx}')
 
             labels = np.full(n, -1, dtype=np.int32)
@@ -392,6 +392,7 @@ class JAXTPCDataset(Dataset):
         data_dict[f'{prefix}plane_id'] = np.concatenate(all_plane_id, axis=0)
 
     def get_data_name(self, idx):
+        """Return a stable shard/event name for logging and prediction files."""
         reader = self._canonical_reader
         file_idx = int(np.searchsorted(reader.cumulative_lengths, idx, side='right'))
         local = idx - (int(reader.cumulative_lengths[file_idx - 1])
@@ -401,9 +402,11 @@ class JAXTPCDataset(Dataset):
         return f"{fname}_evt{event_num:03d}"
 
     def prepare_train_data(self, idx):
+        """Load one event and apply the train transform pipeline."""
         return self.transform(self.get_data(idx % len(self)))
 
     def prepare_test_data(self, idx):
+        """Build augmented and voxelized fragments for test-time inference."""
         data_dict = self.get_data(idx % len(self))
         if self.transform is not None:
             data_dict = self.transform(data_dict)
@@ -414,39 +417,31 @@ class JAXTPCDataset(Dataset):
             assert "inverse" in data_dict
             result_dict["origin_segment"] = data_dict.pop("origin_segment")
             result_dict["inverse"] = data_dict.pop("inverse")
-        data_dict_list = []
-        for aug in self.aug_transform:
-            data_dict_list.append(aug(deepcopy(data_dict)))
-        fragment_list = []
-        for data in data_dict_list:
-            if self.test_voxelize is not None:
-                data_part_list = self.test_voxelize(data)
-            else:
-                data_part_list = [data]
-            for data_part in data_part_list:
-                if self.test_crop is not None:
-                    data_part = self.test_crop(data_part)
-                else:
-                    data_part = [data_part]
-                fragment_list += data_part
-        for i in range(len(fragment_list)):
-            fragment_list[i] = self.post_transform(fragment_list[i])
-        result_dict["fragment_list"] = fragment_list
+        result_dict["fragment_list"] = build_test_fragments(
+            data_dict,
+            aug_transform=self.aug_transform,
+            test_voxelize=self.test_voxelize,
+            test_crop=self.test_crop,
+            post_transform=self.post_transform,
+        )
         return result_dict
 
     def __getitem__(self, idx):
+        """Return a transformed train item or a fragmented test item."""
         real_idx = idx % len(self)
         if self.test_mode:
             return self.prepare_test_data(real_idx)
         return self.prepare_train_data(real_idx)
 
     def __len__(self):
+        """Return event count after max_len and loop are applied."""
         n = self._n_events
         if self.max_len > 0:
             n = min(n, self.max_len)
         return n * self.loop
 
     def __del__(self):
+        """Close any reader handles still owned by this dataset instance."""
         for attr in ('seg_reader', 'resp_reader', 'labl_reader', 'corr_reader'):
             reader = getattr(self, attr, None)
             if reader is not None:

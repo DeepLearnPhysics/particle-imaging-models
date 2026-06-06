@@ -24,7 +24,7 @@ CURRENT_DATETIME=$(date +"%Y-%m-%d_%H-%M-%S")
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt     
 
-CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/exp/pilarnet_datascale/
+CKPT_BASE_PATH=/sdf/home/y/youngsam/sw/dune/representations/Pointcept/exp/pilarnet_datascale/
 EXP="pretrain-sonata-pilarnet-1m-amp-4GPU-2025-09-07_00-46-46-seed0"
 CKPT_PATH="${CKPT_BASE_PATH}/${EXP}/model/model_last.pth"
 
@@ -41,8 +41,8 @@ elif [ $SLURM_ARRAY_TASK_ID -eq 4 ]; then
 fi
 # do not include 1M becase that's in pilarnet_sonata_pt_ft_same_fft.sh
 
-TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/pimm/scripts/train.sh
-COMMAND="sh ${TRAIN_PATH} -m 1 -g 4 -d panda/semseg -c ${CONFIG} -n ${CONFIG}-${CURRENT_DATETIME}-seed0 -w ${CKPT_PATH}"
+TRAIN_PATH=/sdf/home/y/youngsam/sw/dune/representations/particle-imaging-models/scripts/train.sh
+COMMAND="sh ${TRAIN_PATH} -m 1 -g 4 -c panda/semseg/${CONFIG} -n ${CONFIG}-${CURRENT_DATETIME}-seed0 -w ${CKPT_PATH}"
 
 srun singularity run --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE_PATH} \
     bash -c "source ~/.bashrc && mamba activate pointcept-torch2.5.0-cu12.4 && ${COMMAND} $1"

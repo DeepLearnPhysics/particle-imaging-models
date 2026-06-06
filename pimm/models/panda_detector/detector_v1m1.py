@@ -469,7 +469,7 @@ class Block(nn.Module):
             attn_mask[start_q:end_q, end_kv:] = -1e4
         
         # return logits z for supervision (loss expects logits and applies sigmoid internally)
-        return attn_mask, z
+        return attn_mask, z, m_k
 
     def forward(
         self,
@@ -497,13 +497,16 @@ class Block(nn.Module):
         # supervise_attn_mask=False: only last block has mask_mlp, computes masks for prediction only
         attn_mask = None
         mask_logits = None
+        mask_embed = None
+        mask_point_proj = None
         if self.use_attn_mask and hasattr(self, 'mask_mlp'):
+            mask_point_proj = kv_n
             compute_attn = self.supervise_attn_mask  # only use as attention mask if supervising
             if compute_attn:
-                attn_mask, mask_logits = self._compute_attn_mask(q, kv_n, cu_seqlens_q, cu_seqlens_kv)
+                attn_mask, mask_logits, mask_embed = self._compute_attn_mask(q, kv_n, cu_seqlens_q, cu_seqlens_kv)
             else:
                 # last block in unsupervised mode: compute masks but don't use for attention
-                _, mask_logits = self._compute_attn_mask(q, kv_n, cu_seqlens_q, cu_seqlens_kv)
+                _, mask_logits, mask_embed = self._compute_attn_mask(q, kv_n, cu_seqlens_q, cu_seqlens_kv)
         
         if self.pre_norm:
             # cross-attention
@@ -568,7 +571,7 @@ class Block(nn.Module):
             # mlp
             q += self.drop_path(self.ls3(self.mlp(q)))
             q = self.norm3(q.float()).to(q.dtype)
-        return q, mask_logits
+        return q, mask_logits, mask_embed, mask_point_proj
 
 
 class MaskQueryDecoder(nn.Module):
@@ -826,8 +829,10 @@ class MaskQueryDecoder(nn.Module):
 
         # pass through blocks
         final_mask_logits = None
+        final_mask_embed = None
+        final_mask_point_proj = None
         for blk in self.blocks:
-            q, mask_logits = blk(
+            q, mask_logits, mask_embed, mask_point_proj = blk(
                 q,
                 point_proj,
                 cu_seqlens_q,
@@ -841,6 +846,8 @@ class MaskQueryDecoder(nn.Module):
             if mask_logits is not None:
                 mask_logits = mask_logits * query_valid_f
                 final_mask_logits = mask_logits
+                final_mask_embed = mask_embed * query_valid_f if mask_embed is not None else None
+                final_mask_point_proj = mask_point_proj
             q = q * query_valid_f
             if return_aux:
                 aux_outputs.append(self.final_norm(q))
@@ -858,6 +865,8 @@ class MaskQueryDecoder(nn.Module):
             "out_q": q_norm,
             "point_proj": point_proj,
             "final_mask_logits": final_mask_logits,
+            "final_mask_embed": final_mask_embed,
+            "final_mask_point_proj": final_mask_point_proj,
             "query_counts": query_counts_long,
             "query_valid": query_valid_flat,
         }
@@ -1420,7 +1429,7 @@ class MultiLabelMaskQueryDecoder(MaskQueryDecoder):
             "seg_logits": pred_logits,
         }
 
-    def forward(self, point: Point):
+    def forward(self, point: Point, return_decoder: bool = False):
         point_full = self.up_cast(point)
         decoder_point = point_full.copy()
         decoder_point.feat = self.full_point_proj(point_full.feat)
@@ -1458,6 +1467,8 @@ class MultiLabelMaskQueryDecoder(MaskQueryDecoder):
                 predictions["stuff_probs"] = stuff_logits.sigmoid()
             outputs_by_label[label] = predictions
 
+        if return_decoder:
+            return outputs_by_label, decoder_outputs
         return outputs_by_label
 
 
@@ -1735,11 +1746,16 @@ class MultiLabelDetector(PointModel):
                     return_dict[key] = value_sync
         return return_dict
 
-    def forward(self, input_dict, return_point=False):
+    def forward(self, input_dict, return_point=False, return_decoder=False):
         point = Point(input_dict)
         point = self.backbone(point)
         point_full = self.up_cast(point)
-        outputs_by_label = self.decoder(Point(point_full.copy()))
+        decoder_result = self.decoder(Point(point_full.copy()), return_decoder=return_decoder)
+        if return_decoder:
+            outputs_by_label, decoder_outputs = decoder_result
+        else:
+            outputs_by_label = decoder_result
+            decoder_outputs = None
 
         loss = None
         return_dict = {}
@@ -1814,6 +1830,11 @@ class MultiLabelDetector(PointModel):
                 return_dict["pred_masks"] = primary_outputs.get("pred_masks")
                 return_dict["stuff_probs"] = primary_outputs.get("stuff_probs")
                 return_dict["point_counts"] = offset2bincount(point_full.offset)
+                if return_decoder and decoder_outputs is not None:
+                    return_dict["decoder"] = decoder_outputs
+
+        if return_decoder and decoder_outputs is not None and "decoder" not in return_dict:
+            return_dict["decoder"] = decoder_outputs
 
         if loss is not None:
             return_dict["loss"] = loss

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pimm"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML",
+    "submitit",
+    "torchdata",
+    "tyro",
+]
+
+[project.scripts]
+pimm = "pimm.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["pimm*"]

@@ -1,5 +1,8 @@
-"""
-Utils for Datasets
+"""Collation helpers for ragged point-cloud batches.
+
+Dataset items are flat dictionaries with per-point arrays and one-sample
+``offset`` tensors. These helpers concatenate ragged fields and convert offsets
+to cumulative batch offsets expected by Pointcept/pimm model heads.
 
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
@@ -13,9 +16,11 @@ from torch.utils.data.dataloader import default_collate
 
 
 def collate_fn(batch, mix_prob=0):
-    """
-    collate function for point cloud which support dict and list,
-    'coord' is necessary to determine 'offset'
+    """Recursively collate tensors, mappings, and list-style point samples.
+
+    Tensor leaves are concatenated instead of stacked. Keys containing
+    ``offset`` are treated as per-sample lengths and converted into cumulative
+    offsets after concatenation.
     """
     if not isinstance(batch, Sequence):
         raise TypeError(f"{batch.dtype} is not supported.")
@@ -51,6 +56,7 @@ def collate_fn(batch, mix_prob=0):
 
 
 def point_collate_fn(batch, mix_prob=0):
+    """Collate point-cloud dictionaries and optionally apply pairwise mixup."""
     assert isinstance(
         batch[0], Mapping
     )  # currently, only support input_dict, rather than input_list
@@ -75,13 +81,14 @@ def point_collate_fn(batch, mix_prob=0):
 
 
 def gaussian_kernel(dist2: np.array, a: float = 1, c: float = 5):
+    """Evaluate a scalar Gaussian kernel for squared distances."""
     return a * np.exp(-dist2 / (2 * c**2))
 
 
 def inseg_collate_fn(batch, mix_prob=0):
-    """
-    Collate function for instance segmentation that handles lists of data dictionaries.
-    Each item in the batch is a list of data dictionaries (one per query).
+    """Collate instance-segmentation query lists into one flattened batch.
+
+    Each incoming item is a list of dictionaries, one per query/candidate.
     """
     assert isinstance(
         batch[0], list
@@ -94,6 +101,6 @@ def inseg_collate_fn(batch, mix_prob=0):
     flattened_batch = []
     for item_list in batch:
         flattened_batch.extend(item_list)
-    
+
     # Use the original collate function on the flattened batch
     return collate_fn(flattened_batch)

@@ -68,6 +68,49 @@ class OnlineCluster(nn.Module):
         return similarity
 
 
+class RepresentationFusion(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        hidden_channels=None,
+        dropout=0.0,
+        residual=True,
+        output_norm=True,
+    ):
+        super().__init__()
+        hidden_channels = hidden_channels or max(in_channels, out_channels * 2)
+        self.residual = residual
+        self.input_norm = nn.LayerNorm(in_channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(in_channels, hidden_channels),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_channels, out_channels),
+        )
+        self.skip = (
+            nn.Linear(in_channels, out_channels, bias=False)
+            if residual
+            else None
+        )
+        self.output_norm = nn.LayerNorm(out_channels) if output_norm else nn.Identity()
+        self.apply(self._init_weights)
+
+    @staticmethod
+    def _init_weights(m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, feat):
+        feat_norm = self.input_norm(feat)
+        out = self.mlp(feat_norm)
+        if self.skip is not None:
+            out = out + self.skip(feat_norm)
+        return self.output_norm(out)
+
+
 @MODELS.register_module("Sonata-v1m1")
 class Sonata(PointModel):
     def __init__(
@@ -102,6 +145,11 @@ class Sonata(PointModel):
         match_max_k=8,
         match_max_r=0.08,
         up_cast_level=2,
+        representation_fusion_channels=None,
+        representation_fusion_hidden_channels=None,
+        representation_fusion_dropout=0.0,
+        representation_fusion_residual=True,
+        representation_fusion_output_norm=True,
     ):
         super(Sonata, self).__init__()
         self.mask_loss_weight = mask_loss_weight
@@ -151,6 +199,13 @@ class Sonata(PointModel):
 
         # up cast level
         self.up_cast_level = up_cast_level
+        self.representation_fusion_enabled = representation_fusion_channels is not None
+        self.representation_fusion_channels = representation_fusion_channels
+        head_feature_channels = (
+            representation_fusion_channels
+            if self.representation_fusion_enabled
+            else head_in_channels
+        )
 
         # one of unmask, mask, roll mask loss enable
         assert unmask_loss_weight + mask_loss_weight + roll_mask_loss_weight > 0
@@ -171,9 +226,27 @@ class Sonata(PointModel):
         student_model_dict["backbone"] = student_backbone
         teacher_model_dict["backbone"] = teacher_backbone
 
+        if self.representation_fusion_enabled:
+            student_model_dict["representation_fusion"] = RepresentationFusion(
+                in_channels=head_in_channels,
+                out_channels=representation_fusion_channels,
+                hidden_channels=representation_fusion_hidden_channels,
+                dropout=representation_fusion_dropout,
+                residual=representation_fusion_residual,
+                output_norm=representation_fusion_output_norm,
+            )
+            teacher_model_dict["representation_fusion"] = RepresentationFusion(
+                in_channels=head_in_channels,
+                out_channels=representation_fusion_channels,
+                hidden_channels=representation_fusion_hidden_channels,
+                dropout=representation_fusion_dropout,
+                residual=representation_fusion_residual,
+                output_norm=representation_fusion_output_norm,
+            )
+
         head = partial(
             OnlineCluster,
-            in_channels=head_in_channels,
+            in_channels=head_feature_channels,
             hidden_channels=head_hidden_channels,
             embed_channels=head_embed_channels,
             num_prototypes=head_num_prototypes,
@@ -195,7 +268,9 @@ class Sonata(PointModel):
     def before_train(self):
         # make ModelHook after CheckPointLoader
         total_steps = self.trainer.cfg.scheduler.total_steps
-        curr_step = self.trainer.start_epoch * len(self.trainer.train_loader)
+        curr_step = getattr(self.trainer, "global_step", 0) or (
+            self.trainer.start_epoch * len(self.trainer.train_loader)
+        )
         # mask size scheduler
         self.mask_size_scheduler = CosineScheduler(
             start_value=self.mask_size_start,
@@ -385,16 +460,26 @@ class Sonata(PointModel):
             point = parent
         return point
 
+    def upsample_to_original(self, point):
+        while "pooling_parent" in point.keys():
+            parent = point.pop("pooling_parent")
+            inverse = point.pop("pooling_inverse")
+            parent.feat = point.feat[inverse]
+            point = parent
+        return point
+
+    def fuse_representation(self, point, model_dict):
+        if self.representation_fusion_enabled:
+            point.feat = model_dict["representation_fusion"](point.feat)
+        return point
+
     def forward(self, data_dict, return_point=False):
         if return_point:
             point = self.teacher.backbone(data_dict)
-            for _ in range(self.up_cast_level):
-                assert "pooling_parent" in point.keys()
-                assert "pooling_inverse" in point.keys()
-                parent = point.pop("pooling_parent")
-                inverse = point.pop("pooling_inverse")
-                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-                point = parent
+            point = self.up_cast(point)
+            point = self.fuse_representation(point, self.teacher)
+            if self.representation_fusion_enabled:
+                point = self.upsample_to_original(point)
             return dict(point=point)
 
         # prepare global_point, mask_global_point, local_point
@@ -442,6 +527,7 @@ class Sonata(PointModel):
             # teacher backbone forward (shared with mask and unmask)
             global_point_ = self.teacher.backbone(global_point)
             global_point_ = self.up_cast(global_point_)
+            global_point_ = self.fuse_representation(global_point_, self.teacher)
             global_feat = global_point_.feat
 
  
@@ -452,6 +538,7 @@ class Sonata(PointModel):
             # student forward
             mask_global_point_ = self.student.backbone(mask_global_point)
             mask_global_point_ = self.up_cast(mask_global_point_)
+            mask_global_point_ = self.fuse_representation(mask_global_point_, self.student)
             mask_pred_sim = self.student.mask_head(mask_global_point_.feat)
 
             if self.mask_loss_weight > 0:
@@ -521,6 +608,7 @@ class Sonata(PointModel):
             # student forward
             local_point_ = self.student.backbone(local_point)
             local_point_ = self.up_cast(local_point_)
+            local_point_ = self.fuse_representation(local_point_, self.student)
             unmask_pred_sim = self.student.unmask_head(local_point_.feat)
             with torch.no_grad():
                 principal_view_mask = global_point_.batch % self.num_global_view == 0
@@ -567,4 +655,3 @@ class Sonata(PointModel):
                 synced_loss.div_(ws)
                 result_dict[key] = synced_loss
         return result_dict
-

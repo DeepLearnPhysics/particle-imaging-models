@@ -37,7 +37,7 @@ RUN conda install -c conda-forge -y \
 RUN pip install --no-cache-dir --upgrade pip \
   && pip install --no-cache-dir \
     scikit-learn netifaces nvidia-ml-py rich safetensors pandas psutil jupyterlab \
-    peft timm huggingface_hub ftfy regex tqdm \
+    peft timm huggingface_hub ftfy regex tqdm torchdata submitit tyro \
     torch-geometric \
   && pip install --no-cache-dir \
     torch_scatter torch_sparse torch_cluster \
@@ -52,6 +52,8 @@ RUN MAX_JOBS=1 pip install --no-cache-dir flash-attn==2.7.3 --no-build-isolation
 # CUDA extensions from build context
 COPY libs/ /tmp/libs/
 RUN MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    pip install --no-cache-dir /tmp/libs/pointrope -v --no-build-isolation \
+ && MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     pip install --no-cache-dir /tmp/libs/pointops -v --no-build-isolation \
  && MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     pip install --no-cache-dir /tmp/libs/pointgroup_ops -v --no-build-isolation \
@@ -60,6 +62,11 @@ RUN MAX_JOBS=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
  && MAX_JOBS=1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     pip install --no-cache-dir /tmp/libs/pytorch3d_ops -v --no-build-isolation \
  && rm -rf /tmp/libs
+
+# Install pimm itself as editable source inside the image.
+COPY . /opt/pimm/src
+WORKDIR /opt/pimm/src
+RUN pip install --no-cache-dir -e .
 
 # Entrypoint neutralizes conda/mamba init blocks in the user's ~/.bashrc,
 # which would otherwise hang when Apptainer bind-mounts the home directory.

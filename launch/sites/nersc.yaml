@@ -1,3 +1,5 @@
+_base_: slurm.yaml
+
 site: nersc
 
 paths:
@@ -5,7 +7,7 @@ paths:
   exp_root: /pscratch/sd/y/youngsam/pimm/exp
 
 resources:
-  cpus_per_task: 32
+  cpus_per_proc: 32
   mem: 192G
 
 slurm:
@@ -27,7 +29,6 @@ container:
     - export LD_LIBRARY_PATH=/opt/hdf5/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 env:
-  PYTHONFAULTHANDLER: "1"
   NCCL_SOCKET_IFNAME: "^docker0,lo"
   NCCL_NET_GDR_LEVEL: PHB
   HDF5_USE_FILE_LOCKING: "FALSE"

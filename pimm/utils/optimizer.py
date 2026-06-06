@@ -16,10 +16,21 @@ OPTIMIZERS.register_module(module=torch.optim.SGD, name="SGD")
 OPTIMIZERS.register_module(module=torch.optim.Adam, name="Adam")
 OPTIMIZERS.register_module(module=torch.optim.AdamW, name="AdamW")
 
+
 def build_optimizer(cfg, model, param_dicts=None):
+    """Build a PyTorch optimizer from a registry config.
+
+    Args:
+        cfg: Optimizer config with a registered ``type`` and optimizer kwargs.
+        model (torch.nn.Module): Model whose parameters should be optimized.
+        param_dicts (list | None): Optional parameter group specs selected by
+            substring matches against parameter names.
+    """
     if param_dicts is None:
         cfg.params = model.parameters()
     else:
+        # Group 0 is the default group; following groups match configured
+        # keywords and may override lr, momentum, or weight decay.
         cfg.params = [dict(names=[], params=[], lr=cfg.lr)]
         for i in range(len(param_dicts)):
             param_group = dict(names=[], params=[])

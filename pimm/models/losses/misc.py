@@ -60,6 +60,42 @@ class SmoothCELoss(nn.Module):
 
 
 @LOSSES.register_module()
+class SmoothL1RegressionLoss(nn.Module):
+    def __init__(self, beta=1.0, reduction="mean", loss_weight=1.0):
+        super().__init__()
+        self.beta = beta
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        return self.loss_weight * F.smooth_l1_loss(
+            pred, target, beta=self.beta, reduction=self.reduction
+        )
+
+
+@LOSSES.register_module()
+class L1RegressionLoss(nn.Module):
+    def __init__(self, reduction="mean", loss_weight=1.0):
+        super().__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        return self.loss_weight * F.l1_loss(pred, target, reduction=self.reduction)
+
+
+@LOSSES.register_module()
+class MSERegressionLoss(nn.Module):
+    def __init__(self, reduction="mean", loss_weight=1.0):
+        super().__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self, pred, target):
+        return self.loss_weight * F.mse_loss(pred, target, reduction=self.reduction)
+
+
+@LOSSES.register_module()
 class BinaryFocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=0.5, logits=True, reduce=True, loss_weight=1.0, weight=None):
         """Binary Focal Loss

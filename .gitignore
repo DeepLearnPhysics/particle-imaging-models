@@ -19,3 +19,9 @@ outputs/
 **/*.out
 /Dockerfile
 **/exp/
+scripts/slurm/**
+notebooks/
+benchmarks/
+# autoresearch artifacts
+results.tsv
+run.log

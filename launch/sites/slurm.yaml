@@ -1,0 +1,21 @@
+site: slurm
+
+paths:
+  repo_root: .
+  exp_root: "{repo_root}/exp"
+
+resources:
+  nnodes: 1
+  nproc_per_node: 4
+  cpus_per_proc: 12
+  time: "24:00:00"
+
+slurm:
+  output: "slurm_logs/%j_%x.txt"
+  gpu_directive: gres
+
+container:
+  runtime: none
+
+env:
+  PYTHONFAULTHANDLER: "1"

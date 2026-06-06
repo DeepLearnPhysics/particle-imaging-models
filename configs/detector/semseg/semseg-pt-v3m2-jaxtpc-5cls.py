@@ -92,11 +92,11 @@ scheduler = dict(
 
 # --- hooks ---
 hooks = [
-    dict(type="CheckpointLoader"),
     dict(type="WeightDecayExclusion",
          exclude_bias_from_wd=True, exclude_norm_from_wd=True,
          exclude_gamma_from_wd=True, exclude_token_from_wd=True,
          exclude_ndim_1_from_wd=True),
+    dict(type="CheckpointLoader"),
     dict(type="GradientNormLogger", log_frequency=10),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),

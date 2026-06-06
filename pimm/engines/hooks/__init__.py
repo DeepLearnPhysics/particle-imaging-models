@@ -1,5 +1,11 @@
+"""Public hook package exports used by config-driven trainer construction."""
+
 from .default import *
-from .misc import *
-from .evaluator import *
-from .online_probe import *
+from .checkpoint import *
+from .logging import *
+from .profiling import *
+from .optimizer import *
+from .diagnostics import *
+from .resources import *
+from .eval import *
 from .builder import build_hooks

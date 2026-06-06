@@ -1,3 +1,5 @@
+"""Dictionary point-cloud data structures for pimm models."""
+
 import torch
 import spconv.pytorch as spconv
 
@@ -19,7 +21,7 @@ from pimm.models.utils import (
 
 class Point(Dict):
     """
-    Point Structure of pimm
+    Point-cloud batch container used across pimm backbones.
 
     A Point (point cloud) in pimm is a dictionary that contains various properties of
     a batched point cloud. The property with the following names have a specific definition
@@ -43,6 +45,7 @@ class Point(Dict):
     """
 
     def __init__(self, *args, **kwargs):
+        """Create a point container and infer missing ``batch`` or ``offset``."""
         super().__init__(*args, **kwargs)
         # If one of "offset" or "batch" do not exist, generate by the existing one
         if "batch" not in self.keys() and "offset" in self.keys():
@@ -52,9 +55,10 @@ class Point(Dict):
 
     def serialization(self, order="z", depth=None, shuffle_orders=False):
         """
-        Point Cloud Serialization
+        Serialize points into one or more space-filling curve orderings.
 
-        relay on ["grid_coord" or "coord" + "grid_size", "batch", "feat"]
+        Relies on ``grid_coord`` or ``coord`` plus ``grid_size``, and writes
+        ``serialized_code``, ``serialized_order``, and ``serialized_inverse``.
         """
         self["order"] = order
         assert "batch" in self.keys()
@@ -113,12 +117,13 @@ class Point(Dict):
 
     def sparsify(self, pad=96):
         """
-        Point Cloud Serialization
+        Build an spconv sparse tensor from this point batch.
 
         Point cloud is sparse, here we use "sparsify" to specifically refer to
         preparing "spconv.SparseConvTensor" for SpConv.
 
-        relay on ["grid_coord" or "coord" + "grid_size", "batch", "feat"]
+        Relies on ``feat``, ``batch``, and either ``grid_coord`` or ``coord``
+        plus ``grid_size``. Writes ``sparse_shape`` and ``sparse_conv_feat``.
 
         pad: padding sparse for sparse shape.
         """
@@ -151,10 +156,10 @@ class Point(Dict):
 
     def octreelization(self, depth=None, full_depth=None):
         """
-        Point Cloud Octreelization
+        Build an OCNN octree and point-to-octree index mappings.
 
-        Generate octree with OCNN
-        relay on ["grid_coord", "batch", "feat"]
+        Relies on ``feat``, ``batch``, and ``grid_coord`` or coordinate fields.
+        Writes ``octree``, ``octree_order``, and ``octree_inverse``.
         """
         assert (
             ocnn is not None
@@ -215,6 +220,7 @@ class Point(Dict):
         self["octree_inverse"] = inverse
 
     def __getitem__(self, key):
+        """Return a field by name or a sliced ``Point`` for tensor-like keys."""
         if isinstance(key, str):
             return super().__getitem__(key)
 

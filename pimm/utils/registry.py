@@ -1,9 +1,31 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+"""Registry helpers for mapping config ``type`` fields to Python classes."""
+
 import inspect
 import warnings
+from difflib import get_close_matches
 from functools import partial
 
 from .misc import is_seq_of
+
+
+def _missing_registry_message(obj_type, registry):
+    """Build a helpful message for an unknown registry key."""
+    names = sorted(registry.module_dict)
+    matches = get_close_matches(str(obj_type), names, n=5)
+    message = f"{obj_type!r} is not in the {registry.name} registry."
+    if matches:
+        message += " Did you mean: " + ", ".join(matches) + "?"
+    if names:
+        shown = names[:40]
+        message += "\nRegistered names: " + ", ".join(shown)
+        if len(names) > len(shown):
+            message += f", ... ({len(names) - len(shown)} more)"
+    message += (
+        "\nIf the type should exist, make sure the module defining it is imported "
+        "before building from config."
+    )
+    return message
 
 
 def build_from_cfg(cfg, registry, default_args=None):
@@ -44,7 +66,7 @@ def build_from_cfg(cfg, registry, default_args=None):
     if isinstance(obj_type, str):
         obj_cls = registry.get(obj_type)
         if obj_cls is None:
-            raise KeyError(f"{obj_type} is not in the {registry.name} registry")
+            raise KeyError(_missing_registry_message(obj_type, registry))
     elif inspect.isclass(obj_type):
         obj_cls = obj_type
     else:
@@ -171,18 +193,22 @@ class Registry:
 
     @property
     def name(self):
+        """Return this registry's display name."""
         return self._name
 
     @property
     def scope(self):
+        """Return the scope used to qualify this registry's keys."""
         return self._scope
 
     @property
     def module_dict(self):
+        """Return the registered name-to-class mapping."""
         return self._module_dict
 
     @property
     def children(self):
+        """Return child registries keyed by scope."""
         return self._children
 
     def get(self, key):
@@ -211,6 +237,7 @@ class Registry:
                 return parent.get(key)
 
     def build(self, *args, **kwargs):
+        """Build an object with this registry injected into the build function."""
         return self.build_func(*args, **kwargs, registry=self)
 
     def _add_children(self, registry):
@@ -235,7 +262,13 @@ class Registry:
         ), f"scope {registry.scope} exists in {self.name} registry"
         self.children[registry.scope] = registry
 
-    def _register_module(self, module_class, module_name=None, force=False):
+    def _register_module(
+        self,
+        module_class,
+        module_name=None,
+        force=False,
+    ):
+        """Register one class under its class name or explicit aliases."""
         if not inspect.isclass(module_class):
             raise TypeError("module must be a class, " f"but got {type(module_class)}")
 
@@ -249,6 +282,7 @@ class Registry:
             self._module_dict[name] = module_class
 
     def deprecated_register_module(self, cls=None, force=False):
+        """Backward-compatible registration API kept for old decorators."""
         warnings.warn(
             "The old API of register_module(module, force=False) "
             "is deprecated and will be removed, please use the new API "
@@ -259,7 +293,12 @@ class Registry:
         self._register_module(cls, force=force)
         return cls
 
-    def register_module(self, name=None, force=False, module=None):
+    def register_module(
+        self,
+        name=None,
+        force=False,
+        module=None,
+    ):
         """Register a module.
 
         A record will be added to `self._module_dict`, whose key is the class
@@ -305,12 +344,20 @@ class Registry:
 
         # use it as a normal method: x.register_module(module=SomeClass)
         if module is not None:
-            self._register_module(module_class=module, module_name=name, force=force)
+            self._register_module(
+                module_class=module,
+                module_name=name,
+                force=force,
+            )
             return module
 
         # use it as a decorator: @x.register_module()
         def _register(cls):
-            self._register_module(module_class=cls, module_name=name, force=force)
+            self._register_module(
+                module_class=cls,
+                module_name=name,
+                force=force,
+            )
             return cls
 
         return _register

@@ -9,12 +9,15 @@ random patch-level masking, and the reconstruction head.
 
 from __future__ import annotations
 
+import math
 import flash_attn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.layers import DropPath, Mlp
 from timm.models.vision_transformer import LayerScale
+
+from pimm.models.losses.chamfer import chamfer_distance
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +284,160 @@ def build_targets(
     return energy_target.view(num_tokens, s3), occ_target.view(num_tokens, s3)
 
 
+def build_pointset_targets(
+    point_to_token: torch.Tensor,
+    grid_coord: torch.Tensor,
+    token_indices: torch.Tensor,
+    charge: torch.Tensor,
+    stride: int,
+    num_tokens: int,
+    max_points_per_token: int | None = None,
+    overflow_policy: str = "first",
+) -> dict[str, torch.Tensor]:
+    """Build ragged per-token local point-set targets.
+
+    Local coordinates are derived from fine-grid voxel centers inside each
+    sparse-conv token patch:
+
+        local_xyz = 2 * ((grid_coord - patch_origin + 0.5) / stride) - 1
+
+    For stride=5 this maps sub-voxel centers to {-0.8, -0.4, 0, 0.4, 0.8}.
+    Empty tokens are represented by equal consecutive offsets.
+
+    Args:
+        point_to_token: (N,) int64 token id per point.
+        grid_coord: (N, 3) fine-resolution voxel indices.
+        token_indices: (T, 4) post-tokenizer indices.
+        charge: (N, 1) or (N,) charge/energy per point.
+        stride: tokenizer stride.
+        num_tokens: T.
+        max_points_per_token: optional K cap. If None, all points are kept.
+        overflow_policy: "first" keeps the deterministic sub-voxel order;
+            "error" raises if any token has more than K points.
+
+    Returns:
+        Dictionary with flattened ragged targets and per-token metadata:
+        `target_xyz_local`, `target_charge`, `target_patch_index`,
+        `target_offsets`, `target_counts`, `original_counts`, and overflow
+        diagnostics.
+    """
+    if overflow_policy not in {"first", "error"}:
+        raise ValueError(f"Unsupported overflow_policy: {overflow_policy!r}")
+
+    device = grid_coord.device
+    point_to_token = point_to_token.to(torch.long)
+    grid_coord = grid_coord.to(torch.long)
+    token_indices = token_indices.to(torch.long)
+
+    chg = charge.squeeze(-1) if charge.dim() == 2 and charge.shape[-1] == 1 else charge
+    if chg.dim() != 1:
+        raise ValueError(
+            f"charge must have shape (N,) or (N, 1), got {tuple(charge.shape)}"
+        )
+    chg = chg.to(torch.float32)
+
+    if point_to_token.numel() == 0:
+        counts = torch.zeros(num_tokens, dtype=torch.long, device=device)
+        offsets = torch.zeros(num_tokens + 1, dtype=torch.long, device=device)
+        zero = chg.new_zeros(())
+        return {
+            "target_xyz_local": chg.new_zeros((0, 3)),
+            "target_charge": chg.new_zeros((0, 1)),
+            "target_patch_index": torch.empty(0, dtype=torch.long, device=device),
+            "target_offsets": offsets,
+            "target_counts": counts,
+            "original_counts": counts,
+            "overflow_counts": counts,
+            "overflow_mask": torch.zeros(num_tokens, dtype=torch.bool, device=device),
+            "overflow_patch_fraction": zero,
+            "overflow_point_fraction": zero,
+            "overflow_charge_fraction": zero,
+            "num_target_points": torch.zeros((), dtype=torch.long, device=device),
+            "num_original_points": torch.zeros((), dtype=torch.long, device=device),
+        }
+
+    parent_ijk = token_indices[point_to_token, 1:]
+    sub = grid_coord - parent_ijk * stride
+    if not bool(((sub >= 0) & (sub < stride)).all()):
+        bad = (~((sub >= 0) & (sub < stride)).all(dim=1)).sum().item()
+        raise RuntimeError(
+            f"build_pointset_targets: {bad}/{sub.shape[0]} points have local "
+            f"sub-voxel coordinates outside [0, {stride})."
+        )
+
+    local_xyz = 2.0 * ((sub.to(torch.float32) + 0.5) / float(stride)) - 1.0
+    sub_idx = (sub[:, 0] * stride + sub[:, 1]) * stride + sub[:, 2]
+    sort_key = point_to_token * (stride ** 3) + sub_idx.to(point_to_token.dtype)
+    order = torch.argsort(sort_key, stable=True)
+
+    token_sorted = point_to_token.index_select(0, order)
+    xyz_sorted = local_xyz.index_select(0, order)
+    charge_sorted = chg.index_select(0, order)
+
+    original_counts = torch.bincount(point_to_token, minlength=num_tokens).to(torch.long)
+    original_offsets = torch.zeros(num_tokens + 1, dtype=torch.long, device=device)
+    original_offsets[1:] = torch.cumsum(original_counts, dim=0)
+
+    if max_points_per_token is None:
+        keep_mask = torch.ones_like(token_sorted, dtype=torch.bool)
+    else:
+        max_points_per_token = int(max_points_per_token)
+        if max_points_per_token <= 0:
+            raise ValueError("max_points_per_token must be positive when set")
+        overflow_mask = original_counts > max_points_per_token
+        if overflow_policy == "error" and bool(overflow_mask.any()):
+            max_count = int(original_counts.max().item())
+            raise RuntimeError(
+                f"build_pointset_targets: token has {max_count} points, "
+                f"exceeding max_points_per_token={max_points_per_token}"
+            )
+        position_in_token = (
+            torch.arange(token_sorted.numel(), device=device, dtype=torch.long)
+            - original_offsets.index_select(0, token_sorted)
+        )
+        keep_mask = position_in_token < max_points_per_token
+
+    target_patch_index = token_sorted[keep_mask]
+    target_xyz_local = xyz_sorted[keep_mask]
+    target_charge = charge_sorted[keep_mask].unsqueeze(-1)
+
+    target_counts = torch.bincount(target_patch_index, minlength=num_tokens).to(torch.long)
+    target_offsets = torch.zeros(num_tokens + 1, dtype=torch.long, device=device)
+    target_offsets[1:] = torch.cumsum(target_counts, dim=0)
+
+    overflow_counts = original_counts - target_counts
+    overflow_mask = overflow_counts > 0
+    occupied_mask = original_counts > 0
+    dropped_mask = ~keep_mask
+
+    num_original = torch.tensor(
+        int(point_to_token.numel()), dtype=torch.long, device=device
+    )
+    num_target = torch.tensor(
+        int(target_patch_index.numel()), dtype=torch.long, device=device
+    )
+    denom_occ = occupied_mask.sum().clamp(min=1).to(torch.float32)
+    denom_points = num_original.clamp(min=1).to(torch.float32)
+    total_charge_abs = charge_sorted.abs().sum().clamp(min=1.0e-12)
+    dropped_charge_abs = charge_sorted[dropped_mask].abs().sum()
+
+    return {
+        "target_xyz_local": target_xyz_local,
+        "target_charge": target_charge,
+        "target_patch_index": target_patch_index,
+        "target_offsets": target_offsets,
+        "target_counts": target_counts,
+        "original_counts": original_counts,
+        "overflow_counts": overflow_counts,
+        "overflow_mask": overflow_mask,
+        "overflow_patch_fraction": overflow_mask.sum().to(torch.float32) / denom_occ,
+        "overflow_point_fraction": overflow_counts.sum().to(torch.float32) / denom_points,
+        "overflow_charge_fraction": dropped_charge_abs / total_charge_abs,
+        "num_target_points": num_target,
+        "num_original_points": num_original,
+    }
+
+
 def focal_bce_with_logits(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -491,6 +648,562 @@ def random_token_mask(
     max_full = int(batch_counts.max().item()) if B else 0
 
     return ids_kept, ids_masked, cu_kept, max_kept, cu_full, max_full
+
+
+@torch.no_grad()
+def sample_empty_patch_candidates(
+    occupied_token_indices: torch.Tensor,
+    masked_occupied_ids: torch.Tensor,
+    ratio: float = 0.25,
+    dilation_radius: int = 1,
+    neighborhood: str = "26",
+    max_per_event: int | None = 512,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Sample near-event empty token coordinates from occupied-token dilation.
+
+    Args:
+        occupied_token_indices: (T_occ, 4) sorted occupied tokens as
+            (batch, i, j, k).
+        masked_occupied_ids: token ids into ``occupied_token_indices`` selected
+            for masked occupied reconstruction.
+        ratio: number of empties per event is ceil(ratio * masked count).
+        dilation_radius: Chebyshev radius around occupied tokens.
+        neighborhood: ``"26"`` uses all nonzero offsets in the local cube.
+        max_per_event: cap sampled empties per batch element.
+        generator: optional RNG for tests.
+
+    Returns:
+        (E, 4) sampled empty token coordinates. They are guaranteed unique and
+        absent from the original occupied-token set.
+    """
+    device = occupied_token_indices.device
+    occupied = occupied_token_indices.to(torch.long)
+    if occupied.numel() == 0 or float(ratio) <= 0.0:
+        return occupied.new_empty((0, 4))
+
+    masked_occupied_ids = masked_occupied_ids.to(device=device, dtype=torch.long).flatten()
+    if masked_occupied_ids.numel() == 0:
+        return occupied.new_empty((0, 4))
+    if bool(((masked_occupied_ids < 0) | (masked_occupied_ids >= occupied.shape[0])).any()):
+        raise ValueError("masked_occupied_ids contains an out-of-range occupied token id")
+
+    radius = int(dilation_radius)
+    if radius <= 0:
+        return occupied.new_empty((0, 4))
+    if neighborhood != "26":
+        raise ValueError(f"Unsupported empty-candidate neighborhood: {neighborhood!r}")
+
+    axis = torch.arange(-radius, radius + 1, dtype=torch.long, device=device)
+    offsets = torch.stack(
+        torch.meshgrid(axis, axis, axis, indexing="ij"), dim=-1
+    ).reshape(-1, 3)
+    offsets = offsets[(offsets.abs().sum(dim=1) > 0)]
+
+    neigh_ijk = occupied[:, None, 1:] + offsets[None, :, :]
+    neigh_batch = occupied[:, None, 0].expand(-1, offsets.shape[0])
+    candidates = torch.cat(
+        [neigh_batch.reshape(-1, 1), neigh_ijk.reshape(-1, 3)], dim=1
+    )
+    in_bounds = (candidates[:, 1:] >= 0).all(dim=1)
+    candidates = candidates[in_bounds]
+    if candidates.numel() == 0:
+        return occupied.new_empty((0, 4))
+
+    def _unique_sorted(rows: torch.Tensor) -> torch.Tensor:
+        if rows.numel() == 0:
+            return rows.reshape(0, 4)
+        shape_hash = int(rows[:, 1:].max().item()) + 2
+        key = _pack_indices(rows[:, 0], rows[:, 1:], shape_hash)
+        order = torch.argsort(key)
+        rows = rows.index_select(0, order)
+        key = key.index_select(0, order)
+        keep = torch.ones(rows.shape[0], dtype=torch.bool, device=rows.device)
+        keep[1:] = key[1:] != key[:-1]
+        return rows[keep]
+
+    candidates = _unique_sorted(candidates)
+    shape_hash = int(max(candidates[:, 1:].max().item(), occupied[:, 1:].max().item())) + 2
+    candidate_hash = _pack_indices(candidates[:, 0], candidates[:, 1:], shape_hash)
+    occupied_hash = _pack_indices(occupied[:, 0], occupied[:, 1:], shape_hash)
+    sorted_occ_hash, _ = torch.sort(occupied_hash)
+    pos = torch.searchsorted(sorted_occ_hash, candidate_hash)
+    pos_clamped = pos.clamp(max=max(sorted_occ_hash.numel() - 1, 0))
+    is_occupied = (pos < sorted_occ_hash.numel()) & (
+        sorted_occ_hash.index_select(0, pos_clamped) == candidate_hash
+    )
+    candidates = candidates[~is_occupied]
+    if candidates.numel() == 0:
+        return occupied.new_empty((0, 4))
+
+    selected: list[torch.Tensor] = []
+    batch_values = torch.unique(occupied[:, 0], sorted=True)
+    masked_batches = occupied.index_select(0, masked_occupied_ids)[:, 0]
+    for batch_id in batch_values:
+        masked_count = int((masked_batches == batch_id).sum().item())
+        if masked_count == 0:
+            continue
+        n_target = int(math.ceil(float(masked_count) * float(ratio)))
+        if max_per_event is not None:
+            n_target = min(n_target, int(max_per_event))
+        if n_target <= 0:
+            continue
+        batch_candidates = candidates[candidates[:, 0] == batch_id]
+        if batch_candidates.numel() == 0:
+            continue
+        n_take = min(n_target, batch_candidates.shape[0])
+        perm = torch.randperm(
+            batch_candidates.shape[0], device=device, generator=generator
+        )[:n_take]
+        selected.append(batch_candidates.index_select(0, perm))
+
+    if not selected:
+        return occupied.new_empty((0, 4))
+    return torch.cat(selected, dim=0)
+
+
+class PointSetPredictionHead(nn.Module):
+    """Per-token fixed-capacity point-set head for Gate-2 VoltMAE."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        num_points: int,
+        charge_dim: int = 1,
+        xyz_range: float = 1.1,
+        hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.num_points = int(num_points)
+        self.charge_dim = int(charge_dim)
+        self.xyz_range = float(xyz_range)
+
+        out_dim = self.num_points * (3 + self.charge_dim)
+        if hidden_dim is None:
+            self.net = nn.Linear(in_dim, out_dim)
+        else:
+            self.net = nn.Sequential(
+                nn.LayerNorm(in_dim),
+                nn.Linear(in_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, out_dim),
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.net(x)
+        y = y.view(x.shape[0], self.num_points, 3 + self.charge_dim)
+        xyz = self.xyz_range * torch.tanh(y[..., :3])
+        return torch.cat([xyz, y[..., 3:]], dim=-1)
+
+
+def pointset_chamfer_loss(
+    pred: torch.Tensor,
+    target_points: torch.Tensor,
+    offsets: torch.Tensor,
+    counts: torch.Tensor,
+    charge_weight: float = 0.1,
+) -> dict[str, torch.Tensor]:
+    """First-M point-set baseline loss for ragged per-token targets.
+
+    Args:
+        pred: (T, K, 4) predicted local xyz + charge for predicted tokens.
+        target_points: (P, 4) flattened ragged targets grouped by token.
+        offsets: (T + 1,) ragged offsets into target_points.
+        counts: (T,) target count per predicted token.
+        charge_weight: scalar weight for nearest-neighbor charge loss.
+    """
+    losses: list[torch.Tensor] = []
+    xyz_losses: list[torch.Tensor] = []
+    q_losses: list[torch.Tensor] = []
+
+    T, K, _ = pred.shape
+    for t in range(T):
+        m = int(counts[t].item())
+        if m == 0:
+            continue
+        m = min(m, K)
+
+        start = int(offsets[t].item())
+        end = start + m
+        target_t = target_points[start:end]
+        pred_t = pred[t, :m]
+
+        pred_xyz = pred_t[:, :3].float()
+        targ_xyz = target_t[:, :3].float()
+        pred_q = pred_t[:, 3:4].float()
+        targ_q = target_t[:, 3:4].float()
+
+        with torch.amp.autocast(device_type=pred.device.type, enabled=False):
+            dist = torch.cdist(pred_xyz, targ_xyz, p=1)
+
+        pred_to_targ_dist, pred_to_targ_idx = dist.min(dim=1)
+        targ_to_pred_dist, targ_to_pred_idx = dist.min(dim=0)
+
+        xyz_loss = pred_to_targ_dist.mean() + targ_to_pred_dist.mean()
+        q_loss_pred = F.l1_loss(
+            pred_q,
+            targ_q.index_select(0, pred_to_targ_idx),
+            reduction="mean",
+        )
+        q_loss_targ = F.l1_loss(
+            pred_q.index_select(0, targ_to_pred_idx),
+            targ_q,
+            reduction="mean",
+        )
+        q_loss = 0.5 * (q_loss_pred + q_loss_targ)
+
+        loss_t = xyz_loss + float(charge_weight) * q_loss
+        losses.append(loss_t)
+        xyz_losses.append(xyz_loss.detach())
+        q_losses.append(q_loss.detach())
+
+    if not losses:
+        zero = pred.sum() * 0.0
+        zero_detached = zero.detach()
+        return {
+            "loss": zero,
+            "loss_pointset_xyz": zero_detached,
+            "loss_pointset_charge": zero_detached,
+            "num_supervised_patches": pred.new_tensor(0.0),
+        }
+
+    return {
+        "loss": torch.stack(losses).mean(),
+        "loss_pointset_xyz": torch.stack(xyz_losses).mean(),
+        "loss_pointset_charge": torch.stack(q_losses).mean(),
+        "num_supervised_patches": pred.new_tensor(float(len(losses))),
+    }
+
+
+class SlotPointSetPredictionHead(nn.Module):
+    """Unordered fixed-capacity slot head for local point-set prediction."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        num_slots: int = 64,
+        slot_dim: int | None = None,
+        num_heads: int = 6,
+        slot_blocks: int = 1,
+        mlp_ratio: float = 2.0,
+        xyz_range: float = 1.1,
+        obj_init_prob: float = 0.10,
+    ) -> None:
+        super().__init__()
+        slot_dim = int(slot_dim or in_dim)
+        if slot_dim % int(num_heads) != 0:
+            raise ValueError(
+                f"slot_dim={slot_dim} must be divisible by num_heads={num_heads}"
+            )
+        if not 0.0 < float(obj_init_prob) < 1.0:
+            raise ValueError("obj_init_prob must be in (0, 1)")
+
+        self.num_slots = int(num_slots)
+        self.slot_dim = slot_dim
+        self.xyz_range = float(xyz_range)
+
+        self.token_proj = nn.Linear(in_dim, slot_dim)
+        self.slot_embed = nn.Parameter(torch.zeros(self.num_slots, slot_dim))
+        self.slot_blocks = nn.Sequential(
+            *[
+                nn.TransformerEncoderLayer(
+                    d_model=slot_dim,
+                    nhead=int(num_heads),
+                    dim_feedforward=int(float(mlp_ratio) * slot_dim),
+                    dropout=0.0,
+                    activation="gelu",
+                    batch_first=True,
+                    norm_first=True,
+                )
+                for _ in range(int(slot_blocks))
+            ]
+        )
+        self.norm = nn.LayerNorm(slot_dim)
+        self.xyz_head = nn.Linear(slot_dim, 3)
+        self.charge_head = nn.Linear(slot_dim, 1)
+        self.obj_head = nn.Linear(slot_dim, 1)
+        self.reset_parameters(float(obj_init_prob))
+
+    def reset_parameters(self, obj_init_prob: float) -> None:
+        nn.init.normal_(self.slot_embed, std=0.02)
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+        obj_bias = math.log(obj_init_prob / (1.0 - obj_init_prob))
+        nn.init.zeros_(self.obj_head.weight)
+        nn.init.constant_(self.obj_head.bias, obj_bias)
+
+    def forward(self, decoded_tokens: torch.Tensor):
+        base = self.token_proj(decoded_tokens)[:, None, :]
+        slots = base + self.slot_embed[None, :, :]
+        slots = self.slot_blocks(slots)
+        slots = self.norm(slots)
+
+        xyz = self.xyz_range * torch.tanh(self.xyz_head(slots))
+        charge = self.charge_head(slots)
+        obj_logits = self.obj_head(slots).squeeze(-1)
+        pred_points = torch.cat([xyz, charge], dim=-1)
+        return pred_points, obj_logits
+
+
+@torch.no_grad()
+def greedy_one_to_one_match(cost: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Greedy injective target-to-slot assignment for a single patch."""
+    K, M = cost.shape
+    if M > K:
+        raise ValueError(f"Cannot match M={M} targets to K={K} slots")
+    if M == 0:
+        empty = torch.empty(0, dtype=torch.long, device=cost.device)
+        return empty, empty
+
+    work = cost.detach().clone()
+    pred_matches = []
+    targ_matches = []
+    inf = torch.tensor(float("inf"), dtype=work.dtype, device=work.device)
+    for _ in range(M):
+        flat = torch.argmin(work)
+        k = torch.div(flat, M, rounding_mode="floor")
+        m = flat % M
+        pred_matches.append(k)
+        targ_matches.append(m)
+        work[k, :] = inf
+        work[:, m] = inf
+    return torch.stack(pred_matches), torch.stack(targ_matches)
+
+
+def pointset_slot_loss(
+    pred_points: torch.Tensor,
+    obj_logits: torch.Tensor,
+    target_points: torch.Tensor,
+    offsets: torch.Tensor,
+    counts: torch.Tensor | None = None,
+    xyz_weight: float = 1.0,
+    charge_weight: float = 0.10,
+    objectness_weight: float = 0.05,
+    count_weight: float = 0.10,
+    negative_objectness_weight: float = 0.25,
+    is_empty_candidate: torch.Tensor | None = None,
+    empty_loss_weight: float = 1.0,
+    group_by_empty_candidate: bool = False,
+    soft_objectness_tau: float = 0.20,
+    pred_to_target_weight: float = 0.25,
+) -> dict[str, torch.Tensor]:
+    """Chamfer-based slot loss for unordered variable-cardinality point sets.
+
+    Geometry uses the repo's padded Chamfer implementation. Target-to-prediction
+    Chamfer guarantees target coverage. The M closest predicted slots are marked
+    as hard objectness positives for occupied patches; empty candidates receive
+    all-zero objectness targets and count 0.
+    """
+    _ = soft_objectness_tau  # Kept for backward-compatible configs.
+    T, K, C = pred_points.shape
+    if T == 0:
+        zero = pred_points.sum() * 0.0 + obj_logits.sum() * 0.0
+        zero_detached = zero.detach()
+        return {
+            "loss": zero,
+            "loss_pointset_xyz": zero_detached,
+            "loss_pointset_charge": zero_detached,
+            "loss_pointset_objectness": zero_detached,
+            "loss_pointset_count": zero_detached,
+            "loss_pointset_occupied": zero_detached,
+            "loss_pointset_empty": zero_detached,
+            "pointset_count_mae": zero_detached,
+            "mean_predicted_count": zero_detached,
+            "mean_target_count": zero_detached,
+            "mean_objectness_prob": zero_detached,
+            "mean_target_count_occupied": zero_detached,
+            "mean_predicted_count_occupied": zero_detached,
+            "mean_predicted_count_empty": zero_detached,
+            "mean_objectness_prob_occupied": zero_detached,
+            "mean_objectness_prob_empty": zero_detached,
+            "empty_false_positive_rate_obj_0p5": zero_detached,
+            "occupied_count_mae": zero_detached,
+            "empty_count_mae": zero_detached,
+            "mean_positive_slots_occupied": zero_detached,
+            "mean_objectness_target_occupied": zero_detached,
+            "num_supervised_patches": pred_points.new_tensor(0.0),
+        }
+    if C < 4:
+        raise ValueError(f"pred_points must contain xyz+charge, got last dim {C}")
+
+    device = pred_points.device
+    offsets = offsets.to(device=device, dtype=torch.long).flatten()
+    if counts is None:
+        count_t = offsets[1:] - offsets[:-1]
+    else:
+        count_t = counts.to(device=device, dtype=torch.long).flatten()
+    if count_t.numel() != T:
+        raise ValueError(
+            f"counts must have one entry per predicted patch; got {count_t.numel()} for T={T}"
+        )
+
+    max_count = int(count_t.max().item()) if count_t.numel() else 0
+    if max_count > K:
+        raise RuntimeError(
+            f"pointset_slot_loss received up to {max_count} targets for K={K} slots; "
+            "targets should be capped before loss computation"
+        )
+
+    if is_empty_candidate is not None:
+        is_empty_candidate = is_empty_candidate.to(device=device, dtype=torch.bool).flatten()
+        if is_empty_candidate.numel() != T:
+            raise ValueError(
+                "is_empty_candidate must have one entry per predicted patch; "
+                f"got {is_empty_candidate.numel()} for T={T}"
+            )
+        empty_mask = is_empty_candidate
+    else:
+        empty_mask = count_t == 0
+    occupied_mask = ~empty_mask
+    nonempty_mask = count_t > 0
+
+    logits_f = obj_logits.float()
+    obj_prob = logits_f.sigmoid()
+    pred_count_t = obj_prob.sum(dim=1)
+    target_count_t = count_t.to(dtype=pred_count_t.dtype)
+
+    xyz_loss_t = logits_f.new_zeros(T)
+    q_loss_t = logits_f.new_zeros(T)
+    obj_labels = logits_f.new_zeros(T, K)
+    positive_slot_count_t = logits_f.new_zeros(T)
+
+    if max_count > 0 and bool(nonempty_mask.any()):
+        target_points = target_points.to(device=device, dtype=pred_points.dtype)
+        target_padded = pred_points.new_zeros((T, max_count, C))
+        for m in range(1, max_count + 1):
+            group_idx = torch.nonzero(count_t == m, as_tuple=False).flatten()
+            if group_idx.numel() == 0:
+                continue
+            starts = offsets.index_select(0, group_idx)
+            point_idx = starts[:, None] + torch.arange(m, device=device)[None, :]
+            target_g = target_points.index_select(0, point_idx.reshape(-1)).view(
+                group_idx.numel(), m, target_points.shape[-1]
+            )
+            target_padded[group_idx, :m, : target_g.shape[-1]] = target_g
+
+        occ_idx = torch.nonzero(nonempty_mask, as_tuple=False).flatten()
+        occ_counts = count_t.index_select(0, occ_idx)
+        pred_occ = pred_points.index_select(0, occ_idx)
+        target_occ = target_padded.index_select(0, occ_idx)
+
+        with torch.amp.autocast(device_type=pred_points.device.type, enabled=False):
+            (target_to_pred, pred_to_target), _, (target_to_pred_idx, _) = chamfer_distance(
+                target_occ[:, :, :3].float(),
+                pred_occ[:, :, :3].float(),
+                x_lengths=occ_counts,
+                y_lengths=torch.full_like(occ_counts, K),
+                batch_reduction=None,
+                point_reduction=None,
+                norm=1,
+                single_directional=False,
+            )
+
+        valid_target = torch.arange(max_count, device=device)[None, :] < occ_counts[:, None]
+        target_denom = occ_counts.to(dtype=target_to_pred.dtype).clamp_min(1)
+        target_cover_loss = (target_to_pred * valid_target).sum(dim=1) / target_denom
+
+        labels_occ = logits_f.new_zeros((occ_idx.numel(), K))
+        slot_order = torch.argsort(pred_to_target.detach(), dim=1)[:, :max_count]
+        valid_slot = torch.arange(max_count, device=device)[None, :] < occ_counts[:, None]
+        row_idx = (
+            torch.arange(occ_idx.numel(), device=device)[:, None]
+            .expand(-1, max_count)[valid_slot]
+        )
+        labels_occ[row_idx, slot_order[valid_slot]] = 1.0
+        obj_labels.index_copy_(0, occ_idx, labels_occ)
+        positive_slot_count_t.index_copy_(0, occ_idx, labels_occ.sum(dim=1))
+
+        pred_weights = labels_occ.detach()
+        pred_push_loss = (
+            (pred_to_target * pred_weights).sum(dim=1)
+            / pred_weights.sum(dim=1).clamp_min(1.0)
+        )
+        xyz_loss_t.index_copy_(
+            0,
+            occ_idx,
+            target_cover_loss + float(pred_to_target_weight) * pred_push_loss,
+        )
+
+        pred_charge_occ = pred_occ[:, :, 3:4].float()
+        nn_charge = pred_charge_occ.gather(
+            1, target_to_pred_idx[:, :, None].expand(-1, -1, 1)
+        )
+        charge_err = F.smooth_l1_loss(
+            nn_charge,
+            target_occ[:, :, 3:4].float(),
+            reduction="none",
+        ).squeeze(-1)
+        q_loss_occ = (charge_err * valid_target).sum(dim=1) / target_denom
+        q_loss_t.index_copy_(0, occ_idx, q_loss_occ)
+
+
+    obj_raw = F.binary_cross_entropy_with_logits(
+        logits_f,
+        obj_labels,
+        reduction="none",
+    )
+    obj_weights = obj_labels + float(negative_objectness_weight) * (1.0 - obj_labels)
+    obj_loss_t = (obj_raw * obj_weights).sum(dim=1) / obj_weights.sum(dim=1).clamp_min(1.0)
+
+    count_loss_t = F.smooth_l1_loss(
+        pred_count_t,
+        target_count_t,
+        reduction="none",
+    )
+    count_mae_t = (pred_count_t - target_count_t).abs()
+    obj_prob_mean_t = obj_prob.mean(dim=1)
+    obj_fp_t = (obj_prob > 0.5).to(torch.float32).mean(dim=1)
+
+    stacked_losses = (
+        float(xyz_weight) * xyz_loss_t
+        + float(charge_weight) * q_loss_t
+        + float(objectness_weight) * obj_loss_t
+        + float(count_weight) * count_loss_t
+    )
+
+    def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        if bool(mask.any()):
+            return values[mask].mean()
+        return values.new_zeros(())
+
+    occupied_loss = _masked_mean(stacked_losses, occupied_mask)
+    empty_loss = _masked_mean(stacked_losses, empty_mask)
+    if group_by_empty_candidate:
+        loss = occupied_loss + float(empty_loss_weight) * empty_loss
+    else:
+        loss = stacked_losses.mean()
+
+    return {
+        "loss": loss,
+        "loss_pointset_xyz": _masked_mean(xyz_loss_t, nonempty_mask),
+        "loss_pointset_charge": _masked_mean(q_loss_t, nonempty_mask),
+        "loss_pointset_objectness": obj_loss_t.mean(),
+        "loss_pointset_count": count_loss_t.mean(),
+        "loss_pointset_occupied": occupied_loss.detach(),
+        "loss_pointset_empty": empty_loss.detach(),
+        "pointset_count_mae": count_mae_t.mean(),
+        "mean_predicted_count": pred_count_t.mean(),
+        "mean_target_count": target_count_t.mean(),
+        "mean_objectness_prob": obj_prob_mean_t.mean(),
+        "mean_target_count_occupied": _masked_mean(target_count_t, occupied_mask),
+        "mean_predicted_count_occupied": _masked_mean(pred_count_t, occupied_mask),
+        "mean_predicted_count_empty": _masked_mean(pred_count_t, empty_mask),
+        "mean_objectness_prob_occupied": _masked_mean(obj_prob_mean_t, occupied_mask),
+        "mean_objectness_prob_empty": _masked_mean(obj_prob_mean_t, empty_mask),
+        "empty_false_positive_rate_obj_0p5": _masked_mean(obj_fp_t, empty_mask),
+        "occupied_count_mae": _masked_mean(count_mae_t, occupied_mask),
+        "empty_count_mae": _masked_mean(count_mae_t, empty_mask),
+        "mean_positive_slots_occupied": _masked_mean(
+            positive_slot_count_t, occupied_mask
+        ),
+        "mean_objectness_target_occupied": _masked_mean(
+            obj_labels.mean(dim=1), occupied_mask
+        ),
+        "num_supervised_patches": pred_points.new_tensor(float(T)),
+    }
 
 
 class ReconHead(nn.Module):

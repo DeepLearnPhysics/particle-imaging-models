@@ -88,7 +88,6 @@ def gray2binary(gray, axis=-1):
     return gray
 
 
-@torch.compile
 def encode_int(locs, num_dims, num_bits):
     """Hilbert encode using integer bitwise ops.
 

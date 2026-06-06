@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 # -*- coding: utf-8 -*-
+"""Wall-clock timing helper with pause and resume support."""
 
 from time import perf_counter
 from typing import Optional

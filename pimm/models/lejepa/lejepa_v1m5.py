@@ -145,7 +145,9 @@ class LeJEPAv5(PointModel):
 
     def before_train(self):
         total_steps = self.trainer.cfg.scheduler.total_steps
-        curr_step = self.trainer.start_epoch * len(self.trainer.train_loader)
+        curr_step = getattr(self.trainer, "global_step", 0) or (
+            self.trainer.start_epoch * len(self.trainer.train_loader)
+        )
 
         self.mask_ratio_scheduler = CosineScheduler(
             start_value=self.mask_ratio_start,

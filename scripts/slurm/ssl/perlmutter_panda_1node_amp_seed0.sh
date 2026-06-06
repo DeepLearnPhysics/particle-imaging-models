@@ -34,7 +34,7 @@ MAX_LEN=${MAX_LEN:-1000000}
 EPOCH=${EPOCH:-10}
 
 TRAIN_PATH=scripts/train.sh
-COMMAND="sh ${TRAIN_PATH} -m 1 -g 4 -d panda/pretrain -c ${CONFIG} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
+COMMAND="sh ${TRAIN_PATH} -m 1 -g 4 -c panda/pretrain/${CONFIG} -n ${CONFIG}-${MAX_LEN}-${EPOCH}-${CURRENT_DATETIME} -- --options data.train.max_len=${MAX_LEN} epoch=${EPOCH}"
 
 # --module=gpu: enables CUDA device visibility inside the container
 # Shifter bind-mounts $SCRATCH, $HOME, /global/cfs automatically

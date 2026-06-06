@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+"""Config file parsing, inheritance, formatting, and CLI override helpers."""
+
 import ast
 import copy
 import os
@@ -31,10 +33,14 @@ RESERVED_KEYS = ["filename", "text", "pretty_text"]
 
 
 class ConfigDict(Dict):
+    """Dictionary with attribute access that raises normal ``AttributeError``."""
+
     def __missing__(self, name):
+        """Raise ``KeyError`` for missing keys to match dict semantics."""
         raise KeyError(name)
 
     def __getattr__(self, name):
+        """Return a key as an attribute and translate missing keys cleanly."""
         try:
             value = super(ConfigDict, self).__getattr__(name)
         except KeyError:
@@ -49,6 +55,13 @@ class ConfigDict(Dict):
 
 
 def add_args(parser, cfg, prefix=""):
+    """Add argparse options for a nested config dictionary.
+
+    Args:
+        parser (ArgumentParser): Parser to mutate.
+        cfg (dict): Config tree whose leaf values define option types.
+        prefix (str): Dot-separated prefix for nested keys.
+    """
     for k, v in cfg.items():
         if isinstance(v, str):
             parser.add_argument("--" + prefix + k)
@@ -94,6 +107,7 @@ class Config:
 
     @staticmethod
     def _validate_py_syntax(filename):
+        """Validate that a Python config file parses before importing it."""
         with open(filename, "r", encoding="utf-8") as f:
             # Setting encoding explicitly to resolve coding issue on windows
             content = f.read()
@@ -106,6 +120,7 @@ class Config:
 
     @staticmethod
     def _substitute_predefined_vars(filename, temp_config_name):
+        """Replace file metadata templates before config execution."""
         file_dirname = osp.dirname(filename)
         file_basename = osp.basename(filename)
         file_basename_no_extension = osp.splitext(file_basename)[0]
@@ -128,7 +143,7 @@ class Config:
 
     @staticmethod
     def _pre_substitute_base_vars(filename, temp_config_name):
-        """Substitute base variable placehoders to string, so that parsing
+        """Substitute base variable placeholders to strings, so that parsing
         would work."""
         with open(filename, "r", encoding="utf-8") as f:
             # Setting encoding explicitly to resolve coding issue on windows
@@ -177,6 +192,12 @@ class Config:
 
     @staticmethod
     def _file2dict(filename, use_predefined_variables=True):
+        """Load one config file into a plain dict and source text.
+
+        The loader executes Python configs in a temporary module, resolves base
+        config inheritance, substitutes ``{{ _base_.foo }}`` references, and
+        returns merged config data without mutating parent configs.
+        """
         filename = osp.abspath(osp.expanduser(filename))
         check_file_exist(filename)
         fileExtname = osp.splitext(filename)[1]
@@ -203,6 +224,8 @@ class Config:
             if filename.endswith(".py"):
                 temp_module_name = osp.splitext(temp_config_name)[0]
                 sys.path.insert(0, temp_config_dir)
+                # Import the temporary module so Python configs can use normal
+                # expressions while still isolating their module name.
                 Config._validate_py_syntax(filename)
                 mod = import_module(temp_module_name)
                 sys.path.pop(0)
@@ -332,6 +355,7 @@ class Config:
 
     @staticmethod
     def fromfile(filename, use_predefined_variables=True, import_custom_modules=True):
+        """Build a ``Config`` from a config file path."""
         cfg_dict, cfg_text = Config._file2dict(filename, use_predefined_variables)
         if import_custom_modules and cfg_dict.get("custom_imports", None):
             import_modules_from_strings(**cfg_dict["custom_imports"])
@@ -377,6 +401,7 @@ class Config:
         return parser, cfg
 
     def __init__(self, cfg_dict=None, cfg_text=None, filename=None):
+        """Create a config wrapper around a dict, source text, and filename."""
         if cfg_dict is None:
             cfg_dict = dict()
         elif not isinstance(cfg_dict, dict):
@@ -398,14 +423,17 @@ class Config:
 
     @property
     def filename(self):
+        """Return the source filename for this config, if available."""
         return self._filename
 
     @property
     def text(self):
+        """Return the raw source text captured when loading this config."""
         return self._text
 
     @property
     def pretty_text(self):
+        """Return the config formatted as executable Python-style text."""
         indent = 4
 
         def _indent(s_, num_spaces):
@@ -532,6 +560,7 @@ class Config:
         super(Config, self).__setattr__("_text", _text)
 
     def dump(self, file=None):
+        """Dump the config to a string or file, preserving Python configs."""
         cfg_dict = super(Config, self).__getattribute__("_cfg_dict").to_dict()
         if self.filename.endswith(".py"):
             if file is None:
@@ -598,9 +627,10 @@ class Config:
 
 
 class DictAction(Action):
-    """
-    argparse action to split an argument into KEY=VALUE form
-    on the first = and append to a dictionary. List options can
+    """Parse repeated ``KEY=VALUE`` CLI overrides into a dictionary.
+
+    The action splits an argument into KEY=VALUE form
+    on the first = and appends to a dictionary. List options can
     be passed as comma separated values, i.e 'KEY=V1,V2,V3', or with explicit
     brackets, i.e. 'KEY=[V1,V2,V3]'. It also support nested brackets to build
     list/tuple values. e.g. 'KEY=[(V1,V2),(V3,V4)]'
@@ -608,6 +638,7 @@ class DictAction(Action):
 
     @staticmethod
     def _parse_int_float_bool(val):
+        """Parse a scalar string as int, float, bool, or fallback string."""
         try:
             return int(val)
         except ValueError:
@@ -687,6 +718,7 @@ class DictAction(Action):
         return values
 
     def __call__(self, parser, namespace, values, option_string=None):
+        """Parse CLI override tokens and store them on the argparse namespace."""
         # Get existing options if they exist, otherwise start with empty dict
         options = getattr(namespace, self.dest, {})
         if not isinstance(options, dict):

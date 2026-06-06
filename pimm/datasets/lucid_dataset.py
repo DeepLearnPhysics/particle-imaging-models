@@ -1,5 +1,4 @@
-"""
-LUCiDDataset — dataset for Water Cherenkov detector simulation output.
+"""LUCiDDataset: dataset for Water Cherenkov detector simulation output.
 
 Loads PMT sensor data and/or 3D track segments from co-indexed HDF5 files.
 Produces flat dicts compatible with pimm's transform/collation pipeline.
@@ -21,11 +20,11 @@ Example configs:
 
 import os
 import numpy as np
-from copy import deepcopy
 from torch.utils.data import Dataset
 
 from pimm.utils.logger import get_root_logger
 from .builder import DATASETS
+from .test_fragments import build_test_fragments
 from .transform import Compose, TRANSFORMS
 from .readers.lucid_seg_reader import LUCiDSegReader
 from .readers.lucid_sensor_reader import LUCiDSensorReader
@@ -80,6 +79,7 @@ class LUCiDDataset(Dataset):
         test_mode=False,
         test_cfg=None,
     ):
+        """Create modality readers and derive the co-indexed dataset length."""
         super().__init__()
         self.data_root = data_root
         self.split = split
@@ -101,7 +101,7 @@ class LUCiDDataset(Dataset):
             self.aug_transform = [
                 Compose(aug) for aug in self.test_cfg.aug_transform]
 
-        # Build readers
+        # Readers own raw HDF5 decoding; this wrapper owns output formatting.
         self.seg_reader = None
         self.sensor_reader = None
 
@@ -132,12 +132,14 @@ class LUCiDDataset(Dataset):
                     f"modalities={self.modalities}, output_mode={output_mode}")
 
     def _modality_root(self, modality):
+        """Resolve root directory for a modality shard family."""
         mod_dir = os.path.join(self.data_root, modality)
         if os.path.isdir(mod_dir):
             return mod_dir
         return self.data_root
 
     def get_data(self, idx):
+        """Load one event and choose the public output contract by modality."""
         data_dict = {}
 
         # --- Seg (3D track segments) ---
@@ -155,12 +157,12 @@ class LUCiDDataset(Dataset):
             sensor_data = self.sensor_reader.read_event(idx)
 
             if self.output_mode == 'response':
-                # PMT response — one entry per sensor
+                # PMT response: one entry per sensor.
                 n = len(sensor_data['pmt_pe'])
                 if 'pmt_coord' in sensor_data:
                     data_dict['coord'] = sensor_data['pmt_coord']
                 else:
-                    # No 3D positions — use sensor index as 1D coord
+                    # No 3D positions: use sensor index as 1D coord.
                     data_dict['coord'] = np.arange(n, dtype=np.float32)[:, None]
                 data_dict['energy'] = sensor_data['pmt_pe'][:, None]
                 data_dict['time'] = sensor_data['pmt_t'][:, None]
@@ -188,6 +190,7 @@ class LUCiDDataset(Dataset):
         return data_dict
 
     def get_data_name(self, idx):
+        """Return a stable shard/event name for logging and prediction files."""
         reader = self._canonical_reader
         file_idx = int(np.searchsorted(reader.cumulative_lengths, idx, side='right'))
         local = idx - (int(reader.cumulative_lengths[file_idx - 1]) if file_idx > 0 else 0)
@@ -196,48 +199,42 @@ class LUCiDDataset(Dataset):
         return f"{fname}_evt{event_num:03d}"
 
     def prepare_train_data(self, idx):
+        """Load one event and apply the train transform pipeline."""
         return self.transform(self.get_data(idx % len(self)))
 
     def prepare_test_data(self, idx):
+        """Build augmented and voxelized fragments for test-time inference."""
         data_dict = self.get_data(idx % len(self))
         if self.transform is not None:
             data_dict = self.transform(data_dict)
         result_dict = dict(name=data_dict.pop("name"))
         if "segment" in data_dict:
             result_dict["segment"] = data_dict.pop("segment")
-        data_dict_list = []
-        for aug in self.aug_transform:
-            data_dict_list.append(aug(deepcopy(data_dict)))
-        fragment_list = []
-        for data in data_dict_list:
-            if self.test_voxelize is not None:
-                data_part_list = self.test_voxelize(data)
-            else:
-                data_part_list = [data]
-            for data_part in data_part_list:
-                if self.test_crop is not None:
-                    data_part = self.test_crop(data_part)
-                else:
-                    data_part = [data_part]
-                fragment_list += data_part
-        for i in range(len(fragment_list)):
-            fragment_list[i] = self.post_transform(fragment_list[i])
-        result_dict["fragment_list"] = fragment_list
+        result_dict["fragment_list"] = build_test_fragments(
+            data_dict,
+            aug_transform=self.aug_transform,
+            test_voxelize=self.test_voxelize,
+            test_crop=self.test_crop,
+            post_transform=self.post_transform,
+        )
         return result_dict
 
     def __getitem__(self, idx):
+        """Return a transformed train item or a fragmented test item."""
         real_idx = idx % len(self)
         if self.test_mode:
             return self.prepare_test_data(real_idx)
         return self.prepare_train_data(real_idx)
 
     def __len__(self):
+        """Return event count after max_len and loop are applied."""
         n = self._n_events
         if self.max_len > 0:
             n = min(n, self.max_len)
         return n * self.loop
 
     def __del__(self):
+        """Close any reader handles still owned by this dataset instance."""
         for reader in (self.seg_reader, self.sensor_reader):
             if reader is not None:
                 reader.close()

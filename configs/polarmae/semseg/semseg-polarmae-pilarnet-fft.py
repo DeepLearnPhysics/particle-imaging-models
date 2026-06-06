@@ -166,9 +166,6 @@ hooks = [
     # Maps: student.tokenizer.{grouping,embedding}.* → {grouping,embedding}.*
     #        student.pos_embedding.* → pos_embed.*
     #        student.encoder.{blocks,norm}.* → encoder.{blocks,norm}.*
-    dict(type="CheckpointLoader", keywords="student.tokenizer.", replacement=""),
-    dict(type="CheckpointLoader", keywords="student.pos_embedding.", replacement="pos_embed."),
-    dict(type="CheckpointLoader", keywords="student.encoder.", replacement="encoder."),
     dict(
         type="WeightDecayExclusion",
         exclude_bias_from_wd=True,
@@ -177,6 +174,9 @@ hooks = [
         exclude_token_from_wd=True,
         exclude_ndim_1_from_wd=True,
     ),
+    dict(type="CheckpointLoader", keywords="student.tokenizer.", replacement=""),
+    dict(type="CheckpointLoader", keywords="student.pos_embedding.", replacement="pos_embed."),
+    dict(type="CheckpointLoader", keywords="student.encoder.", replacement="encoder."),
     dict(type="GradientNormLogger", log_frequency=10),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
