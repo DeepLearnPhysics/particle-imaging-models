@@ -18,7 +18,6 @@ from importlib import import_module
 from addict import Dict
 from yapf.yapflib.yapf_api import FormatCode
 
-from .misc import import_modules_from_strings
 from .path import check_file_exist
 
 if platform.system() == "Windows":
@@ -30,6 +29,34 @@ BASE_KEY = "_base_"
 DELETE_KEY = "_delete_"
 DEPRECATION_KEY = "_deprecation_"
 RESERVED_KEYS = ["filename", "text", "pretty_text"]
+
+
+def _is_hook_type_override(key):
+    """Return whether an option targets hooks by hook type, not list index."""
+    if not key.startswith("hooks."):
+        return False
+    parts = key.split(".", 2)
+    if len(parts) < 3:
+        return False
+    return not parts[1].isdigit()
+
+
+def _split_hook_type_options(options):
+    """Separate hook-type overrides from generic config merge options.
+
+    Pure dict/string logic kept torch-free here so the launch/CLI path can use it
+    without importing the training engine (and its torch dependency).
+    """
+    if not options:
+        return {}, {}
+    hook_options = {}
+    merge_options = {}
+    for key, value in options.items():
+        if _is_hook_type_override(key):
+            hook_options[key] = value
+        else:
+            merge_options[key] = value
+    return hook_options, merge_options
 
 
 class ConfigDict(Dict):
@@ -236,8 +263,16 @@ class Config:
                 }
                 # delete imported module
                 del sys.modules[temp_module_name]
-            elif filename.endswith((".yml", ".yaml", ".json")):
-                raise NotImplementedError
+            elif filename.endswith(".json"):
+                import json as _json
+
+                with open(temp_config_file.name, "r", encoding="utf-8") as _f:
+                    cfg_dict = _json.load(_f)
+            elif filename.endswith((".yml", ".yaml")):
+                import yaml as _yaml
+
+                with open(temp_config_file.name, "r", encoding="utf-8") as _f:
+                    cfg_dict = _yaml.safe_load(_f)
             # close temp file
             temp_config_file.close()
 
@@ -358,6 +393,10 @@ class Config:
         """Build a ``Config`` from a config file path."""
         cfg_dict, cfg_text = Config._file2dict(filename, use_predefined_variables)
         if import_custom_modules and cfg_dict.get("custom_imports", None):
+            # Lazy import: keeps `pimm.utils.config` torch-free (misc imports
+            # torch). Only configs that explicitly request module imports pull it.
+            from .misc import import_modules_from_strings
+
             import_modules_from_strings(**cfg_dict["custom_imports"])
         return Config(cfg_dict, cfg_text=cfg_text, filename=filename)
 

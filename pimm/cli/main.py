@@ -14,8 +14,7 @@ def main(argv: list[str] | None = None) -> int:
             "commands:\n"
             "  launch   run training locally or inside an allocation\n"
             "  submit   submit training to Slurm through submitit\n"
-            "  ls       list configs\n"
-            "  export   export pretrained artifacts"
+            "  export   export model weights (optionally push to the HF Hub)"
         )
         return 0
 
@@ -28,10 +27,6 @@ def main(argv: list[str] | None = None) -> int:
         from .submit import main as submit_main
 
         return submit_main(args)
-    if command == "ls":
-        from .configs import main_ls
-
-        return main_ls(args)
     if command == "export":
         from .export import main as export_main
 

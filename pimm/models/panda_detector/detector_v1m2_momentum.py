@@ -20,7 +20,7 @@ from pimm.models.losses import build_criteria
 from pimm.models.modules import PointModel
 from pimm.models.utils.misc import offset2batch, offset2bincount
 from pimm.models.utils.structure import Point
-from pimm.utils.comm import get_world_size
+from pimm.utils.comm import get_world_size, reduce_scalar_outputs_for_logging
 from .postprocess import postprocess_batch
 
 class MomentumRegressor(nn.Module):
@@ -1279,14 +1279,7 @@ class Detector(PointModel):
                 return_dict["stuff_probs"] = point.outputs.get("stuff_probs")
 
         # synchronize loss components
-        if get_world_size() > 1:
-            for key, value in return_dict.items():
-                # only sync scalar tensors (loss values), not predictions
-                if isinstance(value, torch.Tensor) and value.ndim == 0:
-                    value_sync = value.clone()
-                    dist.nn.all_reduce(value_sync, op=dist.ReduceOp.SUM)
-                    value_sync.div_(get_world_size())
-                    return_dict[key] = value_sync
+        return_dict = reduce_scalar_outputs_for_logging(return_dict)
         return return_dict
 
     def postprocess(

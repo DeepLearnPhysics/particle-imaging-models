@@ -3,8 +3,8 @@ _base_: slurm.yaml
 site: nersc
 
 paths:
-  repo_root: /global/homes/y/youngsam/sw/particle-imaging-models
-  exp_root: /pscratch/sd/y/youngsam/pimm/exp
+  repo_root: /global/homes/y/youngsam/sw/pimm-private
+  exp_root: /global/homes/y/youngsam/data
 
 resources:
   cpus_per_proc: 32
@@ -15,12 +15,12 @@ slurm:
   qos: regular
   constraint: gpu
   gpu_directive: gpus-per-node
-  image: youngsm/pimm:v1.0.0-pytorch2.5.0-cuda12.4-cudnn9-devel
+  image: youngsm/pimm-nersc:main
   module: gpu,nccl-plugin
 
 container:
   runtime: shifter
-  image: youngsm/pimm:v1.0.0-pytorch2.5.0-cuda12.4-cudnn9-devel
+  image: youngsm/pimm-nersc:main
   module: gpu,nccl-plugin
   unset_env:
     - LD_LIBRARY_PATH
@@ -29,7 +29,12 @@ container:
     - export LD_LIBRARY_PATH=/opt/hdf5/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 env:
+  # Perlmutter compute nodes reach huggingface.co (HEAD/redirect OK) but the
+  # Xet CAS transfer endpoint (cas-bridge.xethub.hf.co) stalls -> downloads sit
+  # at 0 MB. Force the classic LFS/HTTPS path via cdn-lfs, which works in-job.
+  HF_HUB_DISABLE_XET: "1"
   NCCL_SOCKET_IFNAME: "^docker0,lo"
   NCCL_NET_GDR_LEVEL: PHB
   HDF5_USE_FILE_LOCKING: "FALSE"
   PILARNET_DATA_ROOT_V1: /global/homes/y/youngsam/data/pilarnet/v1
+  PILARNET_DATA_ROOT_V2: /global/homes/y/youngsam/data/pilarnet/v2

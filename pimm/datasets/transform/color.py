@@ -17,8 +17,7 @@ class LogTransform(object):
         self.max_val = max_val
         self.log = log
         self.clip = clip
-        if not isinstance(keys, tuple):
-            keys = (keys,)
+        keys = tuple(keys) if isinstance(keys, (list, tuple)) else (keys,)
         self.keys = keys
 
     def log_transform(self, x):
@@ -68,8 +67,7 @@ class RelativeLogNormalize(object):
             raise ValueError("max_val must be positive")
         if self.out_max <= self.out_min:
             raise ValueError("out_max must be greater than out_min")
-        if not isinstance(keys, tuple):
-            keys = (keys,)
+        keys = tuple(keys) if isinstance(keys, (list, tuple)) else (keys,)
         self.keys = keys
         self.denom = np.log1p(self.max_val / self.scale)
 

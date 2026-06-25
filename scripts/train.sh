@@ -54,7 +54,9 @@ NUM_GPU=None
 NUM_MACHINE=1
 DIST_URL="auto"
 NO_COPY=false
-MODEL_DIR=""  # User may set this externally, otherwise empty by default
+# Respect an external/.env MODEL_DIR (empty by default) and export it so the
+# training process sees it (checkpoint redirect + HF cache location).
+export MODEL_DIR="${MODEL_DIR:-}"
 EXP_ROOT=${EXP_ROOT:-exp}
 
 while getopts "p:c:n:w:g:m:r:a:Ch" opt; do

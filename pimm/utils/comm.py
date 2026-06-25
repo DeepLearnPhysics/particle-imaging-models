@@ -388,6 +388,52 @@ def reduce_dict(input_dict, average=True):
     return reduced_dict
 
 
+# Scalar output keys whose values are per-rank COUNTS (summed over the local
+# batch). They must be reduced by SUM to report a true global total; averaging
+# them makes the logged number shrink as 1/world_size when GPUs are added.
+_COUNT_KEY_SUFFIXES = (
+    "num_pairs",
+    "queries_total",
+    "gt_instances_total",
+    "unmatched_queries",
+    "unmatched_gt",
+)
+
+
+def reduce_scalar_outputs_for_logging(return_dict, skip_keys=("loss",)):
+    """All-reduce 0-dim scalar model outputs in place so logged metrics are
+    world-size invariant.
+
+    For every scalar tensor in ``return_dict`` (skipping ``skip_keys`` and any
+    non-scalar value):
+
+      * keys ending in a known COUNT suffix -> reduce by SUM  (true global total)
+      * all other scalars (loss components)  -> reduce by MEAN (global average)
+
+    Reduced values are detached -- these are for logging only.
+
+    ``skip_keys`` defaults to ``("loss",)``: the training loss is a per-event
+    mean on the local batch and is backpropagated, so DDP already averages its
+    gradient across ranks. Reducing it here would rescale the gradient by
+    world_size.
+    """
+    world_size = get_world_size()
+    if world_size < 2:
+        return return_dict
+    with torch.no_grad():
+        for key, value in return_dict.items():
+            if key in skip_keys:
+                continue
+            if not (isinstance(value, torch.Tensor) and value.ndim == 0):
+                continue
+            synced = value.detach().clone()
+            dist.all_reduce(synced, op=dist.ReduceOp.SUM)
+            if not key.endswith(_COUNT_KEY_SUFFIXES):
+                synced = synced / world_size
+            return_dict[key] = synced
+    return return_dict
+
+
 def cleanup_distributed():
     """Destroy the distributed process group if initialized."""
     if not torch.distributed.is_available():

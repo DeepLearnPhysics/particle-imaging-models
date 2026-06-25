@@ -91,7 +91,7 @@ class PILArNetH5Dataset(Dataset):
                 raise RuntimeError(
                     f"\nPILArNet data root not found for revision '{revision}'.\n\n"
                     f"Option 1 - Download the dataset (saves to ~/.cache/pimm/pilarnet/{revision}):\n"
-                    f"    python tools/download_pilarnet.py --version {revision}\n\n"
+                    f"    python scripts/download_pilarnet.py --version {revision}\n\n"
                     f"Option 2 - Set the environment variable:\n"
                     f'    export {env_var}="/path/to/pilarnet/{revision}/data"\n\n'
                     f"Option 3 - Pass data_root directly in your config:\n"

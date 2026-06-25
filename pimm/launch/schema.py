@@ -96,6 +96,10 @@ class Rendezvous:
 @dataclass(kw_only=True)
 class LaunchConfig:
     site: str = "local"
+    # `pimm submit --interactive`: grab a blocking `salloc` allocation and run
+    # training live in the terminal, instead of queuing a batch job. Settable per
+    # site/recipe in YAML or per-invocation on the CLI. Ignored by `pimm launch`.
+    interactive: bool = False
     paths: Paths = field(default_factory=Paths)
     resources: Resources = field(default_factory=Resources)
     slurm: Slurm = field(default_factory=Slurm)
@@ -116,6 +120,7 @@ class LaunchConfig:
             train_data["code_copy"] = not bool(train_data.pop("no_code_copy"))
         return cls(
             site=data.get("site", "local"),
+            interactive=bool(data.get("interactive", False)),
             paths=Paths(**dict(data.get("paths") or {})),
             resources=Resources(**dict(data.get("resources") or {})),
             slurm=Slurm(**dict(data.get("slurm") or {})),
@@ -153,6 +158,7 @@ class LaunchCommand(LaunchConfig):
         """Build command defaults from a typed launch config."""
         return cls(
             site=config.site,
+            interactive=config.interactive,
             paths=config.paths,
             resources=config.resources,
             slurm=config.slurm,
@@ -189,6 +195,7 @@ class SubmitCommand(LaunchCommand):
         """Build submit command defaults from a typed launch config."""
         return cls(
             site=config.site,
+            interactive=config.interactive,
             paths=config.paths,
             resources=config.resources,
             slurm=config.slurm,

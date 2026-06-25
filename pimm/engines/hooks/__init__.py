@@ -8,4 +8,5 @@ from .optimizer import *
 from .diagnostics import *
 from .resources import *
 from .eval import *
+from .export import *
 from .builder import build_hooks

@@ -419,5 +419,102 @@ def postprocess_batch(
     # keep pred_iou as list for loss computation
     if all_pred_iou:
         output["pred_iou"] = all_pred_iou
-        
+
     return output
+
+
+def _mask_iou(a: torch.Tensor, b: torch.Tensor) -> float:
+    """IoU of two boolean point masks."""
+    inter = (a & b).sum().item()
+    if inter == 0:
+        return 0.0
+    union = (a | b).sum().item()
+    return inter / union if union else 0.0
+
+
+@torch.no_grad()
+def nms_overlap_instances(rings, iou_threshold: float = 0.9, same_pid: bool = True):
+    """Confidence/mask-IoU NMS for OVERLAP-PRESERVING instances (rings).
+
+    Greedy by descending ``score``; a lower-scored instance is dropped ONLY when its
+    mask IoU with an already-kept instance is ``>= iou_threshold`` (and, if
+    ``same_pid``, they share a class). Purely mask-confidence/class based -- NO
+    physics gates (direction/vertex/energy) -- so genuinely-overlapping distinct
+    instances are preserved. ``iou_threshold >= 1`` disables suppression.
+    """
+    if not rings or iou_threshold >= 1.0:
+        return sorted(rings, key=lambda r: r["score"], reverse=True)
+    order = sorted(range(len(rings)), key=lambda i: rings[i]["score"], reverse=True)
+    kept = []
+    for i in order:
+        r = rings[i]
+        dup = False
+        for k in kept:
+            if _mask_iou(r["mask"], k["mask"]) < iou_threshold:
+                continue
+            if same_pid and r["pid"] != k["pid"]:
+                continue
+            dup = True
+            break
+        if not dup:
+            kept.append(r)
+    return kept
+
+
+@torch.no_grad()
+def postprocess_overlap_batch(
+    pred_masks: List[torch.Tensor],
+    pred_logits: List[torch.Tensor],
+    num_classes: int,
+    pred_regression: Optional[Dict[str, List[torch.Tensor]]] = None,
+    conf_threshold: float = 0.5,
+    mask_threshold: float = 0.5,
+    min_points: int = 1,
+    dedup_iou: float = 0.9,
+    dedup_same_pid: bool = True,
+    **kwargs,
+) -> List[List[Dict]]:
+    """Overlap-preserving counterpart to :func:`postprocess_batch`.
+
+    Each kept query yields its OWN thresholded sigmoid mask -- no cross-query argmax
+    fusion -- so a point can belong to several instances (e.g. overlapping Cherenkov
+    rings). Selection is mask-confidence / class-confidence based ONLY: keep a query
+    if its top class score (softmax over the ``num_classes`` real classes, excluding
+    the +1 no-object) exceeds ``conf_threshold`` and its mask has ``>= min_points``
+    points above ``mask_threshold``; a generic mask-IoU NMS (:func:`nms_overlap_instances`)
+    removes near-duplicate queries. Any per-query regression heads in ``pred_regression``
+    (e.g. energy/vertex/direction) pass through generically -- they are NOT used for
+    selection or dedup. Unknown ``**kwargs`` (nms_kernel/sigma/etc. from the shared
+    postprocess cfg) are ignored.
+
+    Returns a per-event list; each event is a list of instance dicts with keys
+    ``query, mask (bool, CPU), score, pid, cls_probs (CPU)`` plus one entry per
+    regression head (CPU tensor).
+    """
+    batch_size = len(pred_masks)
+    events: List[List[Dict]] = []
+    for b in range(batch_size):
+        cls = pred_logits[b].float()
+        probs = cls.softmax(-1)
+        scores, labels = probs[:, :num_classes].max(-1)
+        prob_mask = pred_masks[b].float().sigmoid()
+        reg_b = {name: vals[b] for name, vals in (pred_regression or {}).items()}
+        rings: List[Dict] = []
+        keep = (scores > conf_threshold).nonzero(as_tuple=True)[0]
+        for q in keep.tolist():
+            m = prob_mask[q] > mask_threshold
+            if int(m.sum()) < min_points:
+                continue
+            ring = dict(
+                query=int(q),
+                mask=m.cpu(),
+                score=float(scores[q]),
+                pid=int(labels[q]),
+                cls_probs=probs[q, :num_classes].detach().cpu(),
+            )
+            for name, vals in reg_b.items():
+                ring[name] = vals[q].detach().float().cpu()
+            rings.append(ring)
+        events.append(nms_overlap_instances(
+            rings, iou_threshold=dedup_iou, same_pid=dedup_same_pid))
+    return events

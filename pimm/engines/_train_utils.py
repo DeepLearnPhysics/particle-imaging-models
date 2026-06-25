@@ -8,15 +8,15 @@ import random
 import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 import torch
 import torch.distributed as dist
 
-from pimm.utils.config import Config
+from pimm.utils.config import Config, _is_hook_type_override, _split_hook_type_options
 from pimm.utils.env import set_seed
 
 
@@ -90,30 +90,6 @@ def _apply_hook_overrides(cfg, options):
         for hook_cfg in cfg.hooks:
             if hook_cfg.get("type") == hook_type:
                 _set_nested(hook_cfg, param_path, val)
-
-
-def _is_hook_type_override(key):
-    """Return whether an option targets hooks by hook type, not list index."""
-    if not key.startswith("hooks."):
-        return False
-    parts = key.split(".", 2)
-    if len(parts) < 3:
-        return False
-    return not parts[1].isdigit()
-
-
-def _split_hook_type_options(options):
-    """Separate hook-type overrides from generic config merge options."""
-    if not options:
-        return {}, {}
-    hook_options = {}
-    merge_options = {}
-    for key, value in options.items():
-        if _is_hook_type_override(key):
-            hook_options[key] = value
-        else:
-            merge_options[key] = value
-    return hook_options, merge_options
 
 
 def _to_plain_data(value):

@@ -53,6 +53,36 @@ def _apply_to_v3_vertex(data_dict, transform):
     data_dict["vertex"][mask] = transform(data_dict["vertex"][mask])
 
 
+def _apply_to_aux_positions(data_dict, transform):
+    """Apply a coordinate transform to opt-in auxiliary POSITION keys.
+
+    Keys are listed in ``data_dict['aux_position_keys']`` (set via the Update
+    transform). These ride the SAME translate/scale/rotate/flip as ``coord``
+    so position targets (e.g. ``primary_vertex``) stay aligned under
+    augmentation. No-op when the list is absent.
+    """
+    for key in data_dict.get("aux_position_keys", ()) or ():
+        v = data_dict.get(key)
+        if v is not None:
+            data_dict[key] = transform(np.asarray(v))
+
+
+def _apply_to_aux_directions(data_dict, transform):
+    """Apply a LINEAR (norm-preserving) transform to opt-in DIRECTION keys.
+
+    Keys listed in ``data_dict['aux_direction_keys']`` are unit vectors
+    (e.g. ``primary_direction``): only rotation/flip are applied (NOT
+    translation or scale), and the result is re-normalized to guard against
+    float drift. Callers must pass the linear part only (no centering).
+    """
+    for key in data_dict.get("aux_direction_keys", ()) or ():
+        v = data_dict.get(key)
+        if v is not None:
+            v = transform(np.asarray(v))
+            nrm = np.linalg.norm(v, axis=-1, keepdims=True)
+            data_dict[key] = (v / np.clip(nrm, 1e-9, None)).astype(np.float32, copy=False)
+
+
 def _translate_axis(points, dim, value):
     """Return a copy of points translated along one axis."""
     points = points.copy()
@@ -139,6 +169,8 @@ __all__ = [
     "TRANSFORMS",
     "_valid_vertex_mask",
     "_apply_to_v3_vertex",
+    "_apply_to_aux_positions",
+    "_apply_to_aux_directions",
     "_translate_axis",
     "compute_anchors",
     "ANCHOR_DEFAULT_CFG",

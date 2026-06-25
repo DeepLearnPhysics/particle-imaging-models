@@ -25,6 +25,8 @@ class NormalizeCoord(object):
                 scale = self.scale
             data_dict["coord"] = data_dict["coord"] / scale
             _apply_to_v3_vertex(data_dict, lambda vertex: (vertex - centroid) / scale)
+            _apply_to_aux_positions(data_dict, lambda p: (p - centroid) / scale)
+            # directions: isotropic scale + translation preserve orientation -> untouched
         return data_dict
 
 @TRANSFORMS.register_module()
@@ -40,8 +42,7 @@ class PositiveShift(object):
 class CenterShift(object):
     def __init__(self, apply_z=True, axes=("x", "y", "z")):
         self.apply_z = apply_z
-        if not isinstance(axes, tuple):
-            axes = (axes,)
+        axes = tuple(axes) if isinstance(axes, (list, tuple)) else (axes,)
         self.axes = axes
         
     def __call__(self, data_dict):
@@ -55,6 +56,9 @@ class CenterShift(object):
                     _apply_to_v3_vertex(
                         data_dict, lambda vertex, shift=shift: _translate_axis(vertex, 0, -shift)
                     )
+                    _apply_to_aux_positions(
+                        data_dict, lambda p, shift=shift: _translate_axis(p, 0, -shift)
+                    )
                 elif axis == "y":
                     x_min, y_min, z_min = data_dict["coord"].min(axis=0)
                     x_max, y_max, z_max = data_dict["coord"].max(axis=0)
@@ -62,6 +66,9 @@ class CenterShift(object):
                     data_dict["coord"][:, 1] -= shift
                     _apply_to_v3_vertex(
                         data_dict, lambda vertex, shift=shift: _translate_axis(vertex, 1, -shift)
+                    )
+                    _apply_to_aux_positions(
+                        data_dict, lambda p, shift=shift: _translate_axis(p, 1, -shift)
                     )
                 elif axis == "z":
                     x_min, y_min, z_min = data_dict["coord"].min(axis=0)
@@ -71,6 +78,9 @@ class CenterShift(object):
                     _apply_to_v3_vertex(
                         data_dict, lambda vertex, shift=shift: _translate_axis(vertex, 2, -shift)
                     )
+                    _apply_to_aux_positions(
+                        data_dict, lambda p, shift=shift: _translate_axis(p, 2, -shift)
+                    )
         return data_dict
 
 @TRANSFORMS.register_module()
@@ -78,8 +88,7 @@ class ConditionalRandomTransform(object):
     _max_value_pilarnet = 2 * pow(3, 0.5) / 3 # (768) / (768 * 3 ** 0.5 / 2)
     def __init__(self, p=0.5, axes=("x", "y", "z"), buffer_size=0.05, bounds=((-1, 1), (-1, 1), (-1, 1))):
         self.p = p
-        if not isinstance(axes, tuple):
-            axes = (axes,)
+        axes = tuple(axes) if isinstance(axes, (list, tuple)) else (axes,)
         self.axes = axes
         self.buffer_size = buffer_size
         self.bounds = bounds
@@ -225,6 +234,11 @@ class RandomRotate(object):
                 data_dict,
                 lambda vertex: np.dot(vertex - center, np.transpose(rot_t)) + center,
             )
+            _apply_to_aux_positions(
+                data_dict, lambda p: np.dot(p - center, np.transpose(rot_t)) + center
+            )
+            # directions rotate about the origin (linear part only, no centering)
+            _apply_to_aux_directions(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
         if "normal" in data_dict.keys():
             data_dict["normal"] = np.dot(data_dict["normal"], np.transpose(rot_t))
         return data_dict
@@ -268,6 +282,10 @@ class RandomRotateTargetAngle(object):
                 data_dict,
                 lambda vertex: np.dot(vertex - center, np.transpose(rot_t)) + center,
             )
+            _apply_to_aux_positions(
+                data_dict, lambda p: np.dot(p - center, np.transpose(rot_t)) + center
+            )
+            _apply_to_aux_directions(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
         if "normal" in data_dict.keys():
             data_dict["normal"] = np.dot(data_dict["normal"], np.transpose(rot_t))
         return data_dict
@@ -285,14 +303,17 @@ class RandomScale(object):
             )
             data_dict["coord"] *= scale
             _apply_to_v3_vertex(data_dict, lambda vertex: vertex * scale)
+            _apply_to_aux_positions(data_dict, lambda p: p * scale)
+            # NOTE: direction keys are intentionally NOT scaled. Isotropic scale
+            # preserves orientation (no-op after renorm); anisotropic scale would
+            # change it, but is unsupported for unit-direction targets.
         return data_dict
 
 @TRANSFORMS.register_module()
 class RandomFlip(object):
     def __init__(self, p=0.5, axes=("x", "y",)):
         self.p = p
-        if not isinstance(axes, tuple):
-            axes = (axes,)
+        axes = tuple(axes) if isinstance(axes, (list, tuple)) else (axes,)
         self.axes = axes
 
     def __call__(self, data_dict):
@@ -305,6 +326,12 @@ class RandomFlip(object):
                         (-vertex[:, 0], vertex[:, 1], vertex[:, 2])
                     ),
                 )
+                _apply_to_aux_positions(
+                    data_dict, lambda p: p * np.array([-1.0, 1.0, 1.0])
+                )
+                _apply_to_aux_directions(
+                    data_dict, lambda d: d * np.array([-1.0, 1.0, 1.0])
+                )
                 if "normal" in data_dict.keys():
                     data_dict["normal"][:, 0] = -data_dict["normal"][:, 0]
             elif axis == "y" and random.random() < self.p:
@@ -314,6 +341,12 @@ class RandomFlip(object):
                     lambda vertex: np.column_stack(
                         (vertex[:, 0], -vertex[:, 1], vertex[:, 2])
                     ),
+                )
+                _apply_to_aux_positions(
+                    data_dict, lambda p: p * np.array([1.0, -1.0, 1.0])
+                )
+                _apply_to_aux_directions(
+                    data_dict, lambda d: d * np.array([1.0, -1.0, 1.0])
                 )
                 if "normal" in data_dict.keys():
                     data_dict["normal"][:, 1] = -data_dict["normal"][:, 1]
@@ -325,6 +358,12 @@ class RandomFlip(object):
                         (vertex[:, 0], vertex[:, 1], -vertex[:, 2])
                     ),
                 )
+                _apply_to_aux_positions(
+                    data_dict, lambda p: p * np.array([1.0, 1.0, -1.0])
+                )
+                _apply_to_aux_directions(
+                    data_dict, lambda d: d * np.array([1.0, 1.0, -1.0])
+                )
                 if "normal" in data_dict.keys():
                     data_dict["normal"][:, 2] = -data_dict["normal"][:, 2]
         return data_dict
@@ -335,8 +374,7 @@ class RandomJitter(object):
         assert clip > 0
         self.sigma = sigma
         self.clip = clip
-        if not isinstance(keys, tuple):
-            keys = (keys,)
+        keys = tuple(keys) if isinstance(keys, (list, tuple)) else (keys,)
         self.keys = keys
         self.p = p
     def __call__(self, data_dict):
@@ -361,8 +399,7 @@ class MultiplicativeRandomJitter(object):
         assert clip > 0
         self.sigma = sigma
         self.clip = clip
-        if not isinstance(keys, tuple):
-            keys = (keys,)
+        keys = tuple(keys) if isinstance(keys, (list, tuple)) else (keys,)
         self.keys = keys
         self.p = p
 

@@ -372,3 +372,14 @@ class FastSingleLayerInstanceLoss(SingleLayerInstanceLoss):
             "num_cls_noobj": count_ce_noobj,
         }
         return loss, components
+
+
+@LOSSES.register_module()
+class InstanceSegmentationLoss(FastInstanceSegmentationLoss):
+    """DEPRECATED alias for :class:`FastInstanceSegmentationLoss`.
+
+    The original O(QxJxP) non-fast instance loss + ``HungarianMatcher`` were removed;
+    they were verified bitwise-equal to the fast path. This name is kept registered
+    only so historical dumped configs (`type="InstanceSegmentationLoss"`) still build.
+    New configs should use ``FastInstanceSegmentationLoss``.
+    """

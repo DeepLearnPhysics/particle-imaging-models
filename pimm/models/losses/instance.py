@@ -14,104 +14,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from pimm.models.losses.builder import LOSSES
-from pimm.models.panda_detector.matcher import (
-    HungarianMatcher as _HungarianMatcher,  # type: ignore
-)
+from pimm.models.panda_detector.matcher_fast import FastHungarianMatcher
 
 
-@LOSSES.register_module()
-class InstanceSegmentationLoss(nn.Module):
-    """
-    Loss for track finding with auxiliary decoder outputs.
-    
-    Computes InstanceSegLoss at each decoder layer and sums them:
-        L_total = sum_{l=0}^{L} L^{(l)}
-    
-    where L^{(0)} is from initial query embeddings and L^{(L)} is from final layer.
-    """
-    def __init__(
-        self,
-        cost_mask: float = 1.0,
-        cost_dice: float = 1.0,
-        cost_class: float = 0.0,
-        num_points: int = 0,
-        ignore_index: int = -1,
-        loss_weight_focal: float = 1.0,
-        loss_weight_dice: float = 1.0,
-        cls_weight_matched: float = 2.0,
-        cls_weight_noobj: float = 0.1,
-        focal_alpha: float = 0.25,
-        focal_gamma: float = 2.0,
-        truth_label: str = "segment",
-        aux_loss_weight: float = 1.0,
-        momentum_loss_weight: float = 0.0,
-        iou_loss_weight: float = 0.0,
-    ):
-        super().__init__()
-        
-        self.aux_loss_weight = aux_loss_weight
-        
-        # main loss criterion (applied to all layers)
-        self.criterion = SingleLayerInstanceLoss(
-            cost_mask=cost_mask,
-            cost_dice=cost_dice,
-            cost_class=cost_class,
-            num_points=num_points,
-            ignore_index=ignore_index,
-            loss_weight_focal=loss_weight_focal,
-            loss_weight_dice=loss_weight_dice,
-            cls_weight_matched=cls_weight_matched,
-            cls_weight_noobj=cls_weight_noobj,
-            focal_alpha=focal_alpha,
-            focal_gamma=focal_gamma,
-            truth_label=truth_label,
-            momentum_loss_weight=momentum_loss_weight,
-            iou_loss_weight=iou_loss_weight,
-        )
-
-    def forward(self, pred: Dict, input_dict: Dict) -> torch.Tensor:
-        """
-        Args:
-            pred: dict with keys:
-                - "pred_masks": List[Tensor] of shape (Q, P_b) per batch
-                - "pred_logits_list": List[Tensor] of shape (Q, C+1) per batch  
-                - "aux_outputs": optional list of auxiliary predictions (same format)
-            input_dict: dict with ground truth labels
-        
-        Returns:
-            total_loss: sum of losses from all decoder layers
-        """
-        # if pred is Point object with outputs attr, extract it
-        if hasattr(pred, 'outputs'):
-            pred = pred.outputs
-        
-        # final layer loss
-        final_loss, components = self.criterion(pred, input_dict)
-        # auxiliary losses from intermediate layers
-        if "aux_outputs" in pred and pred["aux_outputs"]:
-            aux_loss = pred["pred_masks"][0].new_tensor(0.0)
-            for layer_idx, aux_pred in enumerate(pred["aux_outputs"]):
-                aux_loss_val, aux_comp = self.criterion(aux_pred, input_dict)
-                aux_loss = aux_loss + aux_loss_val
-                # only log scalar losses from aux layers, not counts/statistics
-                if "focal" in aux_comp:
-                    components[f"aux_focal_L{layer_idx}"] = aux_comp["focal"]
-                if "dice" in aux_comp:
-                    components[f"aux_dice_L{layer_idx}"] = aux_comp["dice"]
-                if "cls_matched" in aux_comp:
-                    components[f"aux_cls_matched_L{layer_idx}"] = aux_comp["cls_matched"]
-                if "cls_noobj" in aux_comp:
-                    components[f"aux_cls_noobj_L{layer_idx}"] = aux_comp["cls_noobj"]
-                if "momentum" in aux_comp:
-                    components[f"aux_momentum_L{layer_idx}"] = aux_comp["momentum"]
-                if "iou" in aux_comp:
-                    components[f"aux_iou_L{layer_idx}"] = aux_comp["iou"]
-
-            final_loss = final_loss + self.aux_loss_weight * aux_loss
-
-        return final_loss, components
-    
 class SingleLayerInstanceLoss(nn.Module):
+    """Shared per-layer instance-loss base (cost/loss math + helpers).
+
+    The fast loss (``FastSingleLayerInstanceLoss``) subclasses this and overrides
+    matching/forward. The matcher built here is the fast Hungarian matcher -- the
+    original O(QxJxP) matcher was removed in favor of the cached/einsum one.
+    """
+
     def __init__(
         self,
         cost_mask: float = 1.0,
@@ -140,8 +53,8 @@ class SingleLayerInstanceLoss(nn.Module):
         self.momentum_loss_weight = momentum_loss_weight
         self.iou_loss_weight = iou_loss_weight
 
-        # matcher used internally
-        self.matcher = _HungarianMatcher(
+        # matcher used internally (fast Hungarian matcher; same cost/assignment)
+        self.matcher = FastHungarianMatcher(
             cost_class=cost_class,
             cost_mask=cost_mask,
             cost_dice=cost_dice,

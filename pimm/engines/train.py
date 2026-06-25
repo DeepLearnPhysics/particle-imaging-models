@@ -943,3 +943,70 @@ class InsegTrainer(Trainer):
                 # in_order=self.cfg.deterministic,
             )
         return val_loader
+
+
+@TRAINERS.register_module("ImageClassTrainer")
+class ImageClassTrainer(Trainer):
+    """Trainer for dense 2D image batches (e.g. rasterized ring images).
+
+    Uses ``default_collate`` to stack per-event ``image`` -> ``(B, C, H, W)`` and
+    scalar labels/momenta -> ``(B, 1)`` instead of the point-cloud collate that
+    concatenates variable-length clouds along a single axis.
+    """
+
+    def build_train_loader(self):
+        """Build the stateful image-classification training loader."""
+        train_data = build_dataset(self.cfg.data.train)
+
+        init_fn = (
+            partial(
+                worker_init_fn,
+                num_workers=self.cfg.num_worker_per_gpu,
+                rank=comm.get_rank(),
+                seed=self.cfg.seed,
+            )
+            if self.cfg.seed is not None
+            else None
+        )
+
+        sampler = StatefulRandomSampler(
+            train_data,
+            shuffle=True,
+            seed=self.cfg.seed if self.cfg.seed is not None else 0,
+            num_replicas=comm.get_world_size(),
+            rank=comm.get_rank(),
+            drop_last=len(train_data) > self.cfg.batch_size,
+        )
+        train_loader = StatefulDataLoader(
+            train_data,
+            batch_size=self.cfg.batch_size_per_gpu,
+            sampler=sampler,
+            num_workers=self.cfg.num_worker_per_gpu,
+            collate_fn=torch.utils.data.default_collate,
+            pin_memory=True,
+            worker_init_fn=init_fn,
+            drop_last=len(train_data) > self.cfg.batch_size,
+            persistent_workers=(self.cfg.num_worker_per_gpu > 0),
+            snapshot_every_n_steps=self.cfg.get("dataloader_snapshot_every_n_steps", 1),
+        )
+        return train_loader
+
+    def build_val_loader(self):
+        """Build the optional image-classification validation loader."""
+        val_loader = None
+        if self.cfg.evaluate:
+            val_data = build_dataset(self.cfg.data.val)
+            if comm.get_world_size() > 1:
+                val_sampler = torch.utils.data.distributed.DistributedSampler(val_data)
+            else:
+                val_sampler = None
+            val_loader = torch.utils.data.DataLoader(
+                val_data,
+                batch_size=self.cfg.batch_size_val_per_gpu,
+                shuffle=False,
+                num_workers=self.cfg.num_worker_per_gpu,
+                pin_memory=True,
+                sampler=val_sampler,
+                collate_fn=torch.utils.data.default_collate,
+            )
+        return val_loader

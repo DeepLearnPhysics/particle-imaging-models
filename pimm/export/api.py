@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Type, Union
@@ -15,6 +15,12 @@ from pimm.export.checkpoint import (
     filter_state_dict_by_prefix,
     load_state_dict_from_checkpoint,
     remap_state_dict_keys,
+)
+from pimm.utils.checkpoints import (
+    EXPORT_WEIGHT_NAMES,
+    configure_hf_cache,
+    is_remote_weight,
+    parse_hf_uri,
 )
 from pimm.utils.config import Config
 from pimm.utils.path import split_checkpoint_weight_file
@@ -42,6 +48,34 @@ def _to_plain_data(value: Any) -> Any:
         return {str(k): _to_plain_data(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_plain_data(v) for v in value]
+    return value
+
+
+# Config keys whose value is a load-trigger path: null them on export so a
+# rebuilt model never tries to re-load a site-specific checkpoint (the exported
+# weights are loaded instead). Any other absolute-path string is redacted.
+_PATH_LOAD_KEYS = frozenset(
+    {"weight", "pretrained", "init_cfg", "load_from", "ckpt", "ckpt_path", "checkpoint"}
+)
+_REDACTED = "<redacted>"
+
+
+def _sanitize_config(value: Any, *, _key: str | None = None) -> Any:
+    """Strip site-specific absolute paths from a config before publishing.
+
+    Nulls known load-trigger keys (so a rebuilt model skips re-loading) and
+    redacts any other absolute-path string (so published configs don't leak the
+    cluster layout / usernames / data locations). Architecture and hyperparameter
+    values are left intact.
+    """
+    if isinstance(value, str):
+        if value.startswith("/") or value.startswith("hf://"):
+            return None if _key in _PATH_LOAD_KEYS else _REDACTED
+        return value
+    if isinstance(value, dict):
+        return {k: _sanitize_config(v, _key=k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_config(v) for v in value]
     return value
 
 
@@ -112,8 +146,13 @@ def _select_target_model_config(
 
 
 def _find_run_root(checkpoint_path: Path) -> Optional[Path]:
-    """Infer an experiment root from a checkpoint under a ``model`` directory."""
-    checkpoint_path = checkpoint_path.resolve()
+    """Infer an experiment root from a checkpoint under a ``model`` directory.
+
+    Uses the logical (non-symlink-resolved) path: ``MODEL_DIR`` setups symlink
+    ``model/`` to a data filesystem that holds only weights, while ``config.py``
+    lives in the experiment tree next to the symlink.
+    """
+    checkpoint_path = Path(os.path.abspath(checkpoint_path))
     if (
         checkpoint_path.name == "weights.pth"
         and checkpoint_path.parent.parent.name == "model"
@@ -127,6 +166,43 @@ def _find_run_root(checkpoint_path: Path) -> Optional[Path]:
 def _is_dcp_checkpoint_dir(path: Path) -> bool:
     """Return whether ``path`` looks like a torch distributed checkpoint."""
     return path.is_dir() and (path / ".metadata").is_file()
+
+
+def _training_config_from_run(checkpoint_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """Recover a run's full config from the experiment dir around a checkpoint.
+
+    Lets an export from a loose ``.pth`` still carry its config (so
+    ``from_pretrained`` works for free) without the caller passing ``cfg``.
+    """
+    if checkpoint_path is None:
+        return None
+    run_root = _find_run_root(checkpoint_path)
+    if run_root is None:
+        return None
+    for name in ("resolved_config.json", "training_config.json"):
+        candidate = run_root / name
+        if candidate.is_file():
+            return _read_json(candidate)
+    candidate = run_root / "config.py"
+    if candidate.is_file():
+        return _load_config_payload(candidate)
+    return None
+
+
+def _model_config_from_export(directory: PathLike) -> Optional[Dict[str, Any]]:
+    """Read the saved model config from an export's ``training_config.json``."""
+    candidate = Path(directory) / "training_config.json"
+    if not candidate.is_file():
+        return None
+    data = _read_json(candidate)
+    if not isinstance(data, dict):
+        return None
+    model_cfg = data.get("model")
+    if isinstance(model_cfg, dict) and model_cfg:
+        return model_cfg
+    if "type" in data:  # the file is already a bare model config
+        return data
+    return None
 
 
 def _infer_model_config(
@@ -206,23 +282,46 @@ def _build_model_from_config(
     model_cfg: Mapping[str, Any],
     *,
     model_cls: Optional[Type[torch.nn.Module]] = None,
+    tolerate_drift: bool = True,
 ) -> torch.nn.Module:
-    """Construct a model from registry config or an explicit class."""
-    if model_cls is not None:
-        kwargs = dict(model_cfg)
-        kwargs.pop("type", None)
-        return model_cls(**kwargs)
+    """Construct a model from registry config or an explicit class.
 
+    With ``tolerate_drift`` (default), if the saved config carries kwargs the
+    current constructor no longer accepts (config drift across code versions),
+    they are dropped with a warning and construction is retried -- so
+    ``from_pretrained`` still loads older exports for free.
+    """
     import pimm.models  # noqa: F401 - populate import-all registries
-    from pimm.models.builder import build_model
+    from pimm.models.builder import MODELS, build_model
 
-    return build_model(dict(model_cfg))
+    def _construct(cfg):
+        if model_cls is not None:
+            kwargs = dict(cfg)
+            kwargs.pop("type", None)
+            return model_cls(**kwargs)
+        return build_model(dict(cfg))
 
+    try:
+        return _construct(model_cfg)
+    except TypeError as exc:
+        if not tolerate_drift or "unexpected keyword argument" not in str(exc):
+            raise
+        import inspect
+        import warnings
 
-def _copy_if_present(src: Optional[Path], dst: Path) -> None:
-    """Copy ``src`` to ``dst`` when it exists and is not already that file."""
-    if src is not None and src.is_file() and src.resolve() != dst.resolve():
-        shutil.copyfile(src, dst)
+        cls = model_cls or MODELS.get(model_cfg.get("type"))
+        if cls is None:
+            raise
+        accepted = set(inspect.signature(cls.__init__).parameters)
+        filtered = {k: v for k, v in model_cfg.items() if k == "type" or k in accepted}
+        dropped = sorted(set(model_cfg) - set(filtered))
+        if not dropped:
+            raise
+        warnings.warn(
+            f"Dropping config kwargs not accepted by {model_cfg.get('type')}: "
+            f"{dropped} (config drift); rebuilding."
+        )
+        return _construct(filtered)
 
 
 def save_pretrained(
@@ -238,30 +337,24 @@ def save_pretrained(
     device: str = "cpu",
     model_card: Optional[str] = None,
 ) -> Path:
-    """Save model weights and metadata in a Hugging Face-style directory.
+    """Save model weights to a directory as bare serialized tensors.
 
-    The export contains ``config.json``, ``model_config.json``, serialized
-    weights, and optionally the full training config, original pimm config, and
-    model card. ``model_or_checkpoint`` may be an nn.Module, checkpoint mapping,
-    or checkpoint path.
+    Writes ``model.safetensors`` (or ``model.bin`` when
+    ``safe_serialization=False``) and, optionally, ``training_config.json``
+    (provenance) and ``README.md`` (model card). No model config is written, so
+    loading requires the architecture from elsewhere (a fine-tune config for
+    warm-start, or ``model_config``/``config_path`` for ``from_pretrained``).
+    ``model_or_checkpoint`` may be an nn.Module, checkpoint mapping, or path.
     """
     save_dir = Path(save_directory)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = None
-    if isinstance(model_or_checkpoint, (str, Path)):
-        checkpoint_path = Path(model_or_checkpoint)
+    checkpoint_path = Path(model_or_checkpoint) if isinstance(model_or_checkpoint, (str, Path)) else None
 
-    model_cfg = _infer_model_config(
-        model_config=model_config,
-        cfg=cfg,
-        config_path=config_path,
-        checkpoint_path=checkpoint_path,
-    )
     state_dict = _state_dict_from_model_or_checkpoint(
         model_or_checkpoint,
         device=device,
-        model_config=model_cfg,
+        model_config=model_config,
         config_path=config_path,
         model_cls=model_cls,
     )
@@ -272,30 +365,27 @@ def save_pretrained(
         weights_name = "model.safetensors"
         safe_torch.save_file(state_dict, str(save_dir / weights_name))
     else:
-        weights_name = "pytorch_model.bin"
+        weights_name = "model.bin"
         torch.save(state_dict, save_dir / weights_name)
 
-    _write_json(save_dir / "model_config.json", model_cfg)
+    # Bare-weights export: the serialized tensors are the only required artifact.
+    # Architecture comes from the loading side (a fine-tune config for warm-start,
+    # or, for from_pretrained, the config carried in training_config.json). We save the
+    # config whenever it is discoverable so from_pretrained("<repo>") works for free:
+    # explicit training_config > cfg > config_path > the run dir around a checkpoint.
     if training_config is None and cfg is not None:
         training_config = _to_plain_data(cfg)
+    if training_config is None and config_path is not None:
+        training_config = _load_config_payload(Path(config_path))
+    if training_config is None:
+        training_config = _training_config_from_run(checkpoint_path)
     if training_config is not None:
-        _write_json(save_dir / "training_config.json", _to_plain_data(training_config))
-
-    config_src = Path(config_path) if config_path is not None else None
-    if config_src is None and checkpoint_path is not None:
-        run_root = _find_run_root(checkpoint_path)
-        if run_root is not None:
-            config_src = run_root / "config.py"
-    _copy_if_present(config_src, save_dir / "pimm_config.py")
-
-    manifest = {
-        "library_name": "pimm",
-        "format_version": 1,
-        "model_type": model_cfg.get("type"),
-        "weights": weights_name,
-        "model_config": "model_config.json",
-    }
-    _write_json(save_dir / "config.json", manifest)
+        # Redact site-specific absolute paths so the published config does not
+        # leak the cluster layout and a rebuilt model never re-loads a stale path.
+        _write_json(
+            save_dir / "training_config.json",
+            _sanitize_config(_to_plain_data(training_config)),
+        )
 
     if model_card is not None:
         (save_dir / "README.md").write_text(model_card, encoding="utf-8")
@@ -309,31 +399,38 @@ def _resolve_pretrained_path(
     cache_dir: Optional[PathLike] = None,
     revision: Optional[str] = None,
 ) -> Path:
-    """Resolve a local path or download a model snapshot from the Hub."""
-    path = Path(pretrained_model_name_or_path)
+    """Resolve a local path, ``hf://`` URI, or bare repo id to a model dir."""
+    name = str(pretrained_model_name_or_path)
+    path = Path(name)
     if path.exists():
         return path
+    # Accept the same hf:// scheme used by training `weight=` references, so
+    # from_pretrained("hf://ns/name[@rev]") works like from_pretrained("ns/name").
+    if is_remote_weight(name):
+        repo_id, uri_revision, _ = parse_hf_uri(name)
+        revision = revision or uri_revision
+    else:
+        repo_id = name
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:  # pragma: no cover - depends on optional package
         raise ImportError("huggingface_hub is required to load pimm models from the Hub") from exc
+    # Export pimm's cache to HF's env (process-wide sharing); pass it explicitly
+    # too, since HF caches HF_HUB_CACHE in a constant at import time.
+    if cache_dir is not None:
+        os.environ["HF_HUB_CACHE"] = str(cache_dir)
+    else:
+        cache_dir = configure_hf_cache()
     downloaded = snapshot_download(
-        repo_id=str(pretrained_model_name_or_path),
+        repo_id=repo_id,
         cache_dir=str(cache_dir) if cache_dir is not None else None,
         revision=revision,
-        allow_patterns=[
-            "config.json",
-            "model_config.json",
-            "model.safetensors",
-            "pytorch_model.bin",
-            "pimm_config.py",
-            "README.md",
-        ],
+        allow_patterns=[*EXPORT_WEIGHT_NAMES, "training_config.json", "README.md"],
     )
     return Path(downloaded)
 
 
-def load_model(
+def from_pretrained(
     pretrained_model_name_or_path: PathLike,
     *,
     model_config: Optional[Mapping[str, Any]] = None,
@@ -354,8 +451,9 @@ def load_model(
 ):
     """Load a pimm model from a local export, Hub repo, or raw checkpoint.
 
-    The model config comes from ``model_config``, an exported directory, a
-    supplied config path, or an experiment directory next to the checkpoint.
+    Exports are bare weights (``model.safetensors``/``model.bin``) and carry no
+    config, so the model config must come from ``model_config``, a supplied
+    ``config_path``, or an experiment directory next to a raw checkpoint.
     ``model_type`` can override the registry ``type`` for the constructed
     output model. ``model_cls`` can construct an explicit Python class instead
     of using the registry. Extra ``model_kwargs`` override config fields before
@@ -364,7 +462,7 @@ def load_model(
     ``prefix``/``remove_prefix`` and ``key_mapping`` mirror ``load_pretrained``
     so exported pretraining checkpoints can be loaded into a different model
     shape, for example ``key_mapping={"student.backbone.": "backbone."}``.
-    By default, ``load_model`` drops keys that do not match ``key_mapping``;
+    By default, ``from_pretrained`` drops keys that do not match ``key_mapping``;
     pass ``keep_unmapped_keys=True`` to preserve them.
     """
     resolved = _resolve_pretrained_path(
@@ -383,18 +481,28 @@ def load_model(
             checkpoint_path=weights_path,
         )
     elif resolved.is_dir() and not _is_dcp_checkpoint_dir(resolved):
-        manifest_path = resolved / "config.json"
-        manifest = _read_json(manifest_path) if manifest_path.is_file() else {}
-        model_cfg = model_config or _read_json(resolved / "model_config.json")
-        weights_name = manifest.get("weights")
+        # Export dir: probe for the serialized tensors. The architecture comes
+        # from an explicit arg, the config saved alongside the weights
+        # (training_config.json), or, failing that, a config_path/run dir.
+        manifest = {}
+        weights_name = None
+        for candidate in EXPORT_WEIGHT_NAMES:
+            if (resolved / candidate).is_file():
+                weights_name = candidate
+                break
         if weights_name is None:
-            if (resolved / "model.safetensors").is_file():
-                weights_name = "model.safetensors"
-            elif (resolved / "pytorch_model.bin").is_file():
-                weights_name = "pytorch_model.bin"
-            else:
-                raise FileNotFoundError(f"No model weights found in {resolved}")
+            raise FileNotFoundError(f"No model weights found in {resolved}")
         weights_path = resolved / weights_name
+        model_cfg = model_config
+        if model_cfg is None and config_path is None:
+            model_cfg = _model_config_from_export(resolved)
+        if model_cfg is None:
+            model_cfg = _infer_model_config(
+                model_config=None,
+                cfg=None,
+                config_path=config_path,
+                checkpoint_path=weights_path,
+            )
     else:
         manifest = {}
         weights_path = resolved
@@ -470,6 +578,7 @@ def push_to_hub(
     save_directory: Optional[PathLike] = None,
     private: Optional[bool] = None,
     token: Optional[str] = None,
+    revision: Optional[str] = None,
     commit_message: str = "Upload pimm model",
     **save_kwargs: Any,
 ):
@@ -486,10 +595,15 @@ def push_to_hub(
 
     api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, repo_type="model", private=private, exist_ok=True)
+    if revision is not None:
+        api.create_branch(repo_id=repo_id, repo_type="model", branch=revision, exist_ok=True)
 
     temp_dir = None
     path = Path(model_or_directory) if isinstance(model_or_directory, (str, Path)) else None
-    if path is not None and path.is_dir() and (path / "config.json").is_file():
+    is_export_dir = path is not None and path.is_dir() and any(
+        (path / name).is_file() for name in EXPORT_WEIGHT_NAMES
+    )
+    if is_export_dir:
         export_dir = path
     else:
         if save_directory is None:
@@ -505,15 +619,8 @@ def push_to_hub(
             repo_type="model",
             folder_path=str(export_dir),
             commit_message=commit_message,
-            allow_patterns=[
-                "config.json",
-                "model_config.json",
-                "model.safetensors",
-                "pytorch_model.bin",
-                "pimm_config.py",
-                "training_config.json",
-                "README.md",
-            ],
+            revision=revision,
+            allow_patterns=[*EXPORT_WEIGHT_NAMES, "training_config.json", "README.md"],
         )
     finally:
         if temp_dir is not None:

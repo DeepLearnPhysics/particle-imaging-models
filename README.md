@@ -236,7 +236,7 @@ Example configs can be found in:
 Download the 168GB dataset from Hugging Face:
 
 ```bash
-python tools/download_pilarnet.py --version v2 --output-dir /path/to/dir
+python scripts/download_pilarnet.py --version v2 --output-dir /path/to/dir
 ```
 
 Data saves to `~/.cache/pimm/pilarnet/v2` if `--output-dir` is not provided. After downloading the dataset, run `cp example.env .env` and set `PILARNET_DATA_ROOT_V2`. This will allow the dataloader to automatically find the data.

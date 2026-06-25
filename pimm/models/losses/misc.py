@@ -96,6 +96,33 @@ class MSERegressionLoss(nn.Module):
 
 
 @LOSSES.register_module()
+class CrossEntropyHeadLoss(nn.Module):
+    """Cross-entropy for an extra categorical per-query head.
+
+    Expects ``pred`` of shape ``(M, num_classes)`` (matched-query logits) and
+    ``target`` of shape ``(M,)`` (per-instance class indices). Use for
+    auxiliary categorical heads beyond the primary PID head.
+    """
+
+    def __init__(self, reduction="mean", loss_weight=1.0, label_smoothing=0.0,
+                 ignore_index=-100):
+        super().__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.label_smoothing = label_smoothing
+        self.ignore_index = ignore_index
+
+    def forward(self, pred, target):
+        return self.loss_weight * F.cross_entropy(
+            pred,
+            target.long(),
+            reduction=self.reduction,
+            label_smoothing=self.label_smoothing,
+            ignore_index=self.ignore_index,
+        )
+
+
+@LOSSES.register_module()
 class BinaryFocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=0.5, logits=True, reduce=True, loss_weight=1.0, weight=None):
         """Binary Focal Loss

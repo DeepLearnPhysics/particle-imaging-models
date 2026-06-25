@@ -298,6 +298,15 @@ class LinearProbingTrainer:
                 "best_accuracy": best_acc,
             }
         )
+        # expose the best head's per-class softmax scores + labels on the test
+        # set, so callers can compute ROC AUC / efficiency-at-rejection (the
+        # fiTQun-comparable PID metrics) without re-running the probe.
+        with torch.no_grad():
+            self.model.eval()
+            logits = self.model(self.X_test.to(self.device))[best_name]
+            probs = torch.softmax(logits.float(), dim=-1).cpu().numpy()
+        metrics["test_scores"] = probs          # (N, num_classes)
+        metrics["test_labels"] = self.y_test.cpu().numpy()
         return metrics
 
 

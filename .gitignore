@@ -40,3 +40,18 @@ libs/*
 !libs/pointops2/
 !libs/pointrope/
 !libs/pytorch3d_ops/
+
+# agent / assistant tooling (don't commit to the repo)
+.claude/
+.codex
+.agents/
+AGENT.md
+
+# local scratch / private notes
+ablations.csv
+WORKFLOW-private-fork.md
+*.scratch
+
+tools/
+tests/
+scripts/

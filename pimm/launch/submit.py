@@ -6,6 +6,7 @@ import copy
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -160,6 +161,13 @@ def submitit_parameters(cfg: dict[str, Any], run_name: str) -> dict[str, Any]:
         "output": log_path,
         "error": str(slurm.get("error") or log_path),
     }
+    # A chained run requeues itself on timeout/preemption: submitit's checkpoint()
+    # calls `scontrol requeue`, which SLURM rejects ("Requested operation is
+    # presently disabled") unless the job was submitted requeuable. Enable it
+    # automatically whenever more than one attempt exists. Renders as a bare
+    # `#SBATCH --requeue` flag (submitit maps the bool True to a value-less flag).
+    if chain_jobs(cfg) > 1:
+        additional["requeue"] = True
     additional.update(dict(slurm.get("additional_parameters") or {}))
     for key in ("image", "module"):
         value = slurm.get(key)
@@ -271,8 +279,9 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
     cwd = repo_root if repo_root.exists() else ROOT
     folder = submitit_folder(cfg, run_name)
     folder.mkdir(parents=True, exist_ok=True)
-    manifest_path = folder / "manifest.yaml"
-    manifest_path.write_text(render_manifest(cfg, run_name, redact=True), encoding="utf-8")
+    (folder / "manifest.yaml").write_text(
+        render_manifest(cfg, run_name, redact=True), encoding="utf-8"
+    )
     attempts = build_attempts(cfg, run_name)
     executor = submitit.AutoExecutor(
         folder=folder,
@@ -281,6 +290,16 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
     )
     executor.update_parameters(**submitit_parameters(cfg, run_name))
     job = executor.submit(SubmititTrainingJob(attempts, 0, str(cwd)))
+    # Save the exact Slurm submission script submitit generated into the
+    # experiment folder, next to config.py / run_metadata.json.
+    try:
+        submission_file = Path(job.paths.submission_file)
+        if submission_file.is_file():
+            exp_dir = experiment_config_path(cfg, run_name).parent
+            exp_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(submission_file, exp_dir / "launch.sbatch")
+    except OSError:
+        pass
     log_path = user_slurm_log_path(cfg, run_name)
     config_path = experiment_config_path(cfg, run_name)
     log_glob = (
@@ -305,6 +324,81 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
     )
 
 
+def build_interactive_argv(cfg: dict[str, Any], run_name: str) -> list[str]:
+    """Build a blocking `salloc ... srun ... bash -lc <script>` command.
+
+    Reuses the exact rendered launch script (container + train.sh + torchrun) that
+    a batch job runs, so interactive and batch behave identically; `salloc` just
+    grabs the allocation live instead of queuing. The slurm flags mirror the batch
+    parameters. The QOS is ``slurm.qos`` -- for NERSC's interactive queue pass
+    ``--slurm.qos interactive`` (or ``shared_interactive``).
+    """
+    res = resources(cfg)
+    slurm = cfg.get("slurm", {})
+    nodes = int(res["nnodes"])
+    gpus = int(res["nproc_per_node"])
+    cpus = int(res["cpus_per_proc"])
+    qos = slurm.get("qos")
+
+    alloc = [
+        "salloc",
+        "--job-name", build_slurm_job_name(cfg, run_name),
+        "--nodes", str(nodes),
+        "--ntasks-per-node", "1",
+        "--cpus-per-task", str(cpus * gpus),
+    ]
+    if slurm.get("account"):
+        alloc += ["--account", str(slurm["account"])]
+    if slurm.get("partition"):
+        alloc += ["--partition", str(slurm["partition"])]
+    if qos:
+        alloc += ["--qos", str(qos)]
+    if slurm.get("constraint"):
+        alloc += ["--constraint", str(slurm["constraint"])]
+    if res.get("time"):
+        alloc += ["--time", str(res["time"])]
+    if res.get("mem"):
+        alloc += ["--mem", str(res["mem"])]
+
+    gpu_directive = slurm.get("gpu_directive", "gres")
+    if gpu_directive == "gres":
+        alloc += ["--gres", f"gpu:{gpus}"]
+    elif gpu_directive == "gpus-per-node":
+        alloc += ["--gpus-per-node", str(gpus)]
+    else:
+        raise SystemExit(f"Unsupported slurm.gpu_directive: {gpu_directive}")
+
+    # Shifter image/module directives, mirroring the batch path's #SBATCH --image/
+    # --module
+    for key in ("image", "module"):
+        value = slurm.get(key)
+        if value:
+            alloc += [f"--{key}", str(value)]
+    for key, value in (slurm.get("additional_parameters") or {}).items():
+        if value is not None and value != "":
+            alloc += [f"--{key}", str(value)]
+
+    # srun launches the rendered script one task per node (mirrors batch); the
+    # script's rdzv derives MASTER_ADDR from $SLURM_JOB_NODELIST.
+    script = render_script(cfg, build_train_sh_command(cfg, run_name))
+    return [*alloc, "srun", "--ntasks-per-node", "1", "bash", "-lc", script]
+
+
+def run_interactive(cfg: dict[str, Any], run_name: str, argv: list[str]) -> int:
+    """Run a blocking interactive allocation, streaming output to the terminal."""
+    repo_root = Path(str(cfg.get("paths", {}).get("repo_root", ROOT)))
+    cwd = repo_root if repo_root.exists() else ROOT
+    print(
+        f"{'=' * 80}\n"
+        f"Interactive allocation (salloc) for run: {run_name}\n"
+        "  Runs live in this terminal and ends if you disconnect.\n"
+        f"  cd: {cwd}\n"
+        f"{'=' * 80}",
+        flush=True,
+    )
+    return subprocess.run(argv, cwd=str(cwd)).returncode
+
+
 def run_submit(
     cfg: dict[str, Any],
     *,
@@ -320,6 +414,23 @@ def run_submit(
     run_name = build_run_name(cfg, launch_timestamp)
     if not run_name:
         raise SystemExit("Could not determine run name")
+
+    if as_bool(cfg.get("interactive", False)):
+        if scheduler(cfg) != "slurm":
+            raise SystemExit("--interactive requires a Slurm site (e.g. --site nersc).")
+        if chain_jobs(cfg) > 1:
+            raise SystemExit(
+                "--interactive is single-shot and does not support chaining "
+                "(chain.jobs>1). Drop --interactive for a chained batch run."
+            )
+        argv = build_interactive_argv(cfg, run_name)
+        if output:
+            path = write_text(output, shlex.join(argv) + "\n")
+            print(f"# wrote interactive salloc command: {path}")
+        if dry_run:
+            print(shlex.join(argv))
+            return 0
+        return run_interactive(cfg, run_name, argv)
 
     manifest = render_manifest(cfg, run_name, redact=True)
     if output:

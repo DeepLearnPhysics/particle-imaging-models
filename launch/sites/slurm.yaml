@@ -11,7 +11,7 @@ resources:
   time: "24:00:00"
 
 slurm:
-  output: "slurm_logs/%j_%x.txt"
+  output: "slurm_logs/slurm-%j.out"  # keep srun logs out of the repo root
   gpu_directive: gres
 
 container:

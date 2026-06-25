@@ -38,6 +38,281 @@ from pimm.utils.path import (
 )
 
 
+HF_URI_PREFIX = "hf://"
+
+# Serialized-weights filenames a pimm export may contain (one of them), in
+# preference order. Centralized so download/upload/probe sites stay in sync.
+EXPORT_WEIGHT_NAMES = ("model.safetensors", "model.bin")
+
+
+def hf_cache_dir():
+    """Resolve pimm's preferred HF download cache directory.
+
+    Priority: ``PIMM_HF_CACHE`` > ``$MODEL_DIR/hub`` (keep Hub downloads next to
+    checkpoints) > ``None`` (HF's own ``HF_HOME``/``HF_HUB_CACHE`` defaults).
+    """
+    explicit = os.environ.get("PIMM_HF_CACHE")
+    if explicit:
+        return explicit
+    model_dir = os.environ.get("MODEL_DIR")
+    if model_dir:
+        return os.path.join(model_dir, "hub")
+    return None
+
+
+def configure_hf_cache():
+    """Point Hugging Face's own cache env at pimm's cache, once, so EVERY hub
+    download in this process shares one location -- pimm's `hf://` warm-start and
+    `from_pretrained`, the `PushToHub` `HfApi`, and any direct `huggingface_hub`
+    use. Sets ``HF_HUB_CACHE`` rather than threading ``cache_dir=`` per call.
+
+    Precedence: ``PIMM_HF_CACHE`` (always wins) > an existing
+    ``HF_HUB_CACHE``/``HF_HOME`` (respected, already shared) > ``$MODEL_DIR/hub``
+    > HF's default. Returns the active cache dir (or ``None``).
+    """
+    explicit = os.environ.get("PIMM_HF_CACHE")
+    if explicit:
+        os.environ["HF_HUB_CACHE"] = explicit
+        return explicit
+    if os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME"):
+        return os.environ.get("HF_HUB_CACHE")
+    target = hf_cache_dir()  # PIMM_HF_CACHE is empty here, so this is $MODEL_DIR/hub or None
+    if target:
+        os.environ["HF_HUB_CACHE"] = target
+    return target
+
+
+def is_remote_weight(uri):
+    """Return True if ``uri`` is a remote weight reference (currently ``hf://``)."""
+    return isinstance(uri, str) and uri.startswith(HF_URI_PREFIX)
+
+
+def parse_hf_uri(uri):
+    """Parse an ``hf://`` URI into ``(repo_id, revision, filename)``.
+
+    A Hub repo id is ``namespace/name`` (exactly one slash); an optional
+    ``@revision`` attaches to it, and anything after is the in-repo file path.
+    ``revision``/``filename`` are ``None``/``""`` when absent.
+    """
+    if not is_remote_weight(uri):
+        raise ValueError(f"Not an hf:// reference: {uri}")
+    spec = uri[len(HF_URI_PREFIX):]
+    revision = None
+    if "@" in spec:
+        repo_id, _, rest = spec.partition("@")
+        revision, _, filename = rest.partition("/")
+        revision = revision or None
+    else:
+        parts = spec.split("/", 2)
+        if len(parts) >= 2 and parts[1]:
+            repo_id = f"{parts[0]}/{parts[1]}"
+            filename = parts[2] if len(parts) == 3 else ""
+        else:
+            repo_id = parts[0]
+            filename = ""
+    if not repo_id:
+        raise ValueError(f"Malformed hf:// reference (missing repo id): {uri}")
+    return repo_id, revision, filename
+
+
+def resolve_remote_weight(uri):
+    """Resolve an ``hf://`` weight reference to a local path, downloading on first use.
+
+    Accepted forms (non-``hf://`` strings are returned unchanged)::
+
+        hf://<repo_id>                     -> the repo's single weights file
+        hf://<repo_id>/<path/to/file>      -> a single file (e.g. model_best.pth)
+        hf://<repo_id>@<revision>/<file>   -> a file at a branch/tag/commit
+
+    Downloads land in the Hugging Face cache (``PIMM_HF_CACHE`` overrides, else
+    ``HF_HOME``); subsequent runs hit the cache. In a multi-rank job only each
+    node's local rank 0 fetches; the others read the warm cache after a barrier,
+    so the Hub is hit once per node (correct for node-local caches).
+    """
+    if not is_remote_weight(uri):
+        return uri
+    repo_id, revision, filename = parse_hf_uri(uri)
+
+    def _download():
+        try:
+            from huggingface_hub import HfApi, hf_hub_download
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "huggingface_hub is required to load hf:// weights"
+            ) from exc
+        # Export pimm's cache to HF's env (process-wide sharing) AND pass it
+        # explicitly -- HF reads HF_HUB_CACHE into a constant at import time, so
+        # the explicit cache_dir keeps our own call correct regardless of timing.
+        cache = configure_hf_cache()
+        target = filename
+        if not target:
+            # Repo form (no file): pick the single weights file from the repo
+            # listing -- prefer a consolidated export, else a raw checkpoint --
+            # and fetch only that, so a repo that also holds a large raw .pth is
+            # not pulled in full and a raw-only repo still resolves.
+            target = _pick_repo_weight_file(
+                HfApi().list_repo_files(repo_id=repo_id, revision=revision), repo_id
+            )
+
+        # Report progress via the global logger: a start line (ref + cache dir), a
+        # heartbeat every 15s with bytes-so-far (so a multi-minute fetch never
+        # looks hung), and a final line with the saved path, size, and elapsed.
+        import glob
+        import threading
+        import time
+
+        from huggingface_hub.constants import HF_HUB_CACHE
+        from pimm.utils.logger import get_root_logger
+
+        log = get_root_logger()
+        ref = f"hf://{repo_id}/{target}" + (f"@{revision}" if revision else "")
+        cache_dir = cache or HF_HUB_CACHE
+        blob_dir = os.path.join(cache_dir, f"models--{repo_id.replace('/', '--')}", "blobs")
+
+        # Total size up front (one cheap HEAD) so the heartbeat can show %/ETA.
+        total_mb = None
+        try:
+            from huggingface_hub import get_hf_file_metadata, hf_hub_url
+
+            meta = get_hf_file_metadata(hf_hub_url(repo_id, target, revision=revision))
+            if meta.size:
+                total_mb = meta.size / 1e6
+        except Exception:  # pragma: no cover - best-effort metadata
+            pass
+
+        total_str = f" ({total_mb:.0f} MB)" if total_mb else ""
+        log.info(f"Fetching weight {ref}{total_str}  (cache dir: {cache_dir}) ...")
+
+        def _partial_mb():
+            """Best-effort size of the in-flight `.incomplete` blob, in MB."""
+            try:
+                parts = glob.glob(os.path.join(blob_dir, "*.incomplete"))
+                if parts:
+                    return max(os.path.getsize(p) for p in parts) / 1e6
+            except OSError:
+                pass
+            return 0.0
+
+        start = time.time()
+        done = threading.Event()
+        last = {"t": start, "mb": 0.0}
+
+        def _heartbeat():
+            # hf's own tqdm goes to stderr and is invisible in captured/non-TTY
+            # job logs, so surface real progress (MB / % / MB-s / ETA) here.
+            while not done.wait(10):
+                now = time.time()
+                mb = _partial_mb()
+                speed = (mb - last["mb"]) / max(now - last["t"], 1e-9)
+                last["t"], last["mb"] = now, mb
+                if total_mb and total_mb > 0:
+                    pct = 100.0 * mb / total_mb
+                    eta = (total_mb - mb) / speed if speed > 1e-6 else None
+                    eta_str = f", ETA {eta:.0f}s" if eta is not None else ""
+                    log.info(
+                        f"  ... {target}: {mb:.0f}/{total_mb:.0f} MB "
+                        f"({pct:.0f}%), {speed:.0f} MB/s{eta_str}"
+                    )
+                else:
+                    log.info(
+                        f"  ... downloading {target}: {mb:.0f} MB, "
+                        f"{speed:.0f} MB/s ({int(now - start)}s)"
+                    )
+
+        hb = threading.Thread(target=_heartbeat, daemon=True)
+        hb.start()
+        try:
+            path = hf_hub_download(
+                repo_id=repo_id, filename=target, revision=revision, cache_dir=cache
+            )
+        finally:
+            done.set()
+        elapsed = time.time() - start
+        try:
+            size_mb = os.path.getsize(path) / 1e6
+        except OSError:
+            size_mb = float("nan")
+        cached = " (from cache)" if elapsed < 1.0 else ""
+        log.info(
+            f"Resolved weight {ref}{cached}\n"
+            f"  saved to: {path}\n"
+            f"  size:     {size_mb:.1f} MB    elapsed: {elapsed:.0f}s"
+        )
+        return path
+
+    if comm.get_world_size() > 1:
+        # Only each node's local lead hits the Hub (one download per node-local
+        # cache). Every other rank then receives the resolved local path via
+        # all_gather and reads the warm cache directly -- it never calls the Hub
+        # (no list_repo_files, no HEAD), so there is exactly one set of network
+        # requests per node instead of one per rank. all_gather also acts as the
+        # barrier: it returns only once the lead has finished downloading.
+        local_path = _download() if comm.get_local_rank() == 0 else None
+        gathered: list = [None] * comm.get_world_size()
+        # Gather over GLOO (CPU), not NCCL: the non-lead ranks block here for the
+        # whole download, and an NCCL collective would trip its watchdog timeout
+        # on a multi-minute fetch (the classic "hang"). GLOO has no such watchdog.
+        torch.distributed.all_gather_object(
+            gathered, local_path, group=comm._get_global_gloo_group()
+        )
+        # The cache path is identical across nodes (same HF_HUB_CACHE + repo +
+        # commit), and each node's lead populated it locally, so any lead's path
+        # resolves on every rank.
+        resolved = next((p for p in gathered if p), None)
+        if resolved is None:
+            raise RuntimeError(f"hf:// download produced no path on any rank: {uri}")
+        return resolved
+    return _download()
+
+
+def _pick_repo_weight_file(files, repo_id):
+    """Choose the one weights file to load from a Hub repo's file listing."""
+    for name in EXPORT_WEIGHT_NAMES:
+        if name in files:
+            return name
+    pths = [f for f in files if f.endswith(".pth") and "/" not in f]
+    for name in ("model_best.pth", "model_last.pth"):
+        if name in pths:
+            return name
+    if len(pths) == 1:
+        return pths[0]
+    raise FileNotFoundError(
+        f"No loadable weights file in hf://{repo_id} (saw: {sorted(files)}). "
+        "Use the explicit file form hf://<repo>/<file> to disambiguate."
+    )
+
+
+def exported_weights_file(path):
+    """Return the weights file inside a pimm-export directory, or None.
+
+    A pimm export (``save_pretrained``) writes the serialized tensors as
+    ``model.safetensors`` (default) or ``model.bin``; this probes for them.
+    """
+    for name in EXPORT_WEIGHT_NAMES:
+        candidate = os.path.join(str(path), name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def load_weight_state(path, map_location):
+    """Load a raw checkpoint or a ``.safetensors`` file into a state mapping.
+
+    ``safetensors`` needs a device string; honor an explicit string
+    ``map_location`` (e.g. ``"cpu"``) and otherwise fall back to GPU-if-available
+    (mirroring the torch ``map_location`` lambda used for resume loads).
+    """
+    if str(path).endswith(".safetensors"):
+        from safetensors.torch import load_file
+
+        if isinstance(map_location, str):
+            device = map_location
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        return load_file(str(path), device=device)
+    return torch.load(path, map_location=map_location, weights_only=False)
+
+
 def _distributed_object_state(local_state):
     """Gather one Python state object per rank into a checkpointable wrapper."""
     if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -412,6 +687,31 @@ def _cfg_get(cfg, key, default=None):
     return getattr(cfg, key, default)
 
 
+def _summarize_keys(keys, *, depth=3, examples=2, max_groups=12):
+    """Collapse a list of dotted state-dict keys into a few grouped, counted lines.
+
+    A 500-key mismatch on a deep model is unreadable when dumped in full and
+    near-identical across ranks. Grouping by a shallow prefix (e.g.
+    ``model.backbone.enc``) turns it into a handful of "(N): example, ..." lines
+    that still name the offending subtree.
+    """
+    strip_module = lambda s: s[7:] if s.startswith("module.") else s  # noqa: E731
+    groups: "OrderedDict[str, list]" = OrderedDict()
+    for key in keys:
+        bare = strip_module(key)
+        prefix = ".".join(bare.split(".")[:depth])
+        groups.setdefault(prefix, []).append(bare)
+    lines = []
+    for prefix in sorted(groups)[:max_groups]:
+        members = groups[prefix]
+        ex = ", ".join(members[:examples])
+        more = f", +{len(members) - examples} more" if len(members) > examples else ""
+        lines.append(f"    {prefix}.* ({len(members)}): {ex}{more}")
+    if len(groups) > max_groups:
+        lines.append(f"    ... and {len(groups) - max_groups} more group(s)")
+    return "\n".join(lines)
+
+
 class CheckpointManager:
     """Own checkpoint format, save/load backends, and trainer resume semantics."""
 
@@ -508,20 +808,33 @@ class CheckpointManager:
             save_iter_checkpoints=save_iter_checkpoints,
         )
 
-    def load_weight_and_resume(self, *, keywords="", replacement=None, strict=False):
-        """Load configured weights and restore training state when cfg.resume is true."""
-        replacement = replacement if replacement is not None else keywords
+    def load_weight_and_resume(self, *, keywords="", replacement=None, rules=None, strict=False):
+        """Load configured weights and restore training state when cfg.resume is true.
+
+        Pass ``rules`` (a list of ``(keywords, replacement)`` pairs) to apply several
+        key rewrites in a single load; the scalar ``keywords``/``replacement`` form is
+        kept for back-compat and is treated as a one-rule list.
+        """
+        if rules is None:
+            rules = [(keywords, replacement if replacement is not None else keywords)]
         self.trainer.logger.info("=> Loading checkpoint & weight ...")
         weight_path = self.trainer.cfg.weight
+        if is_remote_weight(weight_path):
+            if self.trainer.cfg.resume:
+                raise ValueError(
+                    f"resume=True is not supported with an hf:// weight ({weight_path}). "
+                    "The Hub holds model weights only, not trainer state "
+                    "(optimizer/scheduler/step/dataloader — the DCP 'trainer.dcp/' is "
+                    "never uploaded). Set resume=False to warm-start a new run from these "
+                    "weights, or point `weight` at a local checkpoint dir (.../model/last) "
+                    "to resume the original run."
+                )
+            self.trainer.logger.info(f"Resolving remote weight: {weight_path}")
+            weight_path = resolve_remote_weight(weight_path)
         if weight_path and (os.path.isfile(weight_path) or os.path.isdir(weight_path)):
             self.trainer.logger.info(f"Loading weight at: {weight_path}")
             checkpoint = self._load_checkpoint(weight_path)
-            self._load_model_weights(
-                checkpoint,
-                keywords=keywords,
-                replacement=replacement,
-                strict=strict,
-            )
+            self._load_model_weights(checkpoint, rules=rules, strict=strict)
             if self.trainer.cfg.resume:
                 self.resume_training_state(checkpoint)
             return
@@ -539,56 +852,108 @@ class CheckpointManager:
         """Load a direct, split, or directory checkpoint reference."""
         map_location = (lambda storage, loc: storage.cuda()) if torch.cuda.is_available() else "cpu"
         if os.path.isdir(weight_path):
+            exported = exported_weights_file(weight_path)
+            if exported is not None and not self.trainer.cfg.resume:
+                return load_weight_state(exported, map_location)
             if is_complete_split_checkpoint(weight_path):
                 if self.trainer.cfg.resume:
                     return load_split_checkpoint(weight_path, self.trainer, map_location)
                 weight_file = resolve_model_weight_file(weight_path)
-                return torch.load(weight_file, map_location=map_location, weights_only=False)
+                return load_weight_state(weight_file, map_location)
             if is_complete_dcp_checkpoint(weight_path):
                 return load_dcp_checkpoint(weight_path, self.trainer)
             if self.trainer.cfg.resume:
                 raise FileNotFoundError(f"Incomplete checkpoint directory: {weight_path}")
             weight_file = resolve_model_weight_file(weight_path)
-            return torch.load(weight_file, map_location=map_location, weights_only=False)
-        return torch.load(weight_path, map_location=map_location, weights_only=False)
+            return load_weight_state(weight_file, map_location)
+        return load_weight_state(weight_path, map_location)
 
-    def _load_model_weights(self, checkpoint, *, keywords="", replacement="", strict=False):
-        """Load checkpoint model weights with the existing keyword rewrite rules."""
-        self.trainer.logger.info(
-            f"Loading layer weights with keyword: {keywords}, "
-            f"replace keyword with: {replacement}"
+    def _load_model_weights(self, checkpoint, *, rules=None, strict=False):
+        """Load checkpoint model weights, applying all keyword-rewrite rules in one pass.
+
+        ``rules`` is a list of ``(keywords, replacement)`` pairs. Each source key is
+        rewritten by the *most specific* (longest-keyword) rule whose (module-stripped)
+        keyword it starts with, and every key lands in a single state dict. Because
+        there is one ``load_state_dict``, the reported missing/unexpected keys are the
+        truth about the final mapping -- unlike stacking one loader per rule, where
+        each rule's ``load_state_dict`` flags the keys another rule owns as "missing".
+
+        Matching by longest keyword (not input order) means rules can be passed as a
+        plain ``{keyword: replacement}`` dict without order-dependent surprises when
+        two keywords overlap (e.g. ``decoder`` vs ``decoder.cls_pred``).
+        """
+        rules = rules or [("", "")]
+        strip_module = lambda s: s[7:] if s.startswith("module.") else s  # noqa: E731
+        norm_rules = sorted(
+            ((strip_module(kw), strip_module(repl)) for kw, repl in rules),
+            key=lambda r: len(r[0]),
+            reverse=True,
         )
+        if is_main_process():
+            for kw, repl in rules:
+                self.trainer.logger.info(
+                    f"Weight key rule: {kw or '<all>'!r} -> {repl or '<unchanged>'!r}"
+                )
+
         weight = OrderedDict()
-        strip_module = lambda s: s[7:] if s.startswith("module.") else s # noqa: E731
-        kw = strip_module(keywords)
-        repl = strip_module(replacement)
+        ddp = comm.get_world_size() > 1
         for key, value in checkpoint_model_state_dict(checkpoint).items():
             bare = strip_module(key)
-            if kw and bare.startswith(kw):
-                bare = repl + bare[len(kw):]
-            key = bare if comm.get_world_size() == 1 else "module." + bare
-            weight[key] = value
+            for kw, repl in norm_rules:
+                if kw and bare.startswith(kw):
+                    bare = repl + bare[len(kw):]
+                    break
+            weight["module." + bare if ddp else bare] = value
+        # Skip shape-mismatched keys (load_state_dict(strict=False) still raises on
+        # these). Lets a checkpoint warm-start a model whose architecture changed
+        # shape -- e.g. different num_classes (class head) or num_queries (query
+        # embeddings); the mismatched tensors stay at their init.
+        mismatched = []
+        if not strict:
+            model_sd = self.trainer.model.state_dict()
+            mismatched = [
+                k for k, v in weight.items()
+                if k in model_sd and tuple(model_sd[k].shape) != tuple(v.shape)
+            ]
+            for k in mismatched:
+                del weight[k]
+            if mismatched and is_main_process():
+                self.trainer.logger.info(
+                    f"Skipped {len(mismatched)} shape-mismatched key(s), kept at init:\n"
+                    f"{_summarize_keys(mismatched)}"
+                )
         missing, unexpected = self.trainer.model.load_state_dict(weight, strict=strict)
         n_model = len(self.trainer.model.state_dict())
         n_loaded = n_model - len(missing)
-        self.trainer.logger.info(
-            f"Loaded {n_loaded}/{n_model} model params "
-            f"(missing: {len(missing)}, unexpected: {len(unexpected)})"
-        )
-        if missing:
-            self.trainer.logger.info(f"Missing keys: {missing}")
-        if unexpected:
-            self.trainer.logger.info(f"Unexpected keys: {unexpected}")
-        # Guard against a remap that matched nothing: with strict=False this would
+        # `missing` from load_state_dict includes the shape-skipped keys above; those
+        # are reported separately, so don't double-count them as a problem.
+        real_missing = [k for k in missing if k not in set(mismatched)]
+        if is_main_process():
+            self.trainer.logger.info(
+                f"Loaded {n_loaded}/{n_model} model params "
+                f"(missing: {len(missing)}, unexpected: {len(unexpected)})"
+            )
+            # One combined pass -> these are genuinely absent from the checkpoint.
+            # Surface at WARNING with a grouped summary instead of a per-key wall.
+            if real_missing:
+                self.trainer.logger.warning(
+                    f"{len(real_missing)} model param(s) not in checkpoint, left at "
+                    f"init:\n{_summarize_keys(real_missing)}"
+                )
+            if unexpected:
+                self.trainer.logger.info(
+                    f"{len(unexpected)} checkpoint key(s) unused by the model:\n"
+                    f"{_summarize_keys(unexpected)}"
+                )
+        # Guard against rules that matched nothing: with strict=False this would
         # otherwise leave the whole model randomly initialized while training
         # proceeds, with only an INFO line to distinguish it from a real load.
         if n_model and n_loaded == 0:
             raise RuntimeError(
                 f"Checkpoint load matched 0 of {n_model} model parameters "
-                f"(keywords={keywords!r}, replacement={replacement!r}). "
-                f"The model would train "
-                f"from random init. Fix the keyword/replacement, or set strict=True "
-                f"to find the mismatch."
+                f"(rules={rules!r}). The model would train from random init. "
+                f"Fix the keyword/replacement rules, or set strict=True to find the "
+                f"mismatch."
             )
 
     def resume_training_state(self, checkpoint):

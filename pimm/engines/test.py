@@ -30,6 +30,13 @@ from pimm.utils.registry import Registry
 from pimm.utils.misc import (
     intersection_and_union_gpu,
 )
+from pimm.utils.checkpoints import (
+    checkpoint_model_state_dict,
+    exported_weights_file,
+    load_weight_state,
+    resolve_remote_weight,
+)
+from pimm.utils.path import resolve_model_weight_file
 from pimm.models.utils.misc import offset2bincount
 
 
@@ -138,18 +145,13 @@ class TesterBase:
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
         self.logger.info(f"Num params: {n_parameters}")
         model = prepare_model(model, self.cfg, self.parallel_context)
-        if os.path.isfile(self.cfg.weight):
-            self.logger.info(f"Loading weight at: {self.cfg.weight}")
-            checkpoint = torch.load(self.cfg.weight, map_location="cpu", weights_only=False)
-            state_dict = checkpoint
-            if isinstance(checkpoint, dict):
-                model_state = checkpoint.get("model", None)
-                if isinstance(model_state, dict) and "state_dict" in model_state:
-                    state_dict = model_state["state_dict"]
-                elif "state_dict" in checkpoint:
-                    state_dict = checkpoint["state_dict"]
-                elif model_state is not None:
-                    state_dict = model_state
+        weight_path = resolve_remote_weight(self.cfg.weight)
+        if weight_path and os.path.isdir(weight_path):
+            weight_path = exported_weights_file(weight_path) or resolve_model_weight_file(weight_path)
+        if weight_path and os.path.isfile(weight_path):
+            self.logger.info(f"Loading weight at: {weight_path}")
+            checkpoint = load_weight_state(weight_path, "cpu")
+            state_dict = checkpoint_model_state_dict(checkpoint)
             weight = OrderedDict()
             for key, value in state_dict.items():
                 if key.startswith("module."):

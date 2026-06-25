@@ -9,9 +9,10 @@ requires-python = ">=3.10"
 dependencies = [
     "PyYAML",
     "submitit",
-    "torchdata",
     "tyro",
-]
+    "addict",
+    "yapf",
+] # NOTE: just for CLI job sumbmission. you need either environment.yml or the supplied dockerfile to do any training
 
 [project.scripts]
 pimm = "pimm.cli.main:main"

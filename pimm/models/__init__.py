@@ -1,5 +1,6 @@
 from .builder import build_model
 from .default import DefaultSegmentor, DefaultClassifier
+from .lora import LoRAAdapter, LoRALinear
 from .modules import PointModule, PointModel
 
 # Backbones

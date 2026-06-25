@@ -353,8 +353,7 @@ def validate_training_config(cfg: dict[str, Any]) -> None:
         raise SystemExit(message)
 
     try:
-        from pimm.engines.defaults import _split_hook_type_options
-        from pimm.utils.config import Config
+        from pimm.utils.config import Config, _split_hook_type_options
 
         # Load and merge only scalar/config-dict CLI overrides. Hook type
         # overrides are applied later by the training parser, and list-index hook
