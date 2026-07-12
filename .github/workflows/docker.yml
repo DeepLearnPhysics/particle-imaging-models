@@ -103,7 +103,9 @@ jobs:
       cache: true
       cache-mode: max
       cache-scope: standard
-      meta-images: youngsm/pimm
+      meta-images: |
+        youngsm/pimm
+        ghcr.io/deeplearnphysics/pimm
       meta-tags: |
         type=ref,event=branch
         type=ref,event=pr
@@ -119,10 +121,12 @@ jobs:
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
         - registry: docker.io
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
   test-standard:
     needs: build-standard
     if: github.repository == 'DeepLearnPhysics/particle-imaging-models'

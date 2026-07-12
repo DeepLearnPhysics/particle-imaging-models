@@ -120,7 +120,7 @@ uv run python -c "import cnms, pointgroup_ops, pointops, pointrope, pytorch3d_op
 Prebuilt images resolve from the same `uv.lock` as the local install.
 
 ```bash
-apptainer pull /path/to/pimm.sif docker://youngsm/pimm:pytorch2.13.0-cuda12.6
+apptainer pull /path/to/pimm.sif docker://ghcr.io/deeplearnphysics/pimm:v0.3.1
 ```
 
 The image ships only the locked environment (at `/opt/pimm/.venv`) - no pimm
@@ -133,8 +133,8 @@ docker build -f .github/docker/Dockerfile -t pimm:local .   # or Dockerfile.ners
 
 | Image | Description |
 |-------|-------------|
-| `youngsm/pimm:pytorch2.13.0-cuda12.6` | Standard image |
-| `youngsm/pimm-nersc:pytorch2.13.0-cuda12.6` | NERSC variant with extra dependencies |
+| `ghcr.io/deeplearnphysics/pimm` | Standard image |
+| `ghcr.io/deeplearnphysics/pimm-nersc` | NERSC variant with extra dependencies |
 </details>
 
 ## Training & Testing
