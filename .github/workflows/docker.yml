@@ -95,6 +95,7 @@ jobs:
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read
+      packages: write
       id-token: write
     with:
       output: image
@@ -123,7 +124,7 @@ jobs:
       registry-auths: |
         - registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         - registry: docker.io
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -217,6 +218,7 @@ jobs:
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read
+      packages: write
       id-token: write
     with:
       output: image
@@ -225,7 +227,9 @@ jobs:
       cache: true
       cache-mode: max
       cache-scope: nersc
-      meta-images: youngsm/pimm-nersc
+      meta-images: |
+        youngsm/pimm-nersc
+        ghcr.io/deeplearnphysics/pimm-nersc
       meta-tags: |
         type=ref,event=branch
         type=ref,event=pr
@@ -241,6 +245,9 @@ jobs:
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         - registry: docker.io
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
