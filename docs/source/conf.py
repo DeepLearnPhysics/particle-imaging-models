@@ -118,7 +118,7 @@ myst_enable_extensions = [
 myst_heading_anchors = 3
 myst_substitutions = {
     "repo_url": "https://github.com/DeepLearnPhysics/particle-imaging-models",
-    "docker_image": "youngsm/pimm:pytorch2.13.0-cuda12.6",
+    "docker_image": "youngsm/pimm:pytorch2.10.0-cuda12.6",
 }
 
 # -- Intersphinx -------------------------------------------------------------

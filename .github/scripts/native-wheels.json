@@ -3,20 +3,22 @@
   "repository": "DeepLearnPhysics/particle-imaging-models",
   "stacks": [
     {
-      "id": "cu126-torch2.13-cp310",
+      "id": "cu126-torch2.10-cp310",
       "python": "3.10",
       "python_tag": "cp310",
-      "torch": "2.13.0+cu126",
+      "torch": "2.10.0+cu126",
       "cuda": "12.6",
       "cuda_tag": "cu126",
       "arches": [
+        "7.0",
+        "7.5",
         "8.0",
         "8.6",
         "8.9",
         "9.0"
       ],
-      "build_image": "pytorch/manylinux2_28-builder:cuda12.6-v2.13.0-rc15",
-      "release_tag": "pimm-wheels-cu126-torch2.13-cp310",
+      "build_image": "pytorch/manylinux2_28-builder:cuda12.6-v2.10.0-rc7",
+      "release_tag": "pimm-wheels-cu126-torch2.10-cp310",
       "packages": [
         {
           "path": "libs/cnms",
@@ -55,19 +57,40 @@
           "import_name": "serialize_cuda"
         },
         {
-          "requirement": "torch-scatter==2.1.2",
+          "source": {
+            "url": "https://github.com/rusty1s/pytorch_scatter/archive/140d3ad677aae615767412873b90982cbf97d35d.tar.gz",
+            "sha256": "3d170f0e8797b3d5e7670a726e6b5914f7c4801a0d8750e344d6b1f45bc8f69b"
+          },
+          "version": "2.1.2",
           "distribution": "torch-scatter",
           "import_name": "torch_scatter"
         },
         {
-          "requirement": "torch-sparse==0.6.18",
+          "source": {
+            "url": "https://github.com/rusty1s/pytorch_sparse/archive/7d22892fb47626d2c5b0171769d44bdc8edd606c.tar.gz",
+            "sha256": "a63500f66898a36792ade6d6c63f03db6f45e863e3a36f47c5830e2fc0597802",
+            "submodules": [
+              {
+                "path": "third_party/parallel-hashmap",
+                "url": "https://github.com/greg7mdp/parallel-hashmap/archive/01ea8093e6d0293ea252e8027c17d7dff26a9c9f.tar.gz",
+                "sha256": "b18bd20bacc812ea5b41aed3e2c3e05cc5d99f42d60cd9e30250d5105c84dcbf"
+              }
+            ]
+          },
+          "version": "0.6.18",
           "distribution": "torch-sparse",
-          "import_name": "torch_sparse"
+          "import_name": "torch_sparse",
+          "validation_library": "torch_sparse/_version_cuda.so"
         },
         {
-          "requirement": "torch-cluster==1.6.3",
+          "source": {
+            "url": "https://github.com/rusty1s/pytorch_cluster/archive/29cd22bf1a5b82fc06b108d6573f81302c5d6b12.tar.gz",
+            "sha256": "6b453720f79be10b73165fbe46e00ac5116002a865403b7acf619d25e8b47707"
+          },
+          "version": "1.6.3",
           "distribution": "torch-cluster",
-          "import_name": "torch_cluster"
+          "import_name": "torch_cluster",
+          "validation_library": "torch_cluster/_version_cuda.so"
         }
       ]
     }

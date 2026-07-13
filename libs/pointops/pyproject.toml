@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pointops"
-version = "1.0.0+cu126torch2.13"
+version = "1.0.0+cu126torch2.10"
 dependencies = ["numpy", "torch"]
 
 [tool.uv]

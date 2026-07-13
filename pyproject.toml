@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pimm"
-version = "0.3.1"
+version = "0.4.0"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "PyYAML",
@@ -32,8 +32,8 @@ train = [
     "regex; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "pyarrow; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "datasets; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch==2.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torchvision==0.28.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch==2.10.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.25.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchdata; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch-geometric; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch-scatter; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -103,15 +103,15 @@ torch-cluster = false
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }
 torchvision = { index = "pytorch-cu126" }
-pointrope = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/pointrope-0.1.0%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-pointops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/pointops-1.0.0%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-pointgroup-ops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/pointgroup_ops-0.0.0%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-cnms = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/cnms-2.0.0%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-pytorch3d-ops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-serialize-cuda = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/serialize_cuda-0.1.0%2Bcu126torch2.13-cp310-cp310-linux_x86_64.whl" }
-torch-scatter = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/torch_scatter-2.1.2-cp310-cp310-linux_x86_64.whl" }
-torch-sparse = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl" }
-torch-cluster = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.13-cp310/torch_cluster-1.6.3-cp310-cp310-linux_x86_64.whl" }
+pointrope = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+pointops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointops-1.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+pointgroup-ops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointgroup_ops-0.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+cnms = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/cnms-2.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+pytorch3d-ops = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+serialize-cuda = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/serialize_cuda-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
+torch-scatter = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_scatter-2.1.2-cp310-cp310-linux_x86_64.whl" }
+torch-sparse = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl" }
+torch-cluster = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_cluster-1.6.3-cp310-cp310-linux_x86_64.whl" }
 
 [[tool.uv.index]]
 name = "pytorch-cu126"

@@ -17,13 +17,13 @@ A full local training installation requires:
 - Linux on x86_64.
 - An NVIDIA GPU and a recent driver.
 
-That is all. The training stack, including PyTorch and the native CUDA
-extensions, installs as prebuilt CUDA 12.6 wheels, so no CUDA toolkit, host
-compiler, or system libraries are needed. uv provides Python 3.10 and the rest.
+That is all.
+The locked training stack uses PyTorch 2.10.0, torchvision 0.25.0, Python 3.10, and CUDA 12.6.
+All native extensions, including `torch-scatter`, `torch-sparse`, and `torch-cluster`, install as prebuilt RHEL 8-compatible wheels from pimm's compatibility release.
+No CUDA toolkit, host compiler, or system libraries are needed for installation.
 The installer does not invoke `sudo` or modify system packages.
 
-Rebuilding a native extension from source (an occasional maintainer task) does
-need the CUDA 12.6 toolkit and a compatible GCC/G++ host compiler.
+Rebuilding a native extension from source (an occasional maintainer task) does need the CUDA 12.6 toolkit and a compatible GCC/G++ host compiler.
 
 ## Local uv environment
 
@@ -87,12 +87,12 @@ pimm launch --help
 
 Flash attention kernels ship inside PyTorch (`torch.nn.attention.varlen.varlen_attn`), so no separate flash-attn package is installed or compiled.
 Models select the fast path with `enable_flash=True` in their configs.
+On Volta and Turing GPUs (compute capabilities 7.0 and 7.5), configure models with `enable_flash=False` and disable BF16; pimm leaves those choices explicit rather than changing model or precision settings at runtime.
 
 ### Repeated installs
 
-Installs pull prebuilt wheels, so running the installer again is fast and
-compiles nothing. To reinstall a single package (for example after clearing a
-cache), run:
+Installs pull prebuilt wheels, so running the installer again is fast and compiles nothing.
+To reinstall a single package (for example after clearing a cache), run:
 
 ```bash
 uv sync --locked --reinstall-package pointops
@@ -121,7 +121,7 @@ The full training environment remains inside the selected container on compute n
 The prebuilt image is the shortest path on an HPC system:
 
 ```bash
-apptainer pull pimm.sif docker://youngsm/pimm:pytorch2.13.0-cuda12.6
+apptainer pull pimm.sif docker://youngsm/pimm:pytorch2.10.0-cuda12.6
 ```
 
 Run from the repository root so the image imports the current checkout:

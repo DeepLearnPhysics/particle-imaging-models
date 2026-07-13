@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serialize-cuda"
-version = "0.1.0+cu126torch2.13"
+version = "0.1.0+cu126torch2.10"
 dependencies = ["torch"]
 
 [tool.uv]

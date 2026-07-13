@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytorch3d-ops"
-version = "0.7.9+cu126torch2.13"
+version = "0.7.9+cu126torch2.10"
 description = "Minimal PyTorch3D subset with point-cloud operators and chamfer distance"
 authors = [{ name = "FAIR" }]
 dependencies = ["torch"]

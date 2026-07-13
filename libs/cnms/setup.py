@@ -22,7 +22,7 @@ NVCC_FLAGS = ["-O3", "--use_fast_math"]
 
 setup(
     name="cnms",
-    version="2.0.0+cu126torch2.13",
+    version="2.0.0+cu126torch2.10",
     packages=find_packages(),
     ext_modules=[
         CUDAExtension(

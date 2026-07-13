@@ -14,7 +14,7 @@ slurm:
 # environment, for large-scale or pinned-artifact runs
 container:
   runtime: singularity
-  image: /sdf/data/neutrino/youngsam/images/pimm_pytorch2.13.0-cuda12.6.sif
+  image: /sdf/data/neutrino/youngsam/images/pimm_pytorch2.10.0-cuda12.6.sif
   binds:
     - /sdf
     - /fs

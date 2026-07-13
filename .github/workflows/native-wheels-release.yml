@@ -1,4 +1,4 @@
-name: Native wheel draft release
+name: Native wheel release
 
 on:
   workflow_dispatch:
@@ -6,8 +6,13 @@ on:
       stack:
         description: Compatibility stack id from native-wheels.json
         required: true
-        default: cu126-torch2.13-cp310
+        default: cu126-torch2.10-cp310
         type: string
+      publish:
+        description: Publish the verified wheel set as a public prerelease
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -52,117 +57,6 @@ jobs:
           STACK: ${{ inputs.stack }}
         run: |
           mkdir wheelhouse
-          cat > "$RUNNER_TEMP/build_native_wheels.py" <<'PY'
-          import email
-          import hashlib
-          import json
-          import os
-          import re
-          import subprocess
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          root = Path("/workspace")
-          out = root / "wheelhouse"
-          config = json.loads((root / ".github/scripts/native-wheels.json").read_text())
-          stack = next(item for item in config["stacks"] if item["id"] == os.environ["STACK"])
-          python = f"{sys.version_info.major}.{sys.version_info.minor}"
-          if python != stack["python"]:
-              raise SystemExit(f"expected Python {stack['python']}, got {python}")
-          import torch
-          if torch.__version__ != stack["torch"] or torch.version.cuda != stack["cuda"]:
-              raise SystemExit(f"unexpected torch stack: {torch.__version__}, CUDA {torch.version.cuda}")
-
-          for package in stack["packages"]:
-              if "path" in package:
-                  source = (root / package["path"]).resolve()
-                  source.relative_to(root / "libs")
-                  source = str(source)
-              else:
-                  source = package["requirement"]
-              subprocess.run([
-                  sys.executable, "-m", "pip", "wheel", "--no-build-isolation",
-                  "--no-deps", "--wheel-dir", out, source,
-              ], check=True)
-
-          wheels = sorted(out.glob("*.whl"))
-          if len(wheels) != len(stack["packages"]):
-              raise SystemExit(f"expected {len(stack['packages'])} wheels, found {len(wheels)}")
-          canonical = lambda value: re.sub(r"[-_.]+", "-", value).lower()
-          torch_minor = ".".join(stack["torch"].split("+", 1)[0].split(".")[:2])
-          suffix = f"{stack['cuda_tag']}torch{torch_minor}"
-          records = []
-          for package in stack["packages"]:
-              if "path" in package:
-                  version = f"{package['base_version']}+{suffix}"
-              else:
-                  version = package["requirement"].split("==", 1)[1]
-              tag = f"{stack['python_tag']}-{stack['python_tag']}-linux_x86_64"
-              name = re.sub(r"[-_.]+", "_", package["distribution"])
-              wheel = out / f"{name}-{version}-{tag}.whl"
-              if not wheel.is_file():
-                  raise SystemExit(f"missing expected wheel: {wheel.name}")
-              with zipfile.ZipFile(wheel) as archive:
-                  metadata_names = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
-                  wheel_names = [n for n in archive.namelist() if n.endswith(".dist-info/WHEEL")]
-                  if len(metadata_names) != 1 or len(wheel_names) != 1:
-                      raise SystemExit(f"invalid metadata in {wheel.name}")
-                  metadata = email.message_from_bytes(archive.read(metadata_names[0]))
-                  wheel_metadata = email.message_from_bytes(archive.read(wheel_names[0]))
-              if canonical(metadata["Name"]) != canonical(package["distribution"]):
-                  raise SystemExit(f"unexpected distribution: {wheel.name}")
-              if metadata["Version"] != version:
-                  raise SystemExit(f"unexpected version: {wheel.name}")
-              if tag not in wheel_metadata.get_all("Tag", []):
-                  raise SystemExit(f"unexpected wheel tag: {wheel.name}")
-              # binaries must run on glibc 2.28 hosts (RHEL8 clusters), not
-              # just the glibc of whatever image built them
-              with zipfile.ZipFile(wheel) as archive:
-                  for member in archive.namelist():
-                      if not member.endswith(".so"):
-                          continue
-                      archive.extract(member, "/tmp/audit")
-                      dump = subprocess.run(
-                          ["objdump", "-T", f"/tmp/audit/{member}"],
-                          capture_output=True, text=True, check=True,
-                      ).stdout
-                      ceiling = max(
-                          (tuple(map(int, m.group(1).split("."))) for m in
-                           re.finditer(r"GLIBC_([0-9.]+)", dump)),
-                          default=(0,),
-                      )
-                      print(f"{wheel.name}:{member} GLIBC ceiling", ".".join(map(str, ceiling)))
-                      if ceiling > (2, 28):
-                          raise SystemExit(f"glibc ceiling above 2.28 in {wheel.name}: {member}")
-              digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-              records.append({
-                  "filename": wheel.name,
-                  "sha256": digest,
-                  "distribution": package["distribution"],
-                  "version": version,
-                  "import_name": package["import_name"],
-              })
-
-          (out / "SHA256SUMS").write_text(
-              "".join(f"{item['sha256']}  {item['filename']}\n" for item in records)
-          )
-          release = {
-              "schema_version": 1,
-              "repository": config["repository"],
-              "release_tag": stack["release_tag"],
-              "git_sha": os.environ.get("GITHUB_SHA", ""),
-              "stack": {
-                  key: stack[key]
-                  for key in ("id", "python", "python_tag", "torch", "cuda", "arches")
-              },
-              "wheels": records,
-          }
-          (out / "native-wheels-manifest.json").write_text(
-              json.dumps(release, indent=2) + "\n"
-          )
-          PY
-
           docker pull "$BUILD_IMAGE"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
@@ -172,13 +66,14 @@ jobs:
             --env GITHUB_SHA \
             --env HOME=/tmp \
             --env MAX_JOBS=2 \
+            --env PYTHONHASHSEED=0 \
             --env PYTHON_TAG \
             --env PYTHON_VERSION \
+            --env SOURCE_DATE_EPOCH=315532800 \
             --env STACK \
             --env TORCH_CUDA_ARCH_LIST \
             --env TORCH_VERSION \
             --volume "$GITHUB_WORKSPACE:/workspace" \
-            --volume "$RUNNER_TEMP/build_native_wheels.py:/build_native_wheels.py:ro" \
             --workdir /workspace \
             "$BUILD_IMAGE" \
             bash -euo pipefail -c '
@@ -188,12 +83,16 @@ jobs:
               PYBIN="/opt/python/$PYTHON_TAG-$PYTHON_TAG/bin/python"
               "$PYBIN" --version
               "$PYBIN" -m venv /tmp/pimm-wheel-env
-              /tmp/pimm-wheel-env/bin/python -m pip install --no-cache-dir \
-                pip setuptools wheel ninja
-              /tmp/pimm-wheel-env/bin/python -m pip install --no-cache-dir \
+              /tmp/pimm-wheel-env/bin/python -m pip install \
+                --no-cache-dir --no-compile --upgrade \
+                pip==26.1.2 setuptools==83.0.0 wheel==0.47.0 \
+                ninja==1.13.0 packaging==26.2
+              /tmp/pimm-wheel-env/bin/python -m pip install \
+                --no-cache-dir --no-compile \
                 --index-url "https://download.pytorch.org/whl/$CUDA_TAG" \
                 "torch==$TORCH_VERSION"
-              /tmp/pimm-wheel-env/bin/python /build_native_wheels.py
+              /tmp/pimm-wheel-env/bin/python \
+                .github/scripts/build_native_wheels.py
             '
 
       - name: Upload wheelhouse
@@ -204,15 +103,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  draft-release:
+  release:
     needs: build
-    if: >-
-      github.repository == 'DeepLearnPhysics/particle-imaging-models' &&
-      github.ref_name == github.event.repository.default_branch
+    if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+
       - name: Download wheelhouse
         uses: actions/download-artifact@v4
         with:
@@ -222,14 +122,16 @@ jobs:
       - name: Verify checksums
         run: cd wheelhouse && sha256sum --check SHA256SUMS
 
+      - name: Verify lock matches release assets
+        if: inputs.publish
+        run: python .github/scripts/verify_native_wheel_lock.py wheelhouse/native-wheels-manifest.json
+
       - name: Create or update draft release
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           STACK: ${{ inputs.stack }}
         run: |
           test "$GITHUB_REPOSITORY" = "DeepLearnPhysics/particle-imaging-models"
-          test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH"
           TAG="$(python -c 'import json; print(json.load(open("wheelhouse/native-wheels-manifest.json"))["release_tag"])')"
           draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
           if [ "$draft" = false ]; then
@@ -254,3 +156,11 @@ jobs:
             wheelhouse/SHA256SUMS \
             wheelhouse/native-wheels-manifest.json \
             --clobber
+
+      - name: Publish compatibility prerelease
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(python -c 'import json; print(json.load(open("wheelhouse/native-wheels-manifest.json"))["release_tag"])')"
+          gh release edit "$TAG" --draft=false --prerelease

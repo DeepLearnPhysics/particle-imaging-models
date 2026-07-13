@@ -45,7 +45,7 @@ if not (INCLUDE_DIRS is False):
 
 setup(
     name="pointgroup_ops",
-    version="0.0.0+cu126torch2.13",
+    version="0.0.0+cu126torch2.10",
     packages=["pointgroup_ops"],
     package_dir={"pointgroup_ops": "functions"},
     ext_modules=[

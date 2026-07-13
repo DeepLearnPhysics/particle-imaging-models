@@ -113,12 +113,12 @@ jobs:
         type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
         type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
         type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-        type=raw,value=pytorch2.13.0-cuda12.6
+        type=raw,value=pytorch2.10.0-cuda12.6
       build-args: |
-        TORCH_VERSION=2.13.0
+        TORCH_VERSION=2.10.0
         CUDA_VERSION=12.6
         CUDNN_VERSION=9
-        TORCH_CUDA_ARCH_LIST=8.0 8.6 8.9 9.0
+        TORCH_CUDA_ARCH_LIST=7.0 7.5 8.0 8.6 8.9 9.0
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       registry-auths: |
@@ -135,8 +135,9 @@ jobs:
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
     env:
-      IMAGE: youngsm/pimm:pytorch2.13.0-cuda12.6
-      TORCH_VERSION: 2.13.0
+      IMAGE: youngsm/pimm:pytorch2.10.0-cuda12.6
+      TORCH_VERSION: 2.10.0
+      TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
     steps:
       # the image ships only the environment; pimm code comes from the checkout
@@ -146,9 +147,11 @@ jobs:
       - name: Validate imports, stack, and CLI
         run: |
           docker pull "$IMAGE"
-          docker run --rm -i --env TORCH_VERSION --env CUDA_VERSION \
+          docker run --rm -i --env TORCH_VERSION --env TORCHVISION_VERSION \
+            --env CUDA_VERSION \
             -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" python - <<'PY'
           import importlib
+          import importlib.metadata
           import os
 
           modules = [
@@ -175,6 +178,20 @@ jobs:
               raise SystemExit(f"expected torch {expected}, got {torch.__version__}")
           if torch.version.cuda != os.environ["CUDA_VERSION"]:
               raise SystemExit(f"expected CUDA {os.environ['CUDA_VERSION']}, got {torch.version.cuda}")
+          torchvision_version = importlib.metadata.version("torchvision")
+          if not torchvision_version.startswith(os.environ["TORCHVISION_VERSION"]):
+              raise SystemExit(f"unexpected torchvision: {torchvision_version}")
+          pyg_versions = {
+              name: importlib.metadata.version(name)
+              for name in ("torch-cluster", "torch-scatter", "torch-sparse")
+          }
+          expected_pyg = {
+              "torch-cluster": "1.6.3",
+              "torch-scatter": "2.1.2",
+              "torch-sparse": "0.6.18",
+          }
+          if pyg_versions != expected_pyg:
+              raise SystemExit(f"unexpected PyG compatibility wheels: {pyg_versions}")
           print("validated:", ", ".join(modules))
           PY
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" pimm --help
@@ -238,7 +255,7 @@ jobs:
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=pytorch2.13.0-cuda12.6
+            type=raw,value=pytorch2.10.0-cuda12.6
 
       - name: Log in to GHCR
         if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
@@ -266,10 +283,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            TORCH_VERSION=2.13.0
+            TORCH_VERSION=2.10.0
             CUDA_VERSION=12.6
             CUDNN_VERSION=9
-            TORCH_CUDA_ARCH_LIST=8.0 8.6 8.9 9.0
+            TORCH_CUDA_ARCH_LIST=7.0 7.5 8.0 8.6 8.9 9.0
           cache-from: type=gha,scope=nersc
           cache-to: type=gha,scope=nersc,mode=max
           provenance: false
@@ -282,8 +299,9 @@ jobs:
     if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
     runs-on: ubuntu-latest
     env:
-      IMAGE: youngsm/pimm-nersc:pytorch2.13.0-cuda12.6
-      TORCH_VERSION: 2.13.0
+      IMAGE: youngsm/pimm-nersc:pytorch2.10.0-cuda12.6
+      TORCH_VERSION: 2.10.0
+      TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
     steps:
       # the image ships only the environment; pimm code comes from the checkout
@@ -293,9 +311,11 @@ jobs:
       - name: Validate imports, stack, MPI, and CLI
         run: |
           docker pull "$IMAGE"
-          docker run --rm -i --env TORCH_VERSION --env CUDA_VERSION \
+          docker run --rm -i --env TORCH_VERSION --env TORCHVISION_VERSION \
+            --env CUDA_VERSION \
             -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" python - <<'PY'
           import importlib
+          import importlib.metadata
           import os
 
           modules = [
@@ -325,6 +345,20 @@ jobs:
               raise SystemExit(f"expected torch {expected}, got {torch.__version__}")
           if torch.version.cuda != os.environ["CUDA_VERSION"]:
               raise SystemExit(f"expected CUDA {os.environ['CUDA_VERSION']}, got {torch.version.cuda}")
+          torchvision_version = importlib.metadata.version("torchvision")
+          if not torchvision_version.startswith(os.environ["TORCHVISION_VERSION"]):
+              raise SystemExit(f"unexpected torchvision: {torchvision_version}")
+          pyg_versions = {
+              name: importlib.metadata.version(name)
+              for name in ("torch-cluster", "torch-scatter", "torch-sparse")
+          }
+          expected_pyg = {
+              "torch-cluster": "1.6.3",
+              "torch-scatter": "2.1.2",
+              "torch-sparse": "0.6.18",
+          }
+          if pyg_versions != expected_pyg:
+              raise SystemExit(f"unexpected PyG compatibility wheels: {pyg_versions}")
           print("validated:", ", ".join(modules))
           PY
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" pimm --help

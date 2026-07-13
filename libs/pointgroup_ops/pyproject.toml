@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pointgroup-ops"
-version = "0.0.0+cu126torch2.13"
+version = "0.0.0+cu126torch2.10"
 dependencies = ["torch"]
 
 [tool.uv]

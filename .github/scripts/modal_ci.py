@@ -13,7 +13,7 @@ Set PIMM_IMAGE to validate a published application image instead of the
 checkout; the suite then runs in the image's venv with the checkout mounted,
 mirroring how containerized jobs use the image:
 
-    PIMM_IMAGE=youngsm/pimm:pytorch2.13.0-cuda12.6 uvx modal run .github/scripts/modal_ci.py
+    PIMM_IMAGE=youngsm/pimm:pytorch2.10.0-cuda12.6 uvx modal run .github/scripts/modal_ci.py
 """
 
 import json
@@ -120,9 +120,9 @@ if PIMM_IMAGE:
     )
 else:
     image = (
-        # base CUDA/cuDNN must match the locked torch stack (torch 2.13.0, cu126)
+        # base CUDA/cuDNN must match the locked torch stack (torch 2.10.0, cu126)
         modal.Image.from_registry(
-            "pytorch/pytorch:2.13.0-cuda12.6-cudnn9-devel",
+            "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
             add_python="3.10",
         )
         .pip_install("huggingface_hub", f"uv=={UV_VERSION}")

@@ -68,7 +68,7 @@ uv run pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-s
 
 :::{tab-item} Singularity / Apptainer (recommended)
 ```bash
-apptainer pull /path/to/pimm.sif docker://youngsm/pimm:pytorch2.13.0-cuda12.6
+apptainer pull /path/to/pimm.sif docker://youngsm/pimm:pytorch2.10.0-cuda12.6
 
 # run a command directly:
 apptainer run --nv /path/to/pimm.sif \
@@ -83,11 +83,11 @@ pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmas
 :::{tab-item} Docker
 ```bash
 # run a command directly:
-docker run --rm --gpus all -v "$PWD:$PWD" -w "$PWD" youngsm/pimm:pytorch2.13.0-cuda12.6 \
+docker run --rm --gpus all -v "$PWD:$PWD" -w "$PWD" youngsm/pimm:pytorch2.10.0-cuda12.6 \
   pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 
 # ...or open a shell, then run pimm inside:
-docker run --rm -it --gpus all -v "$PWD:$PWD" -w "$PWD" youngsm/pimm:pytorch2.13.0-cuda12.6 bash
+docker run --rm -it --gpus all -v "$PWD:$PWD" -w "$PWD" youngsm/pimm:pytorch2.10.0-cuda12.6 bash
 pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 :::
