@@ -38,6 +38,7 @@ concurrency:
 
 jobs:
   lock:
+    if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.plan.outputs.build }}
