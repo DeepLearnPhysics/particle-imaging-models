@@ -37,7 +37,7 @@ Prepare a compatibility-stack change before merging it to `main`:
 3. Download the workflow artifact, resolve `uv.lock` against those exact local wheels, then replace the local source URLs with the final release URLs while retaining the generated SHA-256 hashes.
    Push the lock update.
 4. Dispatch the workflow again on the updated branch with `publish=true`.
-   The build must reproduce every locked hash before the workflow makes the assets available as a public prerelease.
+   The workflow downloads the staged draft assets, verifies their checksums and locked hashes, and publishes those exact files as a public prerelease.
 5. Merge only after the public wheel URLs resolve.
    The normal Docker workflow can then build and test the new application images without a dependency race.
 

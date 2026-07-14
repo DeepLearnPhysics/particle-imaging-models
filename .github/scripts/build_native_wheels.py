@@ -242,10 +242,8 @@ def main() -> None:
         for stale in OUT.glob("*.whl"):
             stale.unlink()
     # NVCC gives intermediate host objects process-specific ``tmpxft`` symbol
-    # names. They are harmless but make otherwise identical shared libraries
-    # differ byte-for-byte. Release wheels do not need local/debug symbols, so
-    # strip them at link time to make the payload reproducible as well as much
-    # smaller.
+    # names. Release wheels do not need local/debug symbols, so strip them at
+    # link time to reduce build-specific metadata and make the payload smaller.
     build_env = os.environ.copy()
     strip_flag = "-Wl,--strip-all"
     linker_flags = build_env.get("LDFLAGS", "").split()

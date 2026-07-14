@@ -348,7 +348,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/cnms-2.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:7136683c037133cc532e438d7a37dfdae2c3dcb4316eff6bcccce153ec417cc3" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/cnms-2.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:b136b5927fa76b360b9de9108e7f29bb37921a84620c57de4709a2c8f0979142" },
 ]
 
 [package.metadata]
@@ -1786,7 +1786,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointops-1.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:0b99febf6c9a70dff5a836540ec5d570fa9b5eb7bd4f4b4c7cc8b268002f6eb7" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointops-1.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:fe500c31d1b114976275f1941918f162455b82e4d4cdb863b658f6b8c3e3f2ac" },
 ]
 
 [package.metadata]
@@ -1803,7 +1803,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:d91f424c8b39d88973461bdc6eba5184157878c316bedab65a85abaa8876b535" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:4c2de39e7f1be3bf3f23aba6b57cffe4f7f2866321207f0cbf73b5bee6254a5c" },
 ]
 
 [package.metadata]
@@ -2039,7 +2039,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:9bce5c0c364dca5b676160e86fe316fc7b35cca26a414240fdd7e97b7a454fde" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:d6e5b24fb0e88d4724385e0b804a922b011b44c7ab5dc7e0836969981583fa5f" },
 ]
 
 [package.metadata]
@@ -2248,7 +2248,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/serialize_cuda-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:7e06da507fd9ab02f94cc99527657713dbab41ec17bbad1a3b918b3e493a8fb6" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/serialize_cuda-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:be1e9c80ea672e9d6b82d51477405eec0bf58cc66372a5daa8b1b33be9adc622" },
 ]
 
 [package.metadata]
@@ -2634,7 +2634,7 @@ dependencies = [
     { name = "scipy" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_cluster-1.6.3-cp310-cp310-linux_x86_64.whl", hash = "sha256:6e765bc596c105158df3cce1d53d5a9d26a437b776c29e3259c5650968823e5d" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_cluster-1.6.3-cp310-cp310-linux_x86_64.whl", hash = "sha256:5cf381c5709838fd651404016aa9b77195abf6b2c2f6923ab3fe4473491d2326" },
 ]
 
 [package.metadata]
@@ -2669,7 +2669,7 @@ name = "torch-scatter"
 version = "2.1.2"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_scatter-2.1.2-cp310-cp310-linux_x86_64.whl" }
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_scatter-2.1.2-cp310-cp310-linux_x86_64.whl", hash = "sha256:364018649cc30198e1c5695aa699b22de2fa341bbb0f761f51c7f1290d8dddc9" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_scatter-2.1.2-cp310-cp310-linux_x86_64.whl", hash = "sha256:2303846b4efc39ced5ce33529cfc436e4d3ba6c2865321bbd2270352cc8b7777" },
 ]
 
 [package.metadata]
@@ -2687,7 +2687,7 @@ dependencies = [
     { name = "scipy" },
 ]
 wheels = [
-    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl", hash = "sha256:043bc91e10aad4665cad11a5a297a450719623b507923a78352c28f94616b706" },
+    { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl", hash = "sha256:8a8955ff4ec561173e864c4b96e684f81cbceb6b2239957bc4b708f1c901f6e7" },
 ]
 
 [package.metadata]

@@ -1,6 +1,7 @@
 """Verify that uv.lock pins the exact native release artifacts."""
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -37,6 +38,19 @@ def main() -> None:
     if len(records) != 9 or len(records) != len(manifest["wheels"]):
         raise SystemExit("native wheel manifest must contain nine unique distributions")
 
+    expected_files = {
+        record["filename"] for record in manifest["wheels"]
+    } | {args.manifest.name, "SHA256SUMS"}
+    actual_files = {
+        path.name for path in args.manifest.parent.iterdir() if path.is_file()
+    }
+    if actual_files != expected_files:
+        raise SystemExit(
+            "wheelhouse contents do not match the manifest: "
+            f"missing={sorted(expected_files - actual_files)}, "
+            f"unexpected={sorted(actual_files - expected_files)}"
+        )
+
     project_sources = {
         canonical(name): source
         for name, source in project["tool"]["uv"]["sources"].items()
@@ -48,6 +62,11 @@ def main() -> None:
 
     for record in manifest["wheels"]:
         distribution = canonical(record["distribution"])
+        artifact = args.manifest.parent / record["filename"]
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if digest != record["sha256"]:
+            raise SystemExit(f"artifact hash mismatch for {record['filename']}")
+
         project_url = project_sources[distribution]["url"]
         if unquote(Path(urlparse(project_url).path).name) != record["filename"]:
             raise SystemExit(

@@ -9,7 +9,7 @@ on:
         default: cu126-torch2.10-cp310
         type: string
       publish:
-        description: Publish the verified wheel set as a public prerelease
+        description: Publish the staged wheel set as a public prerelease
         required: true
         default: false
         type: boolean
@@ -23,7 +23,9 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
+    if: >-
+      github.repository == 'DeepLearnPhysics/particle-imaging-models' &&
+      inputs.publish == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -105,7 +107,9 @@ jobs:
 
   release:
     needs: build
-    if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
+    if: >-
+      github.repository == 'DeepLearnPhysics/particle-imaging-models' &&
+      inputs.publish == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,10 +125,6 @@ jobs:
 
       - name: Verify checksums
         run: cd wheelhouse && sha256sum --check SHA256SUMS
-
-      - name: Verify lock matches release assets
-        if: inputs.publish
-        run: python .github/scripts/verify_native_wheel_lock.py wheelhouse/native-wheels-manifest.json
 
       - name: Create or update draft release
         env:
@@ -157,10 +157,46 @@ jobs:
             wheelhouse/native-wheels-manifest.json \
             --clobber
 
-      - name: Publish compatibility prerelease
-        if: inputs.publish
+  publish:
+    if: >-
+      github.repository == 'DeepLearnPhysics/particle-imaging-models' &&
+      inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+
+      - name: Select compatibility release
+        env:
+          STACK: ${{ inputs.stack }}
+        run: |
+          config=".github/scripts/native-wheels.json"
+          selected="$(jq -cer --arg id "$STACK" \
+            '[.stacks[] | select(.id == $id)] | if length == 1 then .[0] else error("unknown stack") end' \
+            "$config")"
+          echo "TAG=$(jq -r .release_tag <<< "$selected")" >> "$GITHUB_ENV"
+
+      - name: Download staged wheelhouse
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="$(python -c 'import json; print(json.load(open("wheelhouse/native-wheels-manifest.json"))["release_tag"])')"
-          gh release edit "$TAG" --draft=false --prerelease
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$draft" != true ]; then
+            echo "release $TAG is not a draft" >&2
+            exit 1
+          fi
+          mkdir wheelhouse
+          gh release download "$TAG" --dir wheelhouse
+
+      - name: Verify checksums
+        run: cd wheelhouse && sha256sum --check SHA256SUMS
+
+      - name: Verify lock matches release assets
+        run: python .github/scripts/verify_native_wheel_lock.py wheelhouse/native-wheels-manifest.json
+
+      - name: Publish compatibility prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false --prerelease
