@@ -82,7 +82,7 @@ def overfit_process(
         "--train.config", "tests/tiny_semseg",
         "--train.no-code-copy",
         "--",
-        "epoch=60",
+        "epoch=100",
         "data.train.data_root=" + str(pilarnet_mini_root),
         "data.train.max_len=4",
         "data.val.data_root=" + str(pilarnet_mini_root),

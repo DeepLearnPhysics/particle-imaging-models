@@ -52,4 +52,7 @@ def check_overfit(
     assert validation_losses, "No validation losses found"
     assert validation_accuracies, "No validation metrics found"
     assert validation_losses[-1] <= max_final_loss
-    assert validation_accuracies[-1] >= min_validation_accuracy
+    assert validation_accuracies[-1] >= min_validation_accuracy, (
+        f"final validation accuracy {validation_accuracies[-1]} is below "
+        f"{min_validation_accuracy}"
+    )
