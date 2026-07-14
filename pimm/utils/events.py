@@ -38,6 +38,30 @@ __all__ = [
 ]
 
 _CURRENT_STORAGE_STACK = []
+WANDB_STEP_METRIC = "train/global_step"
+
+
+def _define_wandb_metrics(run):
+    """Use optimizer progress as the x-axis without reusing W&B's history step."""
+    run.define_metric(WANDB_STEP_METRIC, hidden=True)
+    run.define_metric("*", step_metric=WANDB_STEP_METRIC)
+
+
+def _wandb_log(run, data, train_step):
+    """Append one chronological W&B row carrying its semantic training step."""
+    train_step = int(train_step)
+    if int(run.step) < train_step:
+        # Fresh runs historically used the one-based optimizer iteration as
+        # W&B's internal step. Add one metric-free anchor so new runs retain
+        # that axis without coupling subsequent history writes to it.
+        run.log(
+            {WANDB_STEP_METRIC: train_step - 1},
+            step=train_step - 1,
+            commit=True,
+        )
+    payload = dict(data)
+    payload[WANDB_STEP_METRIC] = train_step
+    run.log(payload)
 
 
 def get_event_storage():
@@ -674,11 +698,13 @@ class WandbWriter(EventWriter):
             **kwargs
         }
         self._last_write = -1
+        self.run = None
 
     def _initialize_wandb(self):
         """Initialize W&B lazily when the first metrics are written."""
         if not self._wandb_initialized:
-            wandb.init(**self._wandb_kwargs)
+            self.run = wandb.init(**self._wandb_kwargs)
+            _define_wandb_metrics(self.run)
             self._wandb_initialized = True
 
     def write(self):
@@ -688,19 +714,17 @@ class WandbWriter(EventWriter):
         if not self._wandb_initialized:
             self._initialize_wandb()
             
-        new_last_write = self._last_write
+        rows = defaultdict(dict)
         for k, (v, iter) in storage.latest_with_smoothing_hint(
             self._window_size
         ).items():
             if iter > self._last_write:
-                wandb.log({k: v}, step=iter)
-                new_last_write = max(new_last_write, iter)
-        self._last_write = new_last_write
+                rows[iter][k] = v
         
         # Log images if present
         if len(storage._vis_data) >= 1:
             for img_name, img, step_num in storage._vis_data:
-                wandb.log({img_name: wandb.Image(img)}, step=step_num)
+                rows[step_num][img_name] = wandb.Image(img)
             # Storage stores all image data and rely on this writer to clear them.
             # As a result it assumes only one writer will use its image data.
             # An alternative design is to let storage store limited recent
@@ -716,10 +740,14 @@ class WandbWriter(EventWriter):
                     data = np.zeros(len(params.get("bucket_counts", [])))
                     for i, count in enumerate(params.get("bucket_counts", [])):
                         data[i] = count
-                    wandb.log({tag: wandb.Histogram(
+                    rows[params.get("global_step")][tag] = wandb.Histogram(
                         np_histogram=(data, params.get("bucket_limits", [])),
-                    )}, step=params.get("global_step"))
+                    )
             storage.clear_histograms()
+
+        for train_step in sorted(rows):
+            _wandb_log(self.run, rows[train_step], train_step)
+            self._last_write = max(self._last_write, train_step)
 
     def close(self):
         """Finish the active W&B run if this writer initialized one."""
@@ -776,25 +804,84 @@ class WandbSummaryWriter:
                 remain local to the current run.
             **kwargs: Additional arguments passed to wandb.init
         """
+        if wandb is None:
+            raise ImportError(
+                "WandbSummaryWriter requires the training environment; "
+                "run `uv sync --all-extras --locked`"
+            )
+
         self.run = None
         self.step_offset = int(step_offset or 0)
-        if not wandb.run:
-            if log_dir:
-                kwargs.setdefault('dir', log_dir)
-            if comment:
-                kwargs.setdefault('notes', comment)
-            if 'config' in kwargs:
-                kwargs['config'] = _to_serializable(kwargs['config'])
-            self.run = wandb.init(**kwargs)
-        else:
-            self.run = wandb.run
-            
+        if log_dir:
+            kwargs.setdefault('dir', log_dir)
+        if comment:
+            kwargs.setdefault('notes', comment)
+        if 'config' in kwargs:
+            kwargs['config'] = _to_serializable(kwargs['config'])
+        self._wandb_kwargs = kwargs
         self.step = 0
+        self._pending_step = None
+        self._pending_data = {}
 
-    def _log_step(self, global_step=None):
-        """Return the W&B step after applying any resume offset."""
+    def _ensure_initialized(self):
+        """Initialize only after checkpoint loading has selected the resume mode."""
+        if self.run is not None:
+            return self.run
+        if wandb.run is not None:
+            if "resume_from" in self._wandb_kwargs:
+                raise RuntimeError(
+                    "Cannot rewind a W&B run after another run is already active. "
+                    "CheckpointLoader must run before any W&B logging."
+                )
+            self.run = wandb.run
+        else:
+            self.run = wandb.init(**self._wandb_kwargs)
+        _define_wandb_metrics(self.run)
+        return self.run
+
+    def resume_from_checkpoint(self, state):
+        """Configure W&B to rewind to the next history row saved in a checkpoint."""
+        if self.run is not None:
+            raise RuntimeError(
+                "Cannot configure W&B checkpoint resume after logging has started."
+            )
+        run_id = state.get("run_id")
+        resume_step = state.get("resume_step")
+        if not run_id or resume_step is None:
+            raise ValueError(
+                "W&B checkpoint state requires both run_id and resume_step."
+            )
+        for incompatible in ("id", "resume", "fork_from"):
+            self._wandb_kwargs.pop(incompatible, None)
+        self._wandb_kwargs["resume_from"] = (
+            f"{run_id}?_step={int(resume_step)}"
+        )
+
+    def checkpoint_state(self):
+        """Return the run ID and next internal W&B history step."""
+        self.flush()
+        run = self._ensure_initialized()
+        return {
+            "run_id": run.id,
+            "resume_step": int(run.step),
+        }
+
+    def _train_step(self, global_step=None):
+        """Return the semantic optimizer step after applying any configured offset."""
         step = self.step if global_step is None else global_step
         return int(step) + self.step_offset
+
+    def log(self, data, global_step=None):
+        """Collect W&B data into one history row per optimizer step."""
+        train_step = self._train_step(global_step)
+        self._ensure_initialized()
+        if self._pending_step is not None and train_step != self._pending_step:
+            self.flush()
+        if self._pending_step is None:
+            self._pending_step = train_step
+        self._pending_data.update(data)
+        if global_step is None:
+            self.step += 1
     
     def add_scalar(
         self,
@@ -806,10 +893,7 @@ class WandbSummaryWriter:
         double_precision=False,
     ):
         """Log a scalar value."""
-        step = self._log_step(global_step)
-        wandb.log({tag: scalar_value}, step=step)
-        if global_step is None:
-            self.step += 1
+        self.log({tag: scalar_value}, global_step)
     
     def add_scalars(
         self,
@@ -819,12 +903,9 @@ class WandbSummaryWriter:
         walltime=None
     ):
         """Log multiple scalars at once."""
-        step = self._log_step(global_step)
         log_dict = {f"{main_tag}/{tag}": value 
                    for tag, value in tag_scalar_dict.items()}
-        wandb.log(log_dict, step=step)
-        if global_step is None:
-            self.step += 1
+        self.log(log_dict, global_step)
     
     def add_histogram(
         self,
@@ -836,14 +917,10 @@ class WandbSummaryWriter:
         max_bins=None,
     ):
         """Log a histogram."""
-        step = self._log_step(global_step)
-        
         if isinstance(values, torch.Tensor):
             values = values.detach().cpu().numpy()
-            
-        wandb.log({tag: wandb.Histogram(values)}, step=step)
-        if global_step is None:
-            self.step += 1
+
+        self.log({tag: wandb.Histogram(values)}, global_step)
     
     def add_image(
         self,
@@ -854,14 +931,13 @@ class WandbSummaryWriter:
         dataformats="CHW"
     ):
         """Log an image."""
-        step = self._log_step(global_step)
-        
         if isinstance(img_tensor, torch.Tensor):
             img_tensor = img_tensor.detach().cpu().numpy()
-            
-        wandb.log({tag: wandb.Image(img_tensor, dataformats=dataformats)}, step=step)
-        if global_step is None:
-            self.step += 1
+
+        self.log(
+            {tag: wandb.Image(img_tensor, dataformats=dataformats)},
+            global_step,
+        )
     
     def add_images(
         self,
@@ -872,20 +948,21 @@ class WandbSummaryWriter:
         dataformats="NCHW"
     ):
         """Log multiple images."""
-        step = self._log_step(global_step)
-        
         if isinstance(img_tensor, torch.Tensor):
             img_tensor = img_tensor.detach().cpu().numpy()
-            
+
         if dataformats == "NCHW":
             # Convert to a list of images
             images = [img for img in img_tensor]
-            wandb.log({tag: [wandb.Image(img, dataformats="CHW") for img in images]}, step=step)
+            data = {tag: [wandb.Image(img, dataformats="CHW") for img in images]}
         else:
-            wandb.log({tag: [wandb.Image(img, dataformats=dataformats) for img in img_tensor]}, step=step)
-            
-        if global_step is None:
-            self.step += 1
+            data = {
+                tag: [
+                    wandb.Image(img, dataformats=dataformats)
+                    for img in img_tensor
+                ]
+            }
+        self.log(data, global_step)
     
     def add_figure(
         self,
@@ -896,15 +973,10 @@ class WandbSummaryWriter:
         walltime=None,
     ):
         """Log a matplotlib figure."""
-        step = self._log_step(global_step)
-        
-        wandb.log({tag: wandb.Image(figure)}, step=step)
+        self.log({tag: wandb.Image(figure)}, global_step)
         
         if close:
             plt.close(figure)
-            
-        if global_step is None:
-            self.step += 1
     
     def add_text(
         self,
@@ -914,12 +986,7 @@ class WandbSummaryWriter:
         walltime=None
     ):
         """Log text."""
-        step = self._log_step(global_step)
-        
-        wandb.log({tag: wandb.Html(f"<pre>{text_string}</pre>")}, step=step)
-        
-        if global_step is None:
-            self.step += 1
+        self.log({tag: wandb.Html(f"<pre>{text_string}</pre>")}, global_step)
     
     def add_video(
         self,
@@ -930,16 +997,11 @@ class WandbSummaryWriter:
         walltime=None
     ):
         """Log a video."""
-        step = self._log_step(global_step)
-        
         if isinstance(vid_tensor, torch.Tensor):
             vid_tensor = vid_tensor.detach().cpu().numpy()
-            
+
         # wandb expects [time, channels, height, width]
-        wandb.log({tag: wandb.Video(vid_tensor, fps=fps)}, step=step)
-        
-        if global_step is None:
-            self.step += 1
+        self.log({tag: wandb.Video(vid_tensor, fps=fps)}, global_step)
     
     def add_embedding(
         self,
@@ -951,25 +1013,20 @@ class WandbSummaryWriter:
         metadata_header=None,
     ):
         """Log embeddings - use wandb.plot.scatter for this functionality"""
-        step = self._log_step(global_step)
-        
         if isinstance(mat, torch.Tensor):
             mat = mat.detach().cpu().numpy()
-            
+
         # Create a custom 2D/3D scatter plot in wandb
         if mat.shape[1] > 3:
             # If high-dimensional, log a simple message
-            wandb.log({f"{tag}_embedding_logged": True}, step=step)
+            self.log({f"{tag}_embedding_logged": True}, global_step)
             print(f"Note: High-dimensional embeddings ({mat.shape[1]}D) aren't visualized directly in wandb.")
             print("Consider using UMAP or t-SNE to reduce to 2D/3D before logging.")
         else:
             # Basic table with embeddings
             data = [[idx] + list(row) for idx, row in enumerate(mat)]
             table = wandb.Table(columns=["id"] + [f"dim_{i}" for i in range(mat.shape[1])], data=data)
-            wandb.log({tag: table}, step=step)
-        
-        if global_step is None:
-            self.step += 1
+            self.log({tag: table}, global_step)
 
     def add_pr_curve(
         self,
@@ -1009,24 +1066,31 @@ class WandbSummaryWriter:
     ):
         """Log hyperparameters and metrics"""
         # wandb tracks hyperparameters automatically through config
+        self._ensure_initialized()
         for key, value in hparam_dict.items():
             self.run.config[key] = value
-            
+
         # Log metrics
-        step = self._log_step(global_step)
-        wandb.log(metric_dict, step=step)
-        
-        if global_step is None:
-            self.step += 1
+        self.log(metric_dict, global_step)
             
     def flush(self):
-        """Flush is automatically handled by wandb"""
-        pass
+        """Commit the accumulated optimizer-step row to W&B."""
+        if self._pending_step is None:
+            return
+        _wandb_log(self._ensure_initialized(), self._pending_data, self._pending_step)
+        self._pending_step = None
+        self._pending_data = {}
+
+    def flush_step(self):
+        """Commit the current optimizer-step row at a trainer boundary."""
+        self.flush()
     
     def close(self):
         """Finish logging (optional, wandb handles this automatically)"""
         if self.run:
+            self.flush()
             wandb.finish()
+            self.run = None
             
     def __enter__(self):
         """Enter a SummaryWriter-compatible context."""

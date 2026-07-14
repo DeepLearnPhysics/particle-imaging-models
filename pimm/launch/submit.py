@@ -192,8 +192,7 @@ def build_attempts(cfg: dict[str, Any], run_name: str) -> list[Attempt]:
             job_cfg.setdefault("train", {})["resume"] = (
                 existing_resume or resume_first or job_index > 1
             )
-            wandb_name = f"{base_wandb_name}-job{job_index:04d}"
-            job_cfg.setdefault("run", {})["wandb_name"] = wandb_name
+            job_cfg.setdefault("run", {})["wandb_name"] = base_wandb_name
             options = job_cfg.setdefault("train", {}).setdefault("options", {})
             options["wandb_group"] = chain_cfg.get("wandb_group") or run_name
             options["wandb_job_type"] = chain_cfg.get("wandb_job_type", "train-job")

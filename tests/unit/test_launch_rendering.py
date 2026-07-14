@@ -90,3 +90,21 @@ def test_nersc_shifter_rendering():
     assert "--module=gpu,nccl-plugin" in script
     assert "--volume=/work/pimm:/opt/pimm/src" in script
     assert "-p /opt/pimm/.venv/bin/python" in script
+
+
+def test_chain_attempts_share_one_wandb_run_name():
+    cfg = _config(
+        "slurm",
+        executor="batch",
+        python="/work/.venv/bin/python",
+    )
+    cfg.setdefault("chain", {})["jobs"] = 2
+
+    attempts = _manifest(cfg)["attempts"]
+
+    assert attempts[0]["resume"] is False
+    assert attempts[1]["resume"] is True
+    assert attempts[0]["wandb_name"] == "slurm-render"
+    assert attempts[1]["wandb_name"] == "slurm-render"
+    assert "wandb_job_index=1" in attempts[0]["script"]
+    assert "wandb_job_index=2" in attempts[1]["script"]

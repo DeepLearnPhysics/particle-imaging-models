@@ -363,7 +363,84 @@ def local_object_state(state, *, strict=True):
     return states[rank]
 
 
-def build_checkpoint_payload(trainer, *, distributed_rng=False):
+def build_logger_state(
+    trainer,
+    *,
+    checkpoint_global_step=None,
+    initialize_wandb=False,
+):
+    """Build checkpointable logging state, using the active W&B run when present."""
+    use_wandb = bool(_cfg_get(trainer.cfg, "use_wandb", False))
+    wandb_state = {
+        "group": _cfg_get(trainer.cfg, "wandb_group", None),
+        "run_name": _cfg_get(trainer.cfg, "wandb_run_name", None),
+        "run_id": _cfg_get(trainer.cfg, "wandb_run_id", None),
+        "job_type": _cfg_get(trainer.cfg, "wandb_job_type", None),
+        "resume": _cfg_get(trainer.cfg, "wandb_resume", None),
+        "resume_step": None,
+        "step_metric": "train/global_step",
+        "step_offset": _cfg_get(trainer.cfg, "log_step_offset", 0),
+        "checkpoint_global_step": checkpoint_global_step,
+    }
+    if use_wandb and initialize_wandb:
+        writer = getattr(trainer, "writer", None)
+        local_state = None
+        if is_main_process() and writer is not None:
+            checkpoint_state = getattr(writer, "checkpoint_state", None)
+            if checkpoint_state is not None:
+                local_state = checkpoint_state()
+        gathered = comm.all_gather(local_state)
+        active_state = next((state for state in gathered if state is not None), None)
+        if active_state is None:
+            raise RuntimeError(
+                "W&B checkpointing requires the main process writer to expose "
+                "checkpoint_state()."
+            )
+        wandb_state.update(active_state)
+    return {
+        "backend": "wandb" if use_wandb else "tensorboard",
+        "wandb": wandb_state,
+    }
+
+
+def configure_logger_from_checkpoint(trainer, checkpoint):
+    """Configure the lazy W&B writer to rewind to checkpoint history state."""
+    if not _cfg_get(trainer.cfg, "use_wandb", False):
+        return
+    writer = getattr(trainer, "writer", None)
+    configure_resume = getattr(writer, "resume_from_checkpoint", None)
+    if configure_resume is None:
+        return
+
+    logger_state = checkpoint.get("logger", {})
+    wandb_state = logger_state.get("wandb", {}) if isinstance(logger_state, dict) else {}
+    if not isinstance(wandb_state, dict):
+        wandb_state = {}
+    run_id = wandb_state.get("run_id", checkpoint.get("wandb_run_id"))
+    resume_step = wandb_state.get(
+        "resume_step",
+        checkpoint.get("wandb_resume_step"),
+    )
+    if run_id and resume_step is not None:
+        configure_resume({"run_id": run_id, "resume_step": resume_step})
+        return
+    if resume_step is not None:
+        raise ValueError(
+            "Checkpoint contains a W&B resume_step without a W&B run_id."
+        )
+    trainer.logger.warning(
+        "Checkpoint has no W&B rewind state; falling back to configured W&B "
+        "resume behavior. Optimizer steps replayed after rollback may appear "
+        "more than once."
+    )
+
+
+def build_checkpoint_payload(
+    trainer,
+    *,
+    distributed_rng=False,
+    initialize_logger=False,
+):
     """Build the structured checkpoint payload consumed by checkpoint loads."""
     train_state = TrainState.from_trainer(trainer)
     local_dataloader_state = dataloader_state_dict(trainer.train_loader)
@@ -401,18 +478,11 @@ def build_checkpoint_payload(trainer, *, distributed_rng=False):
         if torch.distributed.is_available() and torch.distributed.is_initialized()
         else None
     )
-    logger_state = {
-        "backend": "wandb" if getattr(trainer.cfg, "use_wandb", False) else "tensorboard",
-        "wandb": {
-            "group": trainer.cfg.get("wandb_group", None),
-            "run_name": trainer.cfg.get("wandb_run_name", None),
-            "run_id": trainer.cfg.get("wandb_run_id", None),
-            "job_type": trainer.cfg.get("wandb_job_type", None),
-            "resume": trainer.cfg.get("wandb_resume", None),
-            "step_offset": trainer.cfg.get("log_step_offset", 0),
-            "checkpoint_global_step": train_state.global_step,
-        },
-    }
+    logger_state = build_logger_state(
+        trainer,
+        checkpoint_global_step=train_state.global_step,
+        initialize_wandb=initialize_logger,
+    )
     return {
         "schema": "pimm.trainer_checkpoint",
         "version": 3,
@@ -789,7 +859,11 @@ class CheckpointManager:
     def save_epoch_checkpoint(self, *, is_best=False, step_count=0, save_freq=None):
         """Save an epoch/metric-oriented checkpoint. Must run on all ranks."""
         fmt = self._checkpoint_format()
-        payload = build_checkpoint_payload(self.trainer, distributed_rng=True)
+        payload = build_checkpoint_payload(
+            self.trainer,
+            distributed_rng=True,
+            initialize_logger=True,
+        )
         self._write_checkpoint(
             payload,
             fmt=fmt,
@@ -810,7 +884,11 @@ class CheckpointManager:
     ):
         """Save an iteration-oriented checkpoint. Must run on all ranks."""
         fmt = self._checkpoint_format(backend)
-        payload = build_checkpoint_payload(self.trainer, distributed_rng=True)
+        payload = build_checkpoint_payload(
+            self.trainer,
+            distributed_rng=True,
+            initialize_logger=True,
+        )
         self._write_checkpoint(
             payload,
             fmt=fmt,
@@ -970,6 +1048,7 @@ class CheckpointManager:
 
     def resume_training_state(self, checkpoint):
         """Restore structured or legacy optimizer, scheduler, RNG, and cursor state."""
+        configure_logger_from_checkpoint(self.trainer, checkpoint)
         strict_state = self.trainer.cfg.get("resume_strict_state", True)
         iter_per_epoch = len(self.trainer.train_loader)
 

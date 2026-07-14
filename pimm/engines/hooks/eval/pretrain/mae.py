@@ -256,10 +256,13 @@ class MAEEvaluator(HookBase):
             recon_pointcloud = np.hstack([recon_combined, recon_colors])
 
             # log to wandb
-            self.trainer.writer.run.log({
-                "val/pointcloud_gt": wandb.Object3D(gt_pointcloud),
-                "val/pointcloud_recon": wandb.Object3D(recon_pointcloud),
-            })
+            self.trainer.writer.log(
+                {
+                    "val/pointcloud_gt": wandb.Object3D(gt_pointcloud),
+                    "val/pointcloud_recon": wandb.Object3D(recon_pointcloud),
+                },
+                _get_writer_step(self.trainer),
+            )
 
             self.trainer.logger.info("Logged point cloud visualizations to wandb")
 

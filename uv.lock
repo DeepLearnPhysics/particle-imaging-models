@@ -1742,7 +1742,7 @@ train = [
     { name = "torch-sparse", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl" },
     { name = "torchdata", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.25.0", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "wandb", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "wandb", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.17.1" },
 ]
 
 [[package]]

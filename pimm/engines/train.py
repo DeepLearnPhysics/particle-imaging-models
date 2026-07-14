@@ -146,6 +146,7 @@ class TrainerBase:
 
     def before_step(self):
         """Call hooks before consuming the current batch."""
+        self._flush_writer_step()
         for h in self.hooks:
             h.before_step()
 
@@ -162,7 +163,17 @@ class TrainerBase:
         """Call epoch-end hooks and reset per-epoch event histories."""
         for h in self.hooks:
             h.after_epoch()
+        self._flush_writer_step()
         self.storage.reset_histories()
+
+    def _flush_writer_step(self):
+        """Commit a writer row after all metrics for its optimizer step exist."""
+        if not comm.is_main_process():
+            return
+        writer = getattr(self, "writer", None)
+        flush_step = getattr(writer, "flush_step", None)
+        if flush_step is not None:
+            flush_step()
 
     def after_train(self):
         """Synchronize workers, call final hooks, and close the writer."""
@@ -409,6 +420,7 @@ class Trainer(TrainerBase):
         """Run epoch-end hooks, clear histories, and optionally empty CUDA cache."""
         for h in self.hooks:
             h.after_epoch()
+        self._flush_writer_step()
         self.storage.reset_histories()
         if self.cfg.empty_cache_per_epoch:
             torch.cuda.empty_cache()

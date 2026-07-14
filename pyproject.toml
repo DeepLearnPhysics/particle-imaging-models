@@ -18,7 +18,7 @@ dependencies = [
 train = [
     "h5py; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tensorboardx; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "wandb; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "wandb>=0.17.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "einops; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "termcolor; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "matplotlib; sys_platform == 'linux' and platform_machine == 'x86_64'",

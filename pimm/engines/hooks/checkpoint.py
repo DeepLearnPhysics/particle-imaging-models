@@ -9,6 +9,18 @@ from .builder import HOOKS
 from .default import HookBase
 
 
+def _is_last_epoch_step(trainer):
+    """Return whether the current optimizer step finishes its epoch."""
+    current_iter = int(trainer.comm_info.get("iter", -1)) + 1
+    iter_per_epoch = trainer.comm_info.get("iter_per_epoch")
+    if iter_per_epoch is None:
+        try:
+            iter_per_epoch = len(trainer.train_loader)
+        except TypeError:
+            return False
+    return current_iter >= int(iter_per_epoch)
+
+
 @HOOKS.register_module()
 class CheckpointSaver(HookBase):
     """Save epoch/metric-oriented checkpoints during and after training.
@@ -67,6 +79,7 @@ class CheckpointSaver(HookBase):
     def before_train(self):
         """Seed internal step count from resumed trainer progress."""
         self.checkpoint_manager = CheckpointManager(self.trainer)
+        self._pending_epoch_save = None
         self.step_count = int(getattr(self.trainer, "global_step", 0) or (
             self.trainer.start_epoch * len(self.trainer.train_loader)
             + self.trainer.start_iter
@@ -120,12 +133,25 @@ class CheckpointSaver(HookBase):
         if not is_eval_step and not is_save_step:
             return
         is_best = self._update_best(is_eval_step)
-        # Called on ALL ranks: a standard-format save is a collective op.
-        self.checkpoint_manager.save_epoch_checkpoint(
+        save_kwargs = dict(
             is_best=is_best,
             step_count=self.step_count,
             save_freq=self.save_freq,
         )
+        if _is_last_epoch_step(self.trainer):
+            # Let after-epoch loggers add their metrics to the same W&B row
+            # before checkpoint_state() commits it and records the rewind cursor.
+            self._pending_epoch_save = save_kwargs
+            return
+        # Called on ALL ranks: a standard-format save is a collective op.
+        self.checkpoint_manager.save_epoch_checkpoint(**save_kwargs)
+
+    def after_epoch(self):
+        """Save a last-step checkpoint after epoch-end metrics are logged."""
+        if self._pending_epoch_save is None:
+            return
+        self.checkpoint_manager.save_epoch_checkpoint(**self._pending_epoch_save)
+        self._pending_epoch_save = None
 
     def after_train(self):
         """Persist a final checkpoint when training finishes."""
@@ -279,6 +305,7 @@ class CheckpointSaverIteration(HookBase):
     def before_train(self):
         """Seed internal step count from resumed trainer progress."""
         self.checkpoint_manager = CheckpointManager(self.trainer)
+        self._pending_epoch_save = None
         self.step_count = int(getattr(self.trainer, "global_step", 0) or (
             self.trainer.start_epoch * len(self.trainer.train_loader)
             + self.trainer.start_iter
@@ -319,13 +346,26 @@ class CheckpointSaverIteration(HookBase):
         if is_main_process():
             self.trainer.logger.info(f"Saving checkpoint at global step {self.step_count}")
         is_best = self._update_best()
-        self.checkpoint_manager.save_iteration_checkpoint(
+        save_kwargs = dict(
             backend=self.backend,
             is_best=is_best,
             step_count=self.step_count,
             save_freq=self.save_freq,
             save_iter_checkpoints=self.save_iter_checkpoints,
         )
+        if _is_last_epoch_step(self.trainer):
+            self._pending_epoch_save = save_kwargs
+            return
+        self.checkpoint_manager.save_iteration_checkpoint(**save_kwargs)
+
+    def after_epoch(self):
+        """Save a last-step checkpoint after epoch-end metrics are logged."""
+        if self._pending_epoch_save is None:
+            return
+        self.checkpoint_manager.save_iteration_checkpoint(
+            **self._pending_epoch_save,
+        )
+        self._pending_epoch_save = None
 
     def after_train(self):
         """Persist a final checkpoint after the last training step."""
