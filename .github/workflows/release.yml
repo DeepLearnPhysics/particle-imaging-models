@@ -216,20 +216,56 @@ jobs:
       - tag
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       actions: write
       contents: read
     steps:
       - name: Dispatch versioned images
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           gh workflow run docker.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$TAG" \
             -f "ref=$TAG" \
             -f "tag=$TAG"
+
+      - name: Wait for versioned images
+        env:
+          DISPATCHED_AT: ${{ steps.dispatch.outputs.started }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          for attempt in $(seq 1 30); do
+            runs="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow docker.yml \
+              --event workflow_dispatch \
+              --commit "$RELEASE_SHA" \
+              --limit 20 \
+              --json databaseId,createdAt,headSha)"
+            run_id="$(jq -r \
+              --arg sha "$RELEASE_SHA" \
+              --arg started "$DISPATCHED_AT" \
+              '[.[] | select(.headSha == $sha and .createdAt >= $started)]
+               | sort_by(.createdAt)
+               | last
+               | .databaseId // empty' <<< "$runs")"
+            if [ -n "$run_id" ]; then
+              gh run watch "$run_id" \
+                --repo "$GITHUB_REPOSITORY" \
+                --interval 30 \
+                --exit-status
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "could not find the dispatched Docker workflow" >&2
+          exit 1
 
   publish:
     needs:
