@@ -14,13 +14,16 @@ import spconv.pytorch as spconv
 import torch_scatter
 from timm.layers import DropPath
 
-from pimm.models.utils.attention import flash_attn_varlen_qkvpacked_func
-
 # from pimm.models.point_prompt_training import PDNorm
 from pimm.models.builder import MODELS
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
 from pimm.models.modules import PointModule, PointSequential
+
+try:
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+except ImportError:
+    flash_attn_varlen_qkvpacked_func = None
 
 
 class RPE(torch.nn.Module):

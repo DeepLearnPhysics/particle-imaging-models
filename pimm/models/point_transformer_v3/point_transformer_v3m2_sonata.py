@@ -15,12 +15,15 @@ from addict import Dict
 from timm.layers import DropPath
 from torch.nn.init import trunc_normal_
 
-from pimm.models.utils.attention import flash_attn_varlen_qkvpacked_func
-
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModule, PointSequential
 from pimm.models.utils.misc import offset2bincount, offset2batch
 from pimm.models.utils.structure import Point
+
+try:
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+except ImportError:
+    flash_attn_varlen_qkvpacked_func = None
 
 
 class LayerScale(nn.Module):

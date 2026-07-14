@@ -16,12 +16,15 @@ from addict import Dict
 from timm.layers import DropPath
 from torch.nn.init import trunc_normal_
 
-from pimm.models.utils.attention import flash_attn_varlen_func
-
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModule, PointSequential
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 
 class Point3DRoPE(nn.Module):

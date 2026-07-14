@@ -17,7 +17,11 @@ from timm.layers import DropPath, Mlp
 from timm.models.vision_transformer import LayerScale
 
 from pimm.models.losses.chamfer import chamfer_distance
-from pimm.models.utils.attention import flash_attn_varlen_qkvpacked_func
+
+try:
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+except ImportError:
+    flash_attn_varlen_qkvpacked_func = None
 
 
 # ---------------------------------------------------------------------------

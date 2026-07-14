@@ -12,9 +12,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from pimm.models.utils.attention import flash_attn_varlen_func
-
 from timm.layers import DropPath
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 
 class LayerScale(nn.Module):
@@ -543,4 +546,3 @@ class Block(nn.Module):
             q += self.drop_path(self.ls3(self.mlp(q)))
             q = self.norm3(q.float()).to(q.dtype)
         return q, mask_logits, mask_embed, mask_point_proj
-

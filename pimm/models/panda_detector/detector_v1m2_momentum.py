@@ -6,11 +6,14 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from pimm.models.utils.attention import flash_attn_varlen_func
-
 import torch.nn.functional as F
 import torch_scatter
 from timm.layers import DropPath, trunc_normal_
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 from pimm.models.builder import MODELS, build_model
 from pimm.models.losses import build_criteria

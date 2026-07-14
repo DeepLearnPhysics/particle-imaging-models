@@ -34,9 +34,13 @@ from torch.nn.init import trunc_normal_
 
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModel, PointModule, PointSequential
-from pimm.models.utils.attention import flash_attn_varlen_qkvpacked_func
 from pimm.models.utils.structure import Point
 from pimm.utils.logger import get_logger
+
+try:
+    from flash_attn import flash_attn_varlen_qkvpacked_func
+except ImportError:
+    flash_attn_varlen_qkvpacked_func = None
 
 logger = get_logger(__name__)
 
