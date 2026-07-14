@@ -5,7 +5,7 @@ ARG CUDA_VERSION=12.6
 ARG CUDNN_VERSION=9
 FROM pytorch/pytorch:${TORCH_VERSION}-cuda${CUDA_VERSION}-cudnn${CUDNN_VERSION}-devel
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /opt/conda/bin/
 
 ARG TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0 8.6 8.9 9.0"
 ENV CUDA_HOME=/usr/local/cuda \
