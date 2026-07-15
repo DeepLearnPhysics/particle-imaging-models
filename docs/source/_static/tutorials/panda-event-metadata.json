@@ -1,0 +1,24 @@
+{
+  "dataset": "DeepLearnPhysics/PILArNet-M-mini",
+  "split": "test",
+  "revision": "v2",
+  "event": 0,
+  "num_points_after_transform": 1175,
+  "motif_counts": {
+    "Shower": 39,
+    "Track": 964,
+    "Michel": 18,
+    "Delta": 120,
+    "Low-energy deposit": 34
+  },
+  "pid_counts": {
+    "Photon": 0,
+    "Electron": 177,
+    "Muon": 947,
+    "Pion": 0,
+    "Proton": 17,
+    "None / LED": 34
+  },
+  "particle_instances": 10,
+  "interaction_instances": 4
+}

@@ -1,220 +1,233 @@
 # Installation
 
-pimm uses [uv](https://docs.astral.sh/uv/) for Python, dependency resolution, and the project environment.
-The exact dependency set is stored in `uv.lock` and is shared by local installs, container images, and documentation builds.
+**Outcome:** a locked pimm environment and a launcher dry run that succeeds
+without data or a GPU job.
 
-Clone the repository before choosing an installation path:
-
-```bash
-git clone https://github.com/DeepLearnPhysics/particle-imaging-models.git
-cd particle-imaging-models
-```
-
-## Prerequisites
-
-A full local training installation requires:
-
-- Linux on x86_64.
-- An NVIDIA GPU and a recent driver.
-
-That is all.
-The locked training stack uses PyTorch 2.10.0, torchvision 0.25.0, Python 3.10, and CUDA 12.6.
-All native extensions, including `torch-scatter`, `torch-sparse`, and `torch-cluster`, install as prebuilt RHEL 8-compatible wheels from pimm's compatibility release.
-No CUDA toolkit, host compiler, or system libraries are needed for installation.
-The installer does not invoke `sudo` or modify system packages.
-
-Rebuilding a native extension from source (an occasional maintainer task) does need the CUDA 12.6 toolkit and a compatible GCC/G++ host compiler.
-
-## Local uv environment
-
-Bootstrap everything (uv, the clone, and the environment) with one command:
+## Recommended: one-line installation
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-models/main/install.sh | bash
 ```
 
-Or run the installer from an existing checkout:
+This installs `uv` when necessary, clones pimm into
+`particle-imaging-models/`, runs `uv sync --locked`, then imports PyTorch and
+the native operators. Enter the checkout and use `uv run`; no shell activation
+is required:
 
 ```bash
-./install.sh
+cd particle-imaging-models
 ```
 
-### Manual installation
+Verify the command path and config resolution:
 
-The installer only chains the following commands; run them yourself for full control.
+```bash
+uv run pimm --help
+uv run pimm launch \
+  --train.config tests/tiny_semseg \
+  --resources.nproc-per-node 1 \
+  --dry-run
+```
 
-1. Clone the repository:
+Success is a rendered `torchrun` command or launch script and exit status 0.
+No dataset is opened and no training process starts.
+
+## Compatibility
+
+| Component | Supported path |
+|---|---|
+| Operating system | Linux x86-64 for the full training environment |
+| Python | 3.10 |
+| PyTorch | 2.10.0 from the lockfile |
+| CUDA runtime | 12.6, installed with PyTorch and the native wheels |
+| Host requirement | NVIDIA driver compatible with the CUDA 12.6 runtime |
+| Package manager | `uv` 0.11.1 or newer |
+
+macOS can install the small launcher environment, but the CUDA training group
+and native sparse operators are Linux-only. A host CUDA toolkit and compiler are
+not required for the recommended installation because the extensions are
+prebuilt.
+
+### Supported GPUs
+
+pimm's prebuilt CUDA extensions cover NVIDIA compute capabilities 7.0 through
+9.0. The attention and automatic mixed precision (AMP) settings depend on the
+GPU:
+
+| GPU family | Compute capability | Flash Attention | Recommended AMP dtype |
+|---|---:|---|---|
+| V100 | 7.0 | Off | FP16 |
+| RTX 20xx | 7.5 | Off | FP16 |
+| A100 | 8.0 | On | BF16 |
+| RTX 30xx | 8.6 | On | BF16 |
+| RTX 40xx | 8.9 | On | BF16 |
+| L40S | 8.9 | Off | BF16 |
+| H100 / H200 | 9.0 | On | BF16 |
+
+For a V100 or RTX 20xx recipe that normally uses BF16, select FP16 instead:
+
+```bash
+-- enable_amp=True amp_dtype=float16
+```
+
+Full-precision training is also available with `enable_amp=False`. On a V100,
+RTX 20xx, or L40S, disable every `enable_flash` field in the selected recipe.
+For the Panda semantic-segmentation recipes that is:
+
+```bash
+-- model.backbone.enable_flash=False
+```
+
+Panda detector recipes have a second attention stack, so disable both fields:
+
+```bash
+-- model.backbone.enable_flash=False model.enable_flash=False
+```
+
+These are training-config overrides and therefore go after the bare `--` in a
+`pimm launch` or `pimm submit` command. Other model families may place the
+field elsewhere; search the selected config for `enable_flash` and turn off
+each occurrence.
+
+## Manual installation
+
+Use these steps when you want to manage the checkout yourself:
 
 ```bash
 git clone https://github.com/DeepLearnPhysics/particle-imaging-models.git
 cd particle-imaging-models
-```
-
-2. Install [uv](https://docs.astral.sh/uv/) with the official Astral installer:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source "$HOME/.local/bin/env"
-```
-
-3. Create `.venv` and install the prebuilt wheels recorded in `uv.lock` (uv also provides Python 3.10):
-
-```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh  # omit if uv is already installed
+source "$HOME/.local/bin/env"                    # omit if uv was already installed
 uv sync --locked
 ```
 
-4. Verify the CUDA packages and extensions import:
+Do not omit `--locked`: the lockfile, native wheels, PyTorch, and CUDA version
+form one tested environment. Use `uv lock --check` to diagnose a modified or
+out-of-date lockfile without changing it.
 
+## Container
+
+The published image contains the locked environment at `/opt/pimm/.venv`, but
+**not the source tree**. Run it from a pimm checkout so imports resolve to the
+code you have checked out.
+
+::::{tab-set}
+
+:::{tab-item} Apptainer
 ```bash
-uv run python -c "import cnms, pointgroup_ops, pointops, pointrope, pytorch3d_ops, serialize_cuda, spconv, torch, torch_cluster, torch_scatter, torch_sparse"
+apptainer pull pimm.sif \
+  docker://ghcr.io/deeplearnphysics/pimm:main
+
+apptainer exec --nv pimm.sif \
+  pimm launch --train.config tests/tiny_semseg --dry-run
 ```
 
-Run project commands through uv without activating the environment:
+Run this from the repository root. Apptainer normally binds and preserves the
+current working directory, so a separate `$PWD` to `/opt/pimm/src` bind is not
+needed. If your site disables the default current-directory bind, bind the
+checkout at the **same path** and set `--pwd` to that path.
+:::
 
+:::{tab-item} Docker
 ```bash
-uv run pimm launch --help
-uv run python scripts/pilarnet/download.py --help
+docker run --rm --gpus all \
+  -v "$PWD:$PWD" \
+  -w "$PWD" \
+  ghcr.io/deeplearnphysics/pimm:main \
+  pimm launch --train.config tests/tiny_semseg --dry-run
 ```
 
-You can also activate `.venv` and use `pimm` or `python` directly:
+Docker does not expose the host checkout by default, so it still needs a
+volume mount. The mount can remain at the checkout's host path; it does not
+need to be `/opt/pimm/src`.
+:::
 
-```bash
-source .venv/bin/activate
-pimm launch --help
-```
+::::
 
-### Flash attention
+Use `ghcr.io/deeplearnphysics/pimm-nersc` only for the NERSC/Perlmutter
+environment. For a published experiment, record the immutable image digest in
+the experiment metadata.
 
-Flash attention kernels ship inside PyTorch (`torch.nn.attention.varlen.varlen_attn`), so no separate flash-attn package is installed or compiled.
-Models select the fast path with `enable_flash=True` in their configs.
-On Volta and Turing GPUs (compute capabilities 7.0 and 7.5), configure models with `enable_flash=False` and disable BF16; pimm leaves those choices explicit rather than changing model or precision settings at runtime.
+When pimm itself launches a configured Singularity, Shifter, or Docker image,
+it mounts `paths.repo_root` at `container.repo_mount` automatically. The
+default in-container path is `/opt/pimm/src`; you do not add that bind to the
+launch command yourself.
 
-### Repeated installs
+## Launcher-only hosts
 
-Installs pull prebuilt wheels, so running the installer again is fast and compiles nothing.
-To reinstall a single package (for example after clearing a cache), run:
-
-```bash
-uv sync --locked --reinstall-package pointops
-```
-
-## Launcher-only environment
-
-A login or submit host that only runs `pimm submit` does not need PyTorch or the CUDA extensions.
-Install the small launcher environment with:
+Login nodes and remote submission hosts may need only YAML parsing, Tyro, and
+Submitit:
 
 ```bash
 ./install.sh --launcher-only
-uv run pimm submit --help
-```
-
-Or directly, from a checkout with uv installed:
-
-```bash
+# equivalent:
 uv sync --locked --no-default-groups
 ```
 
-The full training environment remains inside the selected container on compute nodes.
-
-## Apptainer or Singularity
-
-The prebuilt image is the shortest path on an HPC system:
-
-```bash
-apptainer pull pimm.sif docker://youngsm/pimm:pytorch2.10.0-cuda12.6
-```
-
-Run from the repository root so the image imports the current checkout:
-
-```bash
-apptainer run --nv pimm.sif \
-  pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
-```
-
-For managed batch jobs, `pimm submit` wraps the training command in the configured image.
-See {doc}`../hpc/sites`.
-
-## Docker
-
-Build the standard image from the same lockfile:
-
-```bash
-docker build -f .github/docker/Dockerfile -t pimm:local .
-```
-
-Run a command from the current checkout:
-
-```bash
-docker run --rm --gpus all -v "$PWD:$PWD" -w "$PWD" pimm:local \
-  pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
-```
-
-The image ships only the locked environment at `/opt/pimm/.venv` - no pimm source is baked in.
-Commands must run from inside a bound checkout, which the entrypoint places on `PYTHONPATH`.
-
-The NERSC image adds MPICH, parallel HDF5, `mpi4py`, and an MPI-enabled build of `h5py`:
-
-```bash
-docker build -f .github/docker/Dockerfile.nersc -t pimm-nersc:local .
-```
-
-## Verify the environment
-
-Check the locked Python and CUDA stack:
-
-```bash
-uv run python - <<'PY'
-import pointops
-import spconv
-import torch
-import torch_scatter
-
-print(torch.__version__)
-print(torch.version.cuda)
-print(torch.cuda.get_device_name())
-PY
-```
-
-Then run a short training job.
-This command still requires PILArNet-M v1 on disk:
-
-```bash
-uv run pimm launch \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
-  -- epoch=1 data.train.max_len=32 data.val.max_len=16 \
-     batch_size=4 num_worker=0 use_wandb=False
-```
+This environment can render and submit jobs. It cannot import the full model
+stack or train.
 
 ## Environment variables
 
-Scripts load `.env` from the repository root when it exists, while existing shell variables take precedence:
+Copy the template when you want repository-local settings:
 
 ```bash
 cp example.env .env
 ```
 
-- `PILARNET_DATA_ROOT_V1` and `PILARNET_DATA_ROOT_V2` select local PILArNet-M revisions.
-- `MODEL_DIR` redirects checkpoints to another filesystem.
-- `WANDB_API_KEY` authenticates Weights & Biases.
-- `PIMM_DISABLE_SERIALIZE_CUDA=1` disables the optional CUDA serialization backend.
+`scripts/train.sh` and `scripts/test.sh` source `.env` with ordinary shell
+semantics, so an assignment in the file replaces a same-named exported value.
+Direct Python calls and `pimm export` do not source it.
 
-## Troubleshooting
+| Variable | Purpose |
+|---|---|
+| `PILARNET_DATA_ROOT_V1` | PILArNet-M v1 directory |
+| `PILARNET_DATA_ROOT_V2` | PILArNet-M v2 directory |
+| `MODEL_DIR` | alternate filesystem for checkpoint directories |
+| `WANDB_API_KEY` | non-interactive Weights & Biases login |
+| `HF_TOKEN` | Hugging Face access/upload token |
+| `HF_HUB_CACHE` | Hugging Face dataset and model cache location |
 
-:::{dropdown} ``error: Failed to spawn: `pimm` ``
-`uv run` resolves commands from the project in the current directory, so outside the checkout it finds no `pimm`.
-Run pimm commands from inside the `particle-imaging-models` checkout, or point uv at it explicitly:
+Site profiles may set additional NCCL, HDF5, and certificate variables. Keep
+those site-specific values in `launch/sites/<site>.yaml`, not in a training
+config.
+
+## Common failures
+
+### `uv run` cannot find `pimm`
+
+Run from the checkout or select it explicitly:
 
 ```bash
 uv run --project /path/to/particle-imaging-models pimm --help
 ```
-:::
 
-:::{dropdown} the training packages are missing
-The training stack (`train`) is a default dependency group, so a plain `uv sync --locked` installs it.
-If a host only needs the launcher, `uv sync --locked --no-default-groups` installs the minimal environment instead.
-:::
+### A native module cannot be imported
 
-## Next steps
+Confirm the supported platform and that the locked default group was installed:
 
-- {doc}`quickstart` covers a complete training and fine-tuning run.
-- {doc}`concepts` explains packed tensors, registries, and Python configs.
+```bash
+uname -srm
+uv sync --locked
+uv run python -c "import torch, spconv, pointops, torch_scatter; print(torch.__version__, torch.version.cuda)"
+```
+
+Do not repair one native wheel in isolation; it must match Python, PyTorch, and
+CUDA. Re-sync the lockfile or use the release container.
+
+### CUDA is unavailable
+
+```bash
+nvidia-smi
+uv run python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
+```
+
+The bundled launcher dry run works without a visible GPU. Training does not.
+
+More symptoms are indexed in {doc}`Troubleshooting
+<../operations/troubleshooting>`.
+
+## Next
+
+Continue with the {doc}`first experiment <quickstart>`, which downloads a few
+hundred liquid argon time projection chamber (LArTPC) images from
+[PILArNet-M-mini](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M-mini).

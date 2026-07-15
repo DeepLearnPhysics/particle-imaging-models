@@ -1,22 +1,46 @@
 # Tutorials
 
-Each tutorial goes from raw data to a trained, evaluated model.
+Tutorials connect the data, model, and evaluation guides into complete research
+tasks. Start by exploring a released checkpoint on PILArNet-M-mini, or complete
+the {doc}`first experiment <../getting_started/quickstart>` before training.
 
-- {doc}`Training a semantic segmentation model <byo_dataset_semseg>` - **Start here.** Wrap your own point clouds in a pimm dataset, write a config, and train a PTv3 backbone for per-point semantic segmentation - locally, then on multiple GPUs. Optionally fine-tune from a pretrained Sonata backbone.
-- {doc}`Panda panoptic detector <panda_detector>` - Perform panoptic segmentation, which outputs per-instance masks + per-instance information with the Panda Detector, fine-tuned from a frozen Sonata encoder.
-- {doc}`PEFT <panda_detector_peft>` - Parameter-efficient fine-tuning of Panda Detector on a new dataset, using LoRA for the PTv3 backbone.
+::::{grid} 1 2 2 2
+:gutter: 3
+:class-container: pimm-card-grid
 
-:::{seealso}
-New to the codebase? Read {doc}`../getting_started/concepts` first - the
-tutorials assume you know about packed tensors, registries, and the config
-system. For the data-side mechanics in isolation, see
-{doc}`../research_ecosystem/contributing_a_dataset`.
+:::{grid-item-card} Explore Panda
+:link: explore_panda
+:link-type: doc
+Inspect one real test event and run the released encoder, semantic, particle,
+and interaction models with interactive Plotly figures.
 :::
+
+:::{grid-item-card} Explore PoLAr-MAE
+:link: explore_polarmae
+:link-type: doc
+Inspect semantic predictions, masked reconstruction, and token embeddings.
+:::
+
+:::{grid-item-card} Train semantic segmentation
+:link: semantic_segmentation
+:link-type: doc
+Adapt the verified tiny pipeline into a per-point classification experiment.
+:::
+
+:::{grid-item-card} Parameter-efficient fine-tuning
+:link: peft
+:link-type: doc
+Freeze a base model, inject LoRA into selected projections, and verify the
+trainable set.
+:::
+
+::::
 
 ```{toctree}
 :hidden:
 
-byo_dataset_semseg
-panda_detector
-panda_detector_peft
+explore_panda
+explore_polarmae
+semantic_segmentation
+peft
 ```

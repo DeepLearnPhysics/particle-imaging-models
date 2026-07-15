@@ -1,0 +1,31 @@
+{
+  "dataset": "DeepLearnPhysics/PILArNet-M-mini",
+  "split": "test",
+  "revision": "v2",
+  "event": 0,
+  "num_points": 1141,
+  "semantic": {
+    "logits_shape": [
+      1141,
+      4
+    ],
+    "prediction_counts": [
+      39,
+      849,
+      24,
+      229
+    ],
+    "truth_counts": [
+      39,
+      964,
+      18,
+      120,
+      0
+    ]
+  },
+  "pretrain": {
+    "loss": 0.1754421889781952,
+    "chamfer_loss": 0.13092222809791565,
+    "energy_loss": 0.04451996833086014
+  }
+}

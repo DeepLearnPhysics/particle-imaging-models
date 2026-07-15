@@ -1,64 +1,103 @@
 # pimm documentation
 
-Source for the pimm documentation site, published at
-<https://deeplearnphysics.org/particle-imaging-models/stable/>.
+Source for <https://deeplearnphysics.org/particle-imaging-models/stable/>.
+The site uses Sphinx, MyST Markdown, `sphinx-book-theme`, and autodoc. A full
+build imports pimm so the narrative pages and API reference stay synchronized
+with the checked-out code.
 
-Built with [Sphinx](https://www.sphinx-doc.org), [MyST
-Markdown](https://myst-parser.readthedocs.io), and the [PyData Sphinx
-Theme](https://pydata-sphinx-theme.readthedocs.io). The narrative guides need
-only the doc dependencies, but the **API reference uses `autodoc`** (and
-`gen_api.py` enumerates the live registries), so a full `make html` **imports
-`pimm`** and must run in the full project environment or the project image.
-See `.github/workflows/docs.yml` for the CI build.
+## Build and serve
 
-## Build
+From the repository root:
 
 ```bash
 uv sync --locked --group docs
-uv run --group docs make -C docs html
+uv run --no-sync make -C docs html
+uv run --no-sync make -C docs serve  # http://localhost:8000
 ```
 
-The first build is slow (autodoc imports the package and generates a page per
-registered class); subsequent builds are incremental.
+Use the local server rather than opening `index.html` directly. It gives
+embedded Plotly figures and relative assets the same URL behavior as the
+published site.
 
-> Narrative-only preview without importing `pimm`: temporarily exclude the
-> `api/` tree (e.g. `sphinx-build -b html source build/html -D exclude_patterns=api/**`).
-> The full site — including the API reference — needs the project environment.
-
-Then open `docs/build/html/index.html`, or serve it:
+Useful checks:
 
 ```bash
-make -C docs serve   # http://localhost:8000
+uv run --no-sync make -C docs clean
+uv run --no-sync make -C docs linkcheck
+uv run --no-sync sphinx-build -W --keep-going -b html docs/source docs/build/html
 ```
 
-## Layout
+`make html` runs `docs/gen_api.py` first. It imports the live registries and
+regenerates the API pages under `source/api/`; use the full Linux project
+environment or the project container for that build.
+
+## Structure
 
 ```text
 docs/
-  Makefile             # make html / clean / serve / linkcheck
-  source/
-    conf.py            # Sphinx + theme configuration
-    index.md           # landing page
-    _static/           # logo, custom.css
-    getting_started/   # install, quickstart, mental model
-    distributed/       # DDP / FSDP2 / multi-node
-    hpc/               # Slurm, sites, chaining, monitoring, resuming
-    checkpoints/       # formats, hooks, export, Hugging Face
-    models/            # from_pretrained, data format for inference
-    configuration/     # the Python config system
-    datasets/          # datasets, transforms, packed format
-    hooks/             # the hook system
-    evaluation/        # evaluators and testing
-    tutorials/         # end-to-end walkthroughs
-    reference/         # CLI reference, model zoo
+├── Makefile
+├── gen_api.py
+└── source/
+    ├── index.md             landing page and global navigation
+    ├── getting_started/     installation, first run, mental model
+    ├── workflows/           train, fine-tune, evaluate, distributed, Slurm
+    ├── models/              released checkpoints, inference, export
+    ├── data/                conventions, PILArNet-M, transforms, custom data
+    ├── operations/          configs, checkpoints, logging, reproducibility
+    ├── tutorials/           runnable scientific walkthroughs
+    ├── extend/              models, losses, datasets, transforms, hooks
+    ├── reference/           CLI, config keys, environment, glossary
+    ├── api/                 generated Python API and registries
+    ├── project/             support, roadmap, citation
+    ├── _static/             theme assets and checked-in tutorial figures
+    └── _templates/          autodoc templates
 ```
 
-## Conventions
+Keep one topic in one canonical page and link to it elsewhere. Put commands
+before detailed explanation, link named pimm classes and functions to the API,
+and use inline MathJax for short equations. Unknown scientific values or
+unavailable plots should be marked with a red `TODO` admonition rather than
+filled with an estimate.
 
-- Pages are Markdown (MyST). Use `:::{note}`-style admonitions and
-  `sphinx-design` directives (`grid`, `card`, `tab-set`) for richer layout.
-- Keep execution details (Slurm, accounts, containers) in the HPC pages and
-  model/training behavior in the configuration/datasets pages, mirroring the
-  repo's own launch-YAML vs Python-config split.
-- The site tracks the code. When launch flags, config keys, or checkpoint
-  formats change, update the matching page.
+## Runnable tutorials and figures
+
+`tutorials/explore_panda.py` and `tutorials/explore_polarmae.py` are
+Jupytext-compatible `# %%` notebooks. They are the source of the interactive
+HTML, static PNG fallbacks, and JSON metadata in `_static/tutorials/`.
+
+Run them as ordinary Python:
+
+```bash
+# PoLAr-MAE: CPU or CUDA
+uv run --group train --with plotly \
+  python docs/source/tutorials/explore_polarmae.py --models all --device cpu
+
+# Panda dataset views: CPU
+uv run --group train --with plotly \
+  python docs/source/tutorials/explore_panda.py --models dataset
+
+# Panda released models: CUDA
+uv run --group train --with plotly \
+  python docs/source/tutorials/explore_panda.py --models all --device cuda
+```
+
+Or convert exactly the same sources to notebooks:
+
+```bash
+uv run --group train --group dev --with jupytext \
+  jupytext --to ipynb docs/source/tutorials/explore_panda.py
+```
+
+The manual **Docs figures** workflow runs both sources on a Modal L4 and
+uploads the generated directory as a review artifact. It never commits or
+publishes figures automatically. After downloading the artifact:
+
+1. compare its JSON metadata and plots with the intended event, transforms,
+   checkpoint repositories, and seed;
+2. visually inspect the interactive and static versions;
+3. replace `_static/tutorials/` and commit the source and generated assets
+   together;
+4. run the strict Sphinx build.
+
+The normal docs build embeds checked-in results and performs no data download
+or model inference.

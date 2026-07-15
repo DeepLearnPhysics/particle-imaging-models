@@ -2,8 +2,9 @@
 Core building blocks
 ====================
 
-The shared abstractions used across pimm: the config-driven builders, the
-``Point`` structure, the config loader, the registry, and the
+The shared abstractions used across pimm: config-driven builders,
+:class:`~pimm.models.utils.structure.Point`,
+:class:`~pimm.utils.config.Config`, :class:`~pimm.utils.registry.Registry`, and
 checkpoint/resume primitives.
 
 Builders
@@ -36,6 +37,31 @@ for what each registry contains.
    :nosignatures:
 
    build_criteria
+
+.. autosummary::
+   :toctree: generated
+   :template: pimm_class.rst
+   :nosignatures:
+
+   Criteria
+
+Builder registries
+------------------
+
+.. currentmodule:: pimm.models.builder
+
+.. py:data:: MODELS
+   :type: pimm.utils.registry.Registry
+
+   Registry used by :func:`build_model` to resolve ``model.type`` strings.
+
+.. currentmodule:: pimm.models.losses.builder
+
+.. py:data:: LOSSES
+   :type: pimm.utils.registry.Registry
+
+   Registry used by :func:`build_criteria` to resolve each
+   ``criteria[].type`` string.
 
 Point structures & base modules
 ===============================
@@ -85,7 +111,7 @@ Checkpointing & resume
 ======================
 
 The checkpoint manager and the resume-state schema. See
-:doc:`../checkpoints/index`.
+:doc:`../operations/checkpoints`.
 
 .. currentmodule:: pimm.utils.checkpoints
 
@@ -108,9 +134,19 @@ The checkpoint manager and the resume-state schema. See
 Data loading & collation
 =========================
 
-The collate functions that pack ragged point-cloud samples into a batch, and the
+The transform composition and collation helpers that turn samples into packed
+point-cloud batches, the packed/padded conversion used by PoLAr-MAE, and the
 checkpointable sampler that lets the training loader resume mid-epoch. See
-:doc:`../research_ecosystem/contributing_a_dataset`.
+:doc:`../extend/add_dataset` and :doc:`../data/custom`.
+
+.. currentmodule:: pimm.datasets.transform.base
+
+.. autosummary::
+   :toctree: generated
+   :template: pimm_class.rst
+   :nosignatures:
+
+   Compose
 
 .. currentmodule:: pimm.datasets.utils
 
@@ -120,6 +156,14 @@ checkpointable sampler that lets the training loader resume mid-epoch. See
 
    collate_fn
 
+.. currentmodule:: pimm.models.polarmae.data
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   packed_to_batched
+
 .. currentmodule:: pimm.datasets.stateful
 
 .. autosummary::
@@ -128,6 +172,35 @@ checkpointable sampler that lets the training loader resume mid-epoch. See
    :nosignatures:
 
    StatefulRandomSampler
+
+Engine setup
+============
+
+Derive per-rank loader settings, initialize reproducibility controls, and
+materialize the runtime config used by the trainer.
+
+.. currentmodule:: pimm.engines.defaults
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   default_setup
+
+Hook lifecycle
+==============
+
+The base lifecycle interface shared by every registered training hook. Concrete
+hook implementations are listed in :doc:`registry/hooks`.
+
+.. currentmodule:: pimm.engines.hooks.default
+
+.. autosummary::
+   :toctree: generated
+   :template: pimm_class.rst
+   :nosignatures:
+
+   HookBase
 
 Distributed helpers
 ===================

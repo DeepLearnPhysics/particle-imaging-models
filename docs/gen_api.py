@@ -195,17 +195,18 @@ def _load_registries():
          "config block."),
         ("datasets", "Datasets", DATASETS, "data.train = dict(type=...)",
          "Dataset classes buildable under ``data.train`` / ``data.val`` / "
-         "``data.test``. See :doc:`../../datasets/index`."),
+         "``data.test``. See :doc:`../../data/index`."),
         ("transforms", "Transforms", TRANSFORMS, "transform=[dict(type=...)]",
-         "Transform pipeline steps. See :doc:`../../datasets/transforms`."),
+         "Transform pipeline steps. See :doc:`../../data/transforms`."),
         ("hooks", "Hooks", HOOKS, "hooks=[dict(type=...)]",
-         "Training lifecycle hooks. See :doc:`../../hooks/index`."),
+         "Training lifecycle hooks. See :doc:`../../extend/add_hook`."),
         ("losses", "Losses", LOSSES, "criteria=[dict(type=...)]",
-         "Loss functions assembled by ``build_criteria``. See "
-         ":doc:`../../research_ecosystem/contributing_a_model`."),
+         "Loss functions assembled by "
+         ":func:`~pimm.models.losses.builder.build_criteria`. See "
+         ":doc:`../../extend/add_model`."),
         ("trainers", "Trainers", TRAINERS, "train = dict(type=...)",
          "Trainer classes selected by ``train.type``. See "
-         ":doc:`../../distributed/index`."),
+         ":doc:`../../extend/architecture`."),
     ]
 
 

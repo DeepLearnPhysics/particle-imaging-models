@@ -1,16 +1,15 @@
 # Configuration file for the Sphinx documentation builder.
 #
 # pimm - Particle Imaging Models documentation.
-# Built with Sphinx + MyST (Markdown) + sphinx-book-theme. The book theme is
-# PyData-based (so the --pst-* CSS variables apply) and renders the FULL nested,
-# collapsible section tree in the left sidebar on every page - every section is
-# reachable from anywhere, which pytorch_sphinx_theme2 / plain PyData cannot do
-# (they scope the left sidebar to the current section).
+# Built with Sphinx + MyST (Markdown) + PyData Sphinx Theme. The top-level
+# sections live in the horizontal header; page-local navigation stays out of
+# the reading column until it is needed on smaller screens.
 # Narrative guides need only the doc deps, but the API reference uses autodoc
 # (and gen_api.py walks the live registries), so a full build imports `pimm` and
 # must run in the project environment. See docs/DEPLOYMENT.md.
 
 import datetime
+import os
 
 # -- Project information -----------------------------------------------------
 
@@ -18,11 +17,12 @@ project = "pimm"
 author = "Samuel Young"
 copyright = f"{datetime.date.today().year}, DeepLearnPhysics"
 
-# The full version, including alpha/beta/rc tags. Keep in sync with
-# pyproject.toml. The docs site is published under
-# /particle-imaging-models/stable/.
-release = "0.1.0"
-version = "0.1"
+# The documentation describes the current repository rather than advertising a
+# package release in the site chrome. Release history remains available from
+# GitHub; keeping these blank prevents Sphinx themes from adding a stale version
+# label to the title or sidebar.
+release = ""
+version = ""
 
 # -- General configuration ---------------------------------------------------
 
@@ -31,7 +31,6 @@ extensions = [
     "sphinx_design",
     "sphinx_copybutton",
     "sphinx_togglebutton",
-    "sphinx_sitemap",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosectionlabel",
     # API reference (autodoc imports pimm - the build env has the full stack).
@@ -43,6 +42,12 @@ extensions = [
     "sphinx.ext.mathjax",
 ]
 
+# sphinx-sitemap starts a multiprocessing manager during builder setup. Some
+# restricted documentation-preview environments forbid local sockets; they can
+# skip only sitemap generation while keeping the rendered HTML identical.
+if os.environ.get("PIMM_DOCS_DISABLE_SITEMAP") != "1":
+    extensions.append("sphinx_sitemap")
+
 # -- Autodoc / autosummary ---------------------------------------------------
 
 autosummary_generate = True
@@ -50,6 +55,11 @@ autosummary_imported_members = False
 autodoc_member_order = "groupwise"
 autodoc_typehints = "signature"
 autodoc_class_signature = "mixed"
+# Do not inherit PyTorch's generic ``Module.forward`` prose onto pimm methods
+# that intentionally document only their own signature. The universal calling
+# rule (``module(...)``, not ``module.forward(...)``) is explained once in the
+# API landing page instead of repeated on every generated class page.
+autodoc_inherit_docstrings = False
 add_module_names = False  # show `from_pretrained`, not `pimm.export.from_pretrained`
 python_use_unqualified_type_names = True
 
@@ -89,7 +99,6 @@ napoleon_use_ivar = True
 source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
-    ".rst": "restructuredtext",
 }
 
 master_doc = "index"
@@ -105,8 +114,10 @@ suppress_warnings = ["autosectionlabel.*"]
 # -- MyST configuration ------------------------------------------------------
 
 myst_enable_extensions = [
+    "amsmath",
     "colon_fence",
     "deflist",
+    "dollarmath",
     "fieldlist",
     "attrs_inline",
     "attrs_block",
@@ -131,7 +142,7 @@ intersphinx_disabled_reftypes = ["*"]
 
 # -- HTML output -------------------------------------------------------------
 
-html_theme = "sphinx_book_theme"
+html_theme = "pydata_sphinx_theme"
 html_title = "pimm"
 html_static_path = ["_static"]
 html_css_files = ["custom.css", "launch_selector.css"]
@@ -153,22 +164,18 @@ html_theme_options = {
         "image_dark": "_static/logo.svg",
         "alt_text": "pimm - Particle Imaging Models",
     },
-    "repository_url": "https://github.com/DeepLearnPhysics/particle-imaging-models",
-    "repository_branch": "main",
-    "path_to_docs": "docs/source",
-    "use_repository_button": True,
-    "use_issues_button": True,
     "use_edit_page_button": False,
-    "use_download_button": False,
-    "use_fullscreen_button": False,
-    "home_page_in_toc": True,
-    # Left sidebar: render the whole tree, expanded a couple of levels, deep
-    # enough to reach every page.
-    "show_navbar_depth": 2,
-    "max_navbar_depth": 4,
-    "collapse_navbar": False,
+    "show_prev_next": False,
+    "navigation_depth": 2,
+    "show_nav_level": 1,
     "show_toc_level": 2,
     "navigation_with_keys": False,
+    "header_links_before_dropdown": 5,
+    "navbar_start": ["navbar-logo"],
+    "navbar_center": ["navbar-nav"],
+    "navbar_end": ["theme-switcher", "navbar-icon-links"],
+    "navbar_persistent": ["search-button"],
+    "secondary_sidebar_items": ["page-toc"],
     "icon_links": [
         {
             "name": "GitHub",
@@ -204,9 +211,6 @@ html_context = {
     "doc_path": "docs/source",
     "default_mode": "auto",
 }
-
-# Show the full navigation sidebar on every page, including the landing page,
-# so the section tree is always available (no per-section disconnection).
 
 # Copybutton: ignore shell prompts and pseudo-prompts in code blocks.
 copybutton_prompt_text = r">>> |\.\.\. |\$ |# "

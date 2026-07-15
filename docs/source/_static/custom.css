@@ -1,8 +1,5 @@
-/* pimm docs - custom theming on top of the PyData Sphinx theme.
-   Palette draws from the LArTPC "active pixel" look of the logo:
-   a deep neutrino blue/teal with an amber accent for the off-center vertex. */
+/* pimm docs: a quiet, scan-first skin on PyData Sphinx Theme. */
 
-/* Self-hosted JetBrains Mono for the display title / wordmark (works offline). */
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
@@ -13,234 +10,357 @@
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("fonts/jetbrains-mono-latin-500.woff2") format("woff2");
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
   font-weight: 700;
   font-display: swap;
   src: url("fonts/jetbrains-mono-latin-700.woff2") format("woff2");
 }
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-  src: url("fonts/jetbrains-mono-latin-800.woff2") format("woff2");
-}
-
-/* --- Wider content -------------------------------------------------------
-   sphinx-book-theme caps the article column fairly narrow by default, which
-   feels cramped for code blocks, tables, and the API reference. Widen the whole
-   layout and let the article fill the space between the sidebars. */
-.bd-page-width {
-  max-width: none;
-}
-.bd-main .bd-content .bd-article-container {
-  max-width: none;
-}
-.bd-main .bd-content .bd-article-container > .bd-article {
-  max-width: none;
-}
-/* sphinx-book-theme wraps content in a max-width container; let it grow. */
-.bd-article-container,
-.bd-article {
-  max-width: none;
-}
 
 :root {
-  --pimm-blue: #1f6feb;
-  --pimm-teal: #1abc9c;
-  --pimm-amber: #f5a623;
-  --pimm-ink: #0b1f33;
+  --pimm-blue: #176b87;
+  --pimm-blue-dark: #0c4f67;
+  --pimm-mint: #17a589;
+  --pimm-amber: #e69b2e;
+  --pimm-radius: 10px;
+  --pst-font-size-base: 16px;
 }
 
-/* Cohesive pimm palette - everything interactive keys off ONE blue accent with
-   neutral support tones, so links, link-hover, inline code, and table-row hover
-   read as a single theme (no blue/green/magenta mix). !important to win over the
-   base theme stylesheet. */
 html[data-theme="light"] {
-  --pst-color-primary: #1f6feb !important;
-  --pst-color-primary-highlight: #1558c0 !important;
-  --pst-color-secondary: #1abc9c !important;        /* teal: secondary accents */
-  --pst-color-accent: #f5a623 !important;
-  --pst-color-link: #1f6feb !important;             /* links: blue */
-  --pst-color-link-hover: #1558c0 !important;        /* hover: darker blue */
-  --pst-color-inline-code: #334155 !important;       /* code: neutral slate */
-  --pst-color-table-row-hover-bg: #e3edfd !important; /* hover: soft blue tint */
+  --pst-color-primary: #176b87;
+  --pst-color-primary-highlight: #0c4f67;
+  --pst-color-secondary: #17a589;
+  --pst-color-accent: #e69b2e;
+  --pst-color-link: #176b87;
+  --pst-color-link-hover: #0c4f67;
+  --pst-color-inline-code: #263849;
+  --pst-color-surface: #f5f8fa;
+  --pst-color-table-row-hover-bg: #edf5f7;
 }
 
 html[data-theme="dark"] {
-  --pst-color-primary: #4d9cff !important;
-  --pst-color-primary-highlight: #6fb4ff !important;
-  --pst-color-secondary: #2fd6b6 !important;
-  --pst-color-accent: #ffbf47 !important;
-  --pst-color-link: #4d9cff !important;
-  --pst-color-link-hover: #9fd0ff !important;
-  --pst-color-inline-code: #c7d2e0 !important;
-  --pst-color-table-row-hover-bg: #20304a !important;
+  --pst-color-primary: #66c9e4;
+  --pst-color-primary-highlight: #91d9ec;
+  --pst-color-secondary: #5bd6bd;
+  --pst-color-accent: #f2b44f;
+  --pst-color-link: #66c9e4;
+  --pst-color-link-hover: #91d9ec;
+  --pst-color-inline-code: #d4e0e8;
+  --pst-color-table-row-hover-bg: #1e333d;
 }
 
-/* Brand logo text in the navbar. */
-.navbar-brand .logo__title,
-.navbar-brand p {
-  font-weight: 700;
-  letter-spacing: 0.5px;
+body {
+  letter-spacing: -0.005em;
 }
 
-/* Landing-page hero. Plain - no panel, no gradient. The `# heading` inside the
-   div directive renders as <p class="rubric">, so style that as the title. */
-.pimm-hero {
-  padding: 1.6rem 0 0.6rem;
-  margin: 0;
+.bd-page-width {
+  max-width: 1580px;
 }
-.pimm-hero-logo {
-  display: block;
-  height: 96px;
+
+.bd-header {
+  border-bottom: 1px solid var(--pst-color-border);
+  box-shadow: none;
+}
+
+.navbar-brand {
+  gap: 0.45rem;
+}
+
+.navbar-brand img {
+  height: 30px;
   width: auto;
-  margin: 0 0 1rem;
 }
-.pimm-hero .rubric {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 2.0rem;
-  line-height: 1.0;
-  font-weight: 500;          /* medium - not bold */
-  letter-spacing: -1px;
-  margin: 0 0 0.5rem;
+
+.navbar-brand .logo__title {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.navbar-nav > .nav-item > .nav-link {
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.bd-header-announcement {
+  background: #e0c7ff;
   color: var(--pst-color-text-base);
-  border: 0;
-}
-.pimm-tagline {
-  display: inline-block;
-  font-size: 1.0rem;
-  line-height: 1.5;
-  color: var(--pst-color-text-muted);
-  max-width: 46rem;
-  margin-bottom: 0.4rem;
-}
-/* Put the two hero buttons on one row with spacing. */
-.pimm-hero p:has(.sd-btn) {
-  display: inline-block;
-  margin: 0.6rem 0.6rem 0 0;
+  font-size: 0.82rem;
+  border-bottom: 1px solid #c7a6ed;
 }
 
-/* --- Strip PyTorch/Meta chrome shipped with pytorch_sphinx_theme2 --------- */
-.pytorch-site-link,          /* "Go to PyTorch.org" link in the navbar */
-.cookie-banner-wrapper,      /* Meta/Facebook cookie banner */
-.site-footer {               /* "Copyright © Meta Platforms, Inc" footer */
-  display: none !important;
+
+html[data-theme="dark"] .bd-header-announcement {
+  background: #4c365f;
+  border-bottom-color: #6c4e82;
 }
 
-/* Bigger pimm logo + keep the "pimm" wordmark visible in the navbar. */
-.navbar-brand img,
-.navbar-brand .logo__image {
-  height: 30px !important;
-  width: auto !important;
-}
-.navbar-brand .logo__title,
-.navbar-brand p.title {
-  display: inline-block !important;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: 800;
-  font-size: 1.1rem;
-  letter-spacing: -0.5px;
-  margin-left: 0.4rem;
-}
-
-/* Thin, unobtrusive scrollbar for the left section navigation. */
-.bd-sidebar-primary {
-  scrollbar-width: thin;
-  scrollbar-color: #FFFFFF transparent;
-}
-.bd-sidebar-primary::-webkit-scrollbar {
-  width: 0px;
-}
-.bd-sidebar-primary::-webkit-scrollbar-thumb {
-  background: var(--pst-color-border);
-  border-radius: 3px;
-}
-.bd-sidebar-primary::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-/* Size the left sidebar to its content instead of a % of the viewport.
-   sphinx-book-theme defaults to flex-basis: 20%, which grows on wide screens
-   and made centered nav labels look odd. Cap so a long label cannot explode. */
-@media (min-width: 992px) {
+@media (min-width: 960px) {
   .bd-sidebar-primary {
-    flex: 0 0 auto;
-    flex-basis: auto;
-    width: max-content;
-    max-width: 20rem;
+    width: 17.5rem;
+    flex-basis: 17.5rem;
   }
-  /* book theme hides with margin-left: -20% of the container; match our cap. */
-  input#pst-primary-sidebar-checkbox:checked ~ .bd-container .bd-sidebar-primary {
-    margin-left: -20rem;
+
+  .bd-main .bd-content .bd-article-container {
+    max-width: 58rem;
   }
 }
 
-/* Center only the brand + icon-link row; leave the section tree left-aligned. */
-.bd-sidebar-primary .sidebar-primary-item:has(> .navbar-brand),
-.bd-sidebar-primary .sidebar-primary-item:has(> .navbar-icon-links) {
-  display: flex;
-  justify-content: center;
-  align-items: center;
+.bd-sidebar-primary,
+.bd-sidebar-secondary {
+  scrollbar-width: thin;
 }
 
-
-/* The registry tables generate their per-class pages via a hidden autosummary;
-   only the Name/Summary table is shown. */
-.hidden-autosummary {
-  display: none !important;
+.bd-sidebar-primary .nav-link {
+  font-size: 0.86rem;
+  line-height: 1.35;
+  padding-block: 0.28rem;
 }
 
-/* Code inside a link (cross-references like the registry Name column and
-   {py:class}/{py:func} refs) should take the blue link color, not the neutral
-   inline-code slate - so all links read as one color. */
+.bd-sidebar-primary li.toctree-l1 > a {
+  font-weight: 620;
+}
+
+.bd-article h1 {
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  margin-bottom: 0.75rem;
+}
+
+.bd-article h2 {
+  font-size: 1.5rem;
+  letter-spacing: -0.025em;
+  margin-top: 2.7rem;
+}
+
+.bd-article h3 {
+  font-size: 1.13rem;
+  margin-top: 2rem;
+}
+
+.bd-article > p,
+.bd-article li {
+  line-height: 1.68;
+}
+
 a.reference code,
 a.reference .pre,
 code.xref,
 code.xref .pre {
-  color: var(--pst-color-link) !important;
+  color: var(--pst-color-link);
 }
 
-.bd-header-announcement {
-  background-color: var(--pst-color-secondary-bg);
-  color: var(--pst-color-text-base);
-}
-.bd-header-announcement a {
-  color: var(--pst-color-primary);
-}
-
-/* Code blocks: rounder corners. */
 div.highlight {
-  border-radius: 8px;
+  border: 1px solid var(--pst-color-border);
+  border-radius: var(--pimm-radius);
+  box-shadow: none;
 }
 
-/* Make tables breathe a bit. */
+div.highlight pre {
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+code,
+kbd,
+pre {
+  font-variant-ligatures: none;
+}
+
+table.docutils {
+  font-size: 0.9rem;
+}
+
 table.docutils td,
 table.docutils th {
-  padding: 0.5em 0.8em;
+  padding: 0.62em 0.78em;
+  vertical-align: top;
 }
 
-/* Keyboard-style inline tokens for CLI flags. */
-kbd,
-code.kbd {
-  background: var(--pst-color-surface);
+.admonition {
+  border-radius: var(--pimm-radius);
+  box-shadow: none;
+}
+
+/* Landing page */
+.pimm-hero {
+  padding: 2.3rem 0 1.35rem;
+  max-width: 52rem;
+}
+
+.pimm-eyebrow {
+  color: var(--pst-color-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.7rem;
+}
+
+.pimm-hero .rubric {
+  border: 0;
+  color: var(--pst-color-text-base);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: clamp(2.35rem, 6vw, 4.2rem);
+  font-weight: 700;
+  letter-spacing: -0.07em;
+  line-height: 0.98;
+  margin: 0 0 1rem;
+}
+
+.pimm-tagline {
+  color: var(--pst-color-text-muted);
+  display: block;
+  font-size: clamp(1.04rem, 2vw, 1.25rem);
+  line-height: 1.55;
+  max-width: 46rem;
+}
+
+.pimm-hero p:has(.sd-btn) {
+  display: inline-block;
+  margin: 0.75rem 0.5rem 0 0;
+}
+
+.pimm-hero .sd-btn {
+  border-radius: 8px;
+  font-weight: 620;
+}
+
+.pimm-card-grid .sd-card {
   border: 1px solid var(--pst-color-border);
-  border-radius: 5px;
-  padding: 0.1em 0.4em;
-  font-size: 0.85em;
+  border-radius: var(--pimm-radius);
+  box-shadow: none;
+  height: 100%;
+  transition: border-color 120ms ease, transform 120ms ease;
 }
 
-/* Tighten the announcement bar. */
-.bd-header-announcement {
+.pimm-card-grid .sd-card:hover {
+  border-color: var(--pst-color-primary);
+  transform: translateY(-2px);
+}
+
+.pimm-card-grid .sd-card-title {
+  font-size: 1rem;
+  font-weight: 680;
+}
+
+.pimm-card-grid .sd-card-text {
+  color: var(--pst-color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.pimm-callout {
+  border-left: 3px solid var(--pst-color-primary);
+  background: color-mix(in srgb, var(--pst-color-primary) 6%, transparent);
+  border-radius: 0 var(--pimm-radius) var(--pimm-radius) 0;
+  margin: 1.5rem 0;
+  padding: 0.9rem 1.1rem;
+}
+
+.pimm-callout p:last-child {
+  margin-bottom: 0;
+}
+
+.pimm-steps {
+  counter-reset: pimm-step;
+  list-style: none;
+  padding-left: 0;
+}
+
+.pimm-steps > li {
+  counter-increment: pimm-step;
+  border-top: 1px solid var(--pst-color-border);
+  padding: 1rem 0 1rem 3rem;
+  position: relative;
+}
+
+.pimm-steps > li::before {
+  content: counter(pimm-step);
+  position: absolute;
+  left: 0;
+  top: 0.95rem;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 1px solid var(--pst-color-primary);
+  border-radius: 50%;
+  color: var(--pst-color-primary);
+  display: grid;
+  place-items: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.pimm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 999px;
+  color: var(--pst-color-text-muted);
+  font-size: 0.76rem;
+  padding: 0.2rem 0.55rem;
+}
+
+.pimm-status::before {
+  background: var(--pimm-mint);
+  border-radius: 50%;
+  content: "";
+  height: 0.42rem;
+  width: 0.42rem;
+}
+
+.hidden-autosummary {
+  display: none !important;
+}
+
+.pimm-pipeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.pimm-pipeline span {
+  align-items: center;
+  background: color-mix(in srgb, var(--pst-color-primary) 5%, transparent);
+  border: 1px solid var(--pst-color-border);
+  border-radius: var(--pimm-radius);
+  display: flex;
   font-size: 0.86rem;
+  font-weight: 640;
+  min-height: 3.2rem;
+  padding: 0.75rem 2rem 0.75rem 0.85rem;
+  position: relative;
 }
 
+.pimm-pipeline span:not(:last-child)::after {
+  color: var(--pst-color-primary);
+  content: "\2192";
+  font-size: 1.2rem;
+  position: absolute;
+  right: 0.65rem;
+}
+
+@media (max-width: 720px) {
+  .pimm-hero {
+    padding-top: 1.2rem;
+  }
+
+  .pimm-hero .rubric {
+    font-size: 2.5rem;
+  }
+
+  .pimm-pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  .pimm-pipeline span:not(:last-child)::after {
+    content: "\2193";
+  }
+}
+
+/* Components introduced by the rewritten documentation. */
 /* Pretty "at a glance" definition pairs. */
 .pimm-kv dt {
   color: var(--pst-color-primary);
@@ -350,4 +470,100 @@ code.kbd {
 }
 .pimm-flow .pimm-panel ol li code {
   font-size: 0.82rem;
+}
+
+/* Scan-first cards and lifecycle strip used by the task-oriented landing
+   pages. These deliberately inherit the original pimm palette above. */
+.pimm-card-grid .sd-card {
+  border: 1px solid var(--pst-color-border);
+  border-radius: var(--pimm-radius);
+  box-shadow: none;
+  height: 100%;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.pimm-card-grid .sd-card:hover {
+  border-color: var(--pst-color-primary);
+  transform: translateY(-2px);
+}
+
+.pimm-card-grid .sd-card-title {
+  font-size: 1rem;
+  font-weight: 680;
+}
+
+.pimm-card-grid .sd-card-text {
+  color: var(--pst-color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.pimm-pipeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.pimm-pipeline span {
+  align-items: center;
+  background: color-mix(in srgb, var(--pst-color-primary) 5%, transparent);
+  border: 1px solid var(--pst-color-border);
+  border-radius: var(--pimm-radius);
+  display: flex;
+  font-size: 0.86rem;
+  font-weight: 640;
+  min-height: 3.2rem;
+  padding: 0.75rem 2rem 0.75rem 0.85rem;
+  position: relative;
+}
+
+.pimm-pipeline span:not(:last-child)::after {
+  color: var(--pst-color-primary);
+  content: "\2192";
+  font-size: 1.2rem;
+  position: absolute;
+  right: 0.65rem;
+}
+
+/* Unresolved documentation work must be unmistakable and searchable. */
+.admonition.pimm-todo {
+  border-color: #c62828;
+  border-left: 4px solid #c62828;
+}
+
+.admonition.pimm-todo > .admonition-title {
+  background: color-mix(in srgb, #c62828 12%, transparent);
+  color: #c62828;
+}
+
+@media (max-width: 720px) {
+  .pimm-pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  .pimm-pipeline span:not(:last-child)::after {
+    content: "\2193";
+  }
+}
+
+/* Interactive tutorial figures retain the later full-width sizing fix. */
+.bd-article .pimm-plotly-frame {
+  border: 0;
+  display: block;
+  height: 580px;
+  margin: 1.25rem 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.bd-article .pimm-plotly-frame-wide {
+  height: 640px;
+}
+
+@media (max-width: 720px) {
+  .bd-article .pimm-plotly-frame,
+  .bd-article .pimm-plotly-frame-wide {
+    height: 520px !important;
+  }
 }

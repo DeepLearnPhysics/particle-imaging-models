@@ -1,33 +1,80 @@
 # What is pimm?
 
-pimm trains deep-learning models on sparse detector data from high-energy-physics experiments.
-It provides model backbones, self-supervised pretraining recipes, and task models for fine-tuning, along with the data loaders, training loop, and launch tooling around them.
-The same command that trains on one GPU scales to many GPUs across several nodes.
+pimm is a PyTorch research codebase for learning from **sparse,
+variable-length 3D detector events**. It brings the pieces of an experiment
+under one versioned workflow: data transforms, model construction, training,
+evaluation, distributed launch, resumable state, and portable exports.
 
-In pimm, an event is a variable-length set of hits, each with a position and per-hit features such as charge or time.
-This representation is detector-neutral: liquid-argon TPCs, water-Cherenkov detectors, and wire-plane readouts all produce data in this form, and the same models run on all of them.
+It is intended for two kinds of reader:
 
-## Foundation models
+- researchers who need to reproduce, adapt, and scale an experiment without
+  replacing their cluster or analysis workflow;
+- students and new contributors who need one traceable path from a data file to
+  a metric, checkpoint, and inference result.
 
-Supervised training in HEP has usually leaned on simulation: experiments invest in detailed detector simulations to generate the large labeled samples that training from scratch requires, and model quality then depends on how faithful the simulation is.
-Foundation models loosen that dependence.
-A backbone pretrained on raw, unlabeled events learns the structure of real data directly, so the labeled sample for a downstream task can be small enough to produce by hand - a few hundred or a few thousand events - and still reach good performance.
+## What you can do
 
-## Pretraining
+| Workflow | pimm provides |
+|---|---|
+| Use a published model | registry-based model construction, checkpoint key mapping, local and Hugging Face loading |
+| Fine-tune | full, linear-probe, frozen-encoder, and PEFT recipes where available |
+| Pretrain | Panda/Sonata, PoLAr-MAE, LeJEPA, and Volt-MAE implementations and configs |
+| Segment events | semantic segmentation, PointGroup, and Panda Detector task models |
+| Scale a run | one typed launcher for local `torchrun` and Submitit-backed Slurm jobs |
+| Reproduce a run | source snapshot, resolved config, metadata, logs, RNG/optimizer/scheduler/loader state |
+| Publish a model | consolidated weights, sanitized config, model card, and optional Hub upload |
 
-Experiments record far more events than ever get labeled.
-pimm's pretraining recipes use those unlabeled events directly: a backbone is trained self-supervised, for example by masking part of an event and training the network to reconstruct it.
-The result is a backbone whose learned features transfer across tasks, and often across detectors.
+## What pimm is not
 
-## Fine-tuning
+- It is not a general image library. The currently supported common input is a
+  3D sparse point set; 2D wire-plane and optical waveform support is future
+  work.
+- It is not a detector-independent promise. A shared packed representation does
+  not make coordinate frames, units, features, targets, or calibrations
+  interchangeable.
+- It is not a benchmark leaderboard. The repository contains research recipes,
+  but metrics are only comparable when the dataset revision, split,
+  preprocessing, checkpoint, and evaluation protocol match.
+- It is not a stable production API. Research components evolve; pin a release
+  and record the resolved config for published work.
 
-To solve a specific task, you attach a task head to a pretrained backbone and train on your labeled events.
-Typical tasks are semantic segmentation (a class label per hit), panoptic reconstruction (hits grouped into individual particles and interactions), and event classification or particle ID.
-Because the backbone already carries general features, fine-tuning needs substantially fewer labeled events than training from scratch.
+## Why packed events?
 
-You do not have to pretrain your own backbone.
-Published checkpoints on the Hugging Face Hub can be loaded with one call and fine-tuned directly; {doc}`../research_ecosystem/using_trained_models` lists them.
+Detector events contain different numbers of hits. Padding a batch to its
+largest event wastes memory, so pimm concatenates points and records cumulative
+event boundaries in `offset`:
+
+```text
+coord   [total_points, 3]
+feat    [total_points, channels]
+offset  [batch_size]              cumulative end indices
+```
+
+This supports point-transformer and sparse-convolution models without imposing
+a common event length. It also means memory use depends on the total points in
+each batch, not only the configured number of events. See {doc}`Data conventions
+<../data/conventions>` before creating a dataset or interpreting a prediction.
+
+## How the pieces fit
+
+1. A Python config selects registered datasets, transforms, model, losses,
+   optimizer, scheduler, hooks, trainer, and evaluator.
+2. `pimm launch` or `pimm submit` resolves the execution environment and turns
+   that config into a `torchrun` job.
+3. The dataset emits one event; transforms create the exact coordinate and
+   feature convention expected by the model.
+4. Collation packs several events. The model returns a dictionary containing at
+   least `loss` during training and task-specific predictions during evaluation.
+5. Hooks log, evaluate, and checkpoint the run.
+6. `pimm export` turns model weights plus their sanitized construction config
+   into a portable directory.
+
+The {doc}`experiment anatomy <concepts>` page names the actual modules and
+artifacts for every step.
 
 ## Next
 
-- {doc}`installation` - get pimm running, in a container or from source.
+- {doc}`Install pimm <installation>`.
+- {doc}`Complete the CI-sized first experiment <quickstart>`.
+- If you already have a checkpoint, go to {doc}`Pretrained models
+  <../models/pretrained>`.

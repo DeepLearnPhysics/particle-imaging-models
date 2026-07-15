@@ -85,8 +85,9 @@ class PILArNetParquetDataset(PILArNetOverlayMixin, Dataset):
     Reads the same flat ``point``/``cluster``/``cluster_extra`` layout as
     :class:`PILArNetH5Dataset` from parquet shards -- either the HF
     auto-converted ref of a dataset repo (``repo_id``) or a local directory of
-    parquet files (``data_root``) -- and emits identical ``data_dict``s via the
-    shared :func:`decode_event`. Intended for fine-tuning, evaluation, probes,
+    parquet files (``data_root``) -- and emits identical ``data_dict``
+    dictionaries via the shared :func:`decode_event`. Intended for fine-tuning,
+    evaluation, probes,
     and anywhere reproducible random access matters; for large-scale pretraining
     prefer :class:`PILArNetParquetIterableDataset` (sequential + shuffle buffer).
 
@@ -256,8 +257,8 @@ class PILArNetParquetIterableDataset(IterableDataset):
     access pattern parallel/network filesystems reward) and approximates a full
     shuffle with shard-order shuffling plus a reservoir ``buffer_size`` buffer.
     Shards are split across DDP ranks (``split_dataset_by_node``) and DataLoader
-    workers automatically. Emits the same ``data_dict``s as the map-style reader
-    via the shared :func:`decode_event`.
+    workers automatically. Emits the same ``data_dict`` dictionaries as the
+    map-style reader via the shared :func:`decode_event`.
 
     Note:
         This is a PyTorch ``IterableDataset`` -- wiring it into pimm's training

@@ -1,240 +1,180 @@
-# How pimm works
+# Experiment anatomy
 
-{doc}`overview` introduces pimm; this material builds on it.
+This page follows one training batch from command line to checkpoint. Use it as
+a map when debugging or adding a component.
 
-This page includes a few of the more important concepts in pimm that may differ from other ML libraries or your past conventions.
+## Two configuration layers
 
-## 1. Packed point clouds with offsets
+| Layer | Source | Owns |
+|---|---|---|
+| Execution | `launch/defaults.yaml`, `launch/sites/*.yaml`, optional recipe YAML, launcher flags | node/GPU/CPU counts, Slurm, container, paths, environment, run name, resume |
+| Experiment | `configs/*.py`, inherited bases, post-`--` overrides | data, transforms, model, loss, optimizer, schedule, hooks, epochs, global batch sizes |
 
-This repository is set up to work with sparse data (e.g., point clouds) dictionaries.
+`pimm launch` executes on the current node. `pimm submit` executes through
+Slurm. Both call the same training path after resolving execution settings.
 
-In high energy physics, events are **variable length** - one might be 100 hits or particles, the next 10,000.
-Training on many events per iteration is often done by **padding** individual events into a 3D tensor of shape `(B, N, C)`, where `B` is the batch size, `N` is the padded maximum number of points per event, and `C` are per-point features (e.g., energy deposited).
-This wastes memory when event sizes vary widely, so pimm instead batches data in a **packed** format: every batched quantity is 2D `(N, C)`, the concatenation of all events into a single flat tensor, with an `offset` tensor marking where each event ends.
-This layout is Compressed Sparse Row (CSR), and graph neural networks make heavy use of it since they work naturally with variable length objects.
-Packed memory usage is not predictable in advance, so a batch with more data than normal can trigger Out of Memory (OOM) errors partway through a run; log GPU VRAM usage across training with the {py:class}`~pimm.engines.hooks.resources.ResourceUtilizationLogger` hook.
-
-<p align="center">
-    <img alt="pointcept" class="only-light" src="https://raw.githubusercontent.com/pointcept/assets/main/pointcept/offset.png" width="480">
-    <img alt="pointcept" class="only-dark" src="https://raw.githubusercontent.com/pointcept/assets/main/pointcept/offset_dark.png" width="480">
-    <br>
-</p>
-
-
-A batch in pimm usually looks something like:
-
-```python
-{
-    "coord":  Tensor[total_points, D],   # D = 2 or 3, and correspond to 3D positions
-    "feat":   Tensor[total_points, C],   # features fed as inputs to the model
-    "offset": Tensor[batch_size],        # cumulative event boundaries
-    "segment": Tensor[total_points, 1],  # per-point labels (when supervised)
-    "name":   list[str],                 # event identifiers
-}
+```bash
+uv run pimm launch \
+  --train.config tests/tiny_semseg \
+  --resources.nproc-per-node 2 \
+  -- batch_size=8 optimizer.lr=0.001
 ```
 
-A collate function automatically **concatenates** tensors into this flat format, turning
-per-sample lengths into cumulative offsets. This packed format is quite general, and what makes the same models work across very
-different detectors. See {doc}`../datasets/data_format`.
+Here `resources.nproc_per_node=2` is execution state; `batch_size=8` and
+`optimizer.lr` are experiment state.
 
-## 2. Everything is a registry
+## Python config resolution
 
-Models, datasets, transforms, hooks, losses, optimizers, schedulers, trainers,
-and testers are all created from **dictionaries with a `type` key**,
-resolved through small registries, e.g.:
-
-```python
-from pimm.models import build_model
-model = build_model(dict(type="PT-v3m2", in_channels=3, ...))
-```
-
-`type` is the name a class registered under via a decorator placed in front of all datasets, transforms, hooks, models, and trainers:
+{py:meth}`Config.fromfile <pimm.utils.config.Config.fromfile>` loads the requested file and its `_base_`
+chain. Dictionaries merge recursively; replacing a list replaces the full
+list. CLI overrides are applied last using dotted keys.
 
 ```python
-from pimm.models import MODELS
+# configs/my_project/semseg.py
+_base_ = ["../panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft.py"]
 
-@MODELS.register_module("PT-v3m2")      # <-- type would be "PT-v3m2"
-class PointTransformerV3(PointModule):
-    ...
+batch_size = 16  # global across every rank
+data = dict(train=dict(max_len=100_000))
+optimizer = dict(lr=3e-5)
 ```
 
-This makes these objects modular and easy to extend: see {doc}`../research_ecosystem/contributing_a_model`, {doc}`../research_ecosystem/contributing_a_dataset`, {doc}`../research_ecosystem/contributing_a_hook`, and {doc}`../research_ecosystem/contributing_a_transform`.
-Registries are helpful in foundation model research, where the model encoder (Sparse UResNet, GNN, Point Transformer V3) and the training paradigm (MAE, Sonata, JEPA) are separate axes of study.
-Registries keep these two axes mostly independent: Sonata requires only a feature extractor that produces per-point features, and how those features are produced does not matter.
-The Sonata config looks something like:
+The resolved values are saved as `config.py` and `resolved_config.json`; these,
+not the original base file, are the record of what started.
+
+## Registries construct components
+
+Configs describe objects with a `type` key:
 
 ```python
 model = dict(
-  type="Sonata-v1m1",
-  backbone=dict(
-    type="PT-v3m2",
-    in_channels=4,
-    ...
-  ),
-  head_in_channels=512, # number of features output by the backbone
-  ...
+    type="DefaultSegmentorV2",
+    # A real recipe supplies the complete PT-v3m2 architecture block.
+    backbone=dict(type="PT-v3m2", in_channels=4),
+    criteria=[dict(type="CrossEntropyLoss", ignore_index=-1)],
 )
 ```
-Look around some of the configuration files in pimm to get an idea of this.
 
-:::{important}
-A class that pimm never imports doesn't get registered, so it isn't buildable from a config. Import new models/datasets/transforms/hooks from the relevant package `__init__.py`.
-:::
+Builders resolve those names through registries. The relevant package must
+import a decorated class before it can be found.
 
-The registries below can be found in the {doc}`API reference <../api/index>`.
+| Registry | Typical config fields |
+|---|---|
+| `MODELS` | `model`, nested `backbone`, task heads |
+| `DATASETS` | `data.train`, `data.val`, `data.test` |
+| `TRANSFORMS` | `transform` pipelines |
+| `LOSSES` | `criteria` |
+| `HOOKS` | `hooks` |
+| `TRAINERS` | `train.type` |
 
-| Registry | Builds (all registered types) |
-|----------|--------|
-| `MODELS` | {doc}`models & backbones <../api/registry/models>` |
-| `DATASETS` | {doc}`datasets <../api/registry/datasets>` |
-| `TRANSFORMS` | {doc}`transforms <../api/registry/transforms>` |
-| `HOOKS` | {doc}`training hooks <../api/registry/hooks>` |
-| `LOSSES` | {doc}`loss functions <../api/registry/losses>` |
-| `TRAINERS` | {doc}`trainers <../api/registry/trainers>` |
+The generated {doc}`registry API <../api/index>` is exhaustive. The
+{doc}`extension map <../extend/architecture>` explains which interfaces are
+stable enough to build against.
 
-## 3. Training configs are Python, command executions are in YAML
+## Samples become a packed batch
 
-There are two configuration systems and they do different things:
+A dataset returns one event as a dictionary. Common per-point fields are
+two-dimensional even for scalar quantities:
 
-```{list-table}
-:header-rows: 1
-:widths: 22 78
-
-* - Layer
-  - Owns
-* - **Python configs** (`configs/*.py`)
-  - *What* to train: model, dataset, transforms, optimizer, scheduler, hooks,
-    epochs, batch size. The source of truth for training behavior.
-* - **Launch YAML** (`launch/`)
-  - *How / where* to run: Slurm resources, account, partition, container,
-    site paths, env vars, run naming, resume, chaining.
+```text
+coord          float tensor  (num_points, 3)
+energy         float tensor  (num_points, 1)
+segment_motif  integer tensor (num_points, 1)
+name           string
 ```
 
-Example configs:
+Transforms normalize, augment, voxelize, copy target fields, convert tensors,
+and collect `feat`. Collation concatenates per-point arrays and adds cumulative
+event boundaries:
 
-::::{tab-set}
-
-:::{tab-item} Python config
-```python
-# configs/path/to/some_config.py
-_base_ = ["../../_base_/default_runtime.py"]
-
-# Runtime and logging
-batch_size = 48       # batch size / GPU
-num_worker = 24       # num worker / GPU
-enable_amp = True
-amp_dtype = "bfloat16"
-seed = 0
-use_wandb = True
-wandb_project = "..."
-
-# Shared constants
-grid_size = 0.001
-warmup_ratio = 0.05
-
-# Model
-model = dict(type="...", ...)
-
-# Optimizer and scheduler
-optimizer = dict(type="AdamW", lr=base_lr, weight_decay=base_wd)
-scheduler = dict(type="OneCycleLR", ...)
-param_dicts = [...]
-
-# Data
-transform = [...]
-test_transform = [...]
-data = dict(
-    num_classes=...,
-    names=[...],
-    train=dict(type="...", transform=transform, ...),
-    val=dict(type="...", transform=test_transform, ...),
-    test=dict(type="...", transform=test_transform, ...),
-)
-
-Hooks and tester overrides
-hooks = [...]
-test = dict(type="...", ...)
-```
-:::
-
-:::{tab-item} YAML
-```yaml
-# launch/sites/mycluster.yaml
-_base_: slurm.yaml                 # generic Slurm defaults
-
-site: mycluster
-
-paths:
-  repo_root: /path/to/pimm         # shared checkout jobs run from
-  exp_root: "{repo_root}/exp"      # where runs are written
-
-resources:
-  nnodes: 1
-  nproc_per_node: 4                # GPUs per node
-  cpus_per_proc: 12                # CPUs per GPU
-  time: "12:00:00"
-
-slurm:
-  account: <account>
-  partition: <partition>
-  gpu_directive: gres              # `--gres=gpu:N`; some clusters need `gpus-per-node`
-
-container:
-  runtime: none                    # or `singularity` with an `image:`
-
-env:
-  NCCL_SOCKET_IFNAME: "^docker0,lo"
-  HDF5_USE_FILE_LOCKING: "FALSE"
-```
-:::
-
-::::
-
-A run command using this config and site configuration would be:
-```sh
-pimm submit --site mycluster --train.config path/to/some_config
+```text
+coord    float tensor   (total_points, 3)
+feat     float tensor   (total_points, channels)
+segment  integer tensor (total_points,)
+offset   integer tensor (batch_size,)
 ```
 
-There are more features, like run YAMLs; read more in {doc}`../hpc/index`.
+For lengths $[120, 80, 300]$, `offset` is $[120, 200, 500]$. See
+{doc}`Data conventions <../data/conventions>` for coordinate, unit, feature,
+label, and transform contracts.
 
-## 4. Models being trained must output a loss
+## The trainer owns the loop
 
-Like most ML training libraries, training centers on a {doc}`Trainer <../api/registry/trainers>`, which sets up a run, runs the training loop including all hooks, and cleans up once everything is finished.
-For each step, it moves the batch to the device, calls the model, and reads one key:
+{py:class}`DefaultTrainer <pimm.engines.train.Trainer>` creates distributed state, loaders, model, optimizer,
+scheduler, scaler, and hooks. Its central rule is simple:
 
 ```python
-for input_dict in data_loader:
-    ...
-    output_dict = model(input_dict)
-    loss = output_dict["loss"]      # <-- all models being trained need this!
-    ...
-    loss.backward()
+output = model(batch)
+loss = output["loss"]
+loss.backward()
 ```
 
-Internal modules and backbones are free to return `Point`, tensors, etc. Different evaluators and hooks, when used, assume a few more
-keys are in `output_dict`:
+A trainable top-level model must return `loss`. Evaluators and testers consume
+additional task-specific keys such as segmentation logits or detector masks.
+Document those keys with a new task model; they are part of its public output
+contract.
 
-| Key | Consumed by |
-|-----|-------------|
-| `loss` | trainer (backward + logging) |
-| `seg_logits` / `sem_logits` | semantic-seg evaluators & testers |
-| `cls_logits` | classification |
-| `point` | instance/panoptic evaluators (using `return_point=True`) |
-| `pred_logits`, `pred_masks`, `pred_momentum` | detector / instance outputs |
-| `total_loss` | logging hooks (preferred over raw `loss` when present) |
+## Hooks observe lifecycle events
 
-See {doc}`../research_ecosystem/using_trained_models` and {doc}`../hooks/index`.
+Hooks attach behavior without replacing the loop. Their order matters. Typical
+default hooks load a checkpoint, time iterations, write information, compute
+semantic-segmentation metrics, save checkpoints, and perform final evaluation.
 
-:::{note}
-In multi-GPU training, [Distributed Data Parallel (DDP)](https://docs.pytorch.org/docs/main/generated/torch.nn.parallel.DistributedDataParallel.html) synchronizes gradients during `backward()`, so training is correct.
-The logged per-step scalars in the output dict (including `loss`) are each rank's local values unless a model all-reduces them itself.
-:::
+Use a hook for behavior that responds to lifecycle events. Use a transform for
+sample preprocessing, a model for differentiable computation, and a tester or
+evaluator for task-specific predictions and metrics.
 
+## Distributed settings are derived per rank
 
+`batch_size`, `batch_size_val`, `batch_size_test`, and `num_worker` are global
+totals. {py:func}`~pimm.engines.defaults.default_setup` divides them by world
+size and asserts that explicit
+batch sizes divide evenly.
 
+| Config | World size | Per-rank value |
+|---:|---:|---:|
+| `batch_size=16` | 1 | 16 |
+| `batch_size=16` | 4 | 4 |
+| `num_worker=32` | 4 | 8 |
+| `batch_size_val=None` | 4 | 1 (automatic) |
 
-## Next
+The event count does not bound memory: packed batches with unusually large
+events can still exhaust VRAM.
 
-- {doc}`../configuration/index` - Python configs in depth.
-- {doc}`../datasets/index` - datasets, transforms, and the packed format.
-- {doc}`../distributed/index` - how this scales to many GPUs and nodes.
+## A run is a provenance bundle
+
+By default, the launcher copies the code and starts training from the snapshot:
+
+```text
+exp/<group>/<run>/
+├── code/
+├── config.py
+├── resolved_config.json
+├── model_config.json
+├── run_metadata.json
+├── train.log
+└── model/
+```
+
+`MODEL_DIR` may redirect `model/` to another filesystem through a symlink. Keep
+the small provenance files with the run even when moving weights.
+
+## Checkpoint and export are different products
+
+- A **training checkpoint** includes weights plus trainer state required to
+  continue optimization.
+- A **portable export** includes consolidated model weights and, when the config
+  can be found, a sanitized `config.json` used to reconstruct the model.
+
+Same-topology structured resume can restore a mid-epoch dataloader cursor.
+Changing world size or workers discards that cursor and restarts the saved epoch;
+model and optimizer state can still reshard. Read {doc}`Checkpoint semantics
+<../operations/checkpoints>` before claiming an interrupted run continued
+bit-for-bit.
+
+## Continue by intent
+
+- Modify an experiment: {doc}`Configuration <../operations/configuration>`.
+- Understand or add data: {doc}`Data conventions <../data/conventions>`.
+- Run on more devices: {doc}`Distributed training <../workflows/distributed>`.
+- Add a component: {doc}`Extend pimm <../extend/architecture>`.
+- Load or export weights: {doc}`Models <../models/index>`.
