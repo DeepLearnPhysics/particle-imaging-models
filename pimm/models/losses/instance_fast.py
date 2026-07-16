@@ -172,6 +172,7 @@ class FastSingleLayerInstanceLoss(SingleLayerInstanceLoss):
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         truth_label: str = "segment",
+        segment_key: str = "segment",
         momentum_loss_weight: float = 0.0,
         iou_loss_weight: float = 0.0,
     ):
@@ -191,6 +192,7 @@ class FastSingleLayerInstanceLoss(SingleLayerInstanceLoss):
             momentum_loss_weight=momentum_loss_weight,
             iou_loss_weight=iou_loss_weight,
         )
+        self.segment_key = segment_key
         self.matcher = FastHungarianMatcher(
             cost_class=cost_class,
             cost_mask=cost_mask,
@@ -206,7 +208,7 @@ class FastSingleLayerInstanceLoss(SingleLayerInstanceLoss):
         return build_target_cache(
             input_dict[self.truth_label],
             counts,
-            segment=input_dict.get("segment", None),
+            segment=input_dict.get(self.segment_key),
             ignore_index=self.ignore_index,
             device=pred_masks_list[0].device if pred_masks_list else None,
         )
@@ -352,7 +354,7 @@ class FastSingleLayerInstanceLoss(SingleLayerInstanceLoss):
             total_pairs += num_pairs_b
             num_batches_with_loss += 1
 
-            if "pred_logits" in pred and "segment" in input_dict:
+            if "pred_logits" in pred and self.segment_key in input_dict:
                 logits_b = pred["pred_logits"][batch_idx]
                 C = logits_b.shape[-1] - 1
                 inst_class = meta["inst_class"].to(pm_b.device)

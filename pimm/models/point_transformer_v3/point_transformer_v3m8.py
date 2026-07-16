@@ -1,11 +1,13 @@
-"""
-Point Transformer - V3 Mode 8
+"""Point Transformer V3 with 3D RoPE, bottleneck CPE, and QK-Norm. Mostly based on Utonia's
+(arXiv:2603.03283) PTv3 implementation:
 
-Based on V3 Mode 7 (Utonia) with a bottleneck CPE: the sparse convolution
-operates in a smaller channel dimension to reduce the CPE's inductive bias,
-encouraging the model to rely more on attention.
+https://github.com/Pointcept/Pointcept/blob/main/pointcept/models/point_transformer_v3/point_transformer_v3m3_utonia.py
+
+Registered as both PT-v3m4 and PT-v3m8.
 """
+
 from spconv import constants
+
 constants.SPCONV_ALLOW_TF32 = True
 import spconv.pytorch as spconv
 import torch
@@ -40,9 +42,9 @@ class Point3DRoPE(nn.Module):
 
     def __init__(self, head_dim, base=10000, jitter_degree=None, rescale_degree=None):
         super().__init__()
-        assert head_dim % 6 == 0, (
-            f"head_dim must be divisible by 6 for 3D RoPE, got {head_dim}"
-        )
+        assert (
+            head_dim % 6 == 0
+        ), f"head_dim must be divisible by 6 for 3D RoPE, got {head_dim}"
         self.head_dim = head_dim
         self.chunk_dim = head_dim // 3
         self.base = base
@@ -145,6 +147,7 @@ class LayerScale(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
+
 class RPE(torch.nn.Module):
     def __init__(self, patch_size, num_heads):
         super().__init__()
@@ -192,7 +195,7 @@ class SerializedAttention(PointModule):
         self.channels = channels
         self.num_heads = num_heads
         head_dim = int(channels // num_heads)
-        self.scale = qk_scale or head_dim ** -0.5
+        self.scale = qk_scale or head_dim**-0.5
         self.order_index = order_index
         self.upcast_attention = upcast_attention
         self.upcast_softmax = upcast_softmax
@@ -228,8 +231,10 @@ class SerializedAttention(PointModule):
         self.softmax = torch.nn.Softmax(dim=-1)
         self.rpe = RPE(patch_size, num_heads) if self.enable_rpe else None
         self.rope = Point3DRoPE(
-            head_dim, rope_base,
-            jitter_degree=rope_jitter, rescale_degree=rope_rescale,
+            head_dim,
+            rope_base,
+            jitter_degree=rope_jitter,
+            rescale_degree=rope_rescale,
         )
 
     @torch.no_grad()
@@ -258,7 +263,7 @@ class SerializedAttention(PointModule):
                 point[unpad_key] = None
                 point[cu_seqlens_key] = cu_seqlens
                 return point[pad_key], point[unpad_key], point[cu_seqlens_key]
-        
+
             offset = point.offset
             bincount = offset2bincount(offset)
             bincount_pad = (
@@ -358,7 +363,7 @@ class SerializedAttention(PointModule):
             # split q/k/v so we can apply RoPE before flash attention
             qkv_bf = qkv.to(torch.bfloat16).reshape(-1, 3, H, C // H)
             q, k, v = qkv_bf.unbind(dim=1)  # each (N_pad, H, D)
-            if self.q_norm: # before rope!
+            if self.q_norm:  # before rope!
                 q = self.q_norm(q)
             if self.k_norm:
                 k = self.k_norm(k)
@@ -410,17 +415,25 @@ class MLP(nn.Module):
 
 
 class BottleneckCPE(PointModule):
-    """CPE with channel bottleneck: down-project -> sparse conv -> up-project -> norm.
+    """CPE with an optional channel bottleneck around the sparse convolution.
 
-    Reduces the CPE's inductive bias by performing the sparse convolution in a
-    smaller channel space, so the model relies more on attention.
+    Equal input and CPE widths skip the input projection, producing the former
+    full-width CPE path: sparse convolution, output projection, normalization.
     """
 
     def __init__(self, channels, cpe_channels, cpe_indice_key, norm_layer=nn.LayerNorm):
         super().__init__()
-        self.down = nn.Linear(channels, cpe_channels)
+        self.down = (
+            nn.Identity()
+            if channels == cpe_channels
+            else nn.Linear(channels, cpe_channels)
+        )
         self.conv = spconv.SubMConv3d(
-            cpe_channels, cpe_channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
+            cpe_channels,
+            cpe_channels,
+            kernel_size=3,
+            bias=True,
+            indice_key=cpe_indice_key,
         )
         self.up = nn.Linear(cpe_channels, channels)
         self.norm = norm_layer(channels)
@@ -528,7 +541,9 @@ class Block(PointModule):
 
                 # => float32
                 point.feat = point.feat.to(dtype=torch.float32)
-                point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.sparse_conv_feat.features.to(torch.float32))
+                point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(
+                    point.sparse_conv_feat.features.to(torch.float32)
+                )
 
                 # perform fwd
                 shortcut = point.feat
@@ -709,7 +724,6 @@ class Embedding(PointModule):
         norm_layer=None,
         act_layer=None,
         mask_token=False,
-
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -737,8 +751,9 @@ class Embedding(PointModule):
         return point
 
 
-@MODELS.register_module("PT-v3m8")
+@MODELS.register_module(["PT-v3m4", "PT-v3m8"])
 class PointTransformerV3(PointModule):
+    """Point Transformer V3 with 3D RoPE and bottleneck CPE."""
     def __init__(
         self,
         in_channels=6,
@@ -841,7 +856,7 @@ class PointTransformerV3(PointModule):
                         act_layer=act_layer,
                     ),
                     name="down",
-                )            
+                )
             for i in range(enc_depths[s]):
                 enc.add(
                     Block(
@@ -865,7 +880,8 @@ class PointTransformerV3(PointModule):
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
                         upcast_softmax=upcast_softmax,
-                        enable_cpe=(False if cpe_first_layer_only and i != 0 else True) and enable_cpe,
+                        enable_cpe=(False if cpe_first_layer_only and i != 0 else True)
+                        and enable_cpe,
                         cpe_channels=enc_cpe_channels[s],
                         rope_base=rope_base,
                         rope_jitter=rope_jitter,
@@ -923,7 +939,10 @@ class PointTransformerV3(PointModule):
                             enable_flash=enable_flash,
                             upcast_attention=upcast_attention,
                             upcast_softmax=upcast_softmax,
-                            enable_cpe=(False if cpe_first_layer_only and i != 0 else True) and enable_cpe,
+                            enable_cpe=(
+                                False if cpe_first_layer_only and i != 0 else True
+                            )
+                            and enable_cpe,
                             cpe_channels=dec_cpe_channels[s],
                             rope_base=rope_base,
                             rope_jitter=rope_jitter,

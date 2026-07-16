@@ -470,13 +470,17 @@ class InstanceSegTester(TesterBase):
             )
             point_counts = offset2bincount(point.offset)
 
-            post_input = {
-                "pred_masks": pred_masks_list,
-                "pred_logits": pred_logits_list,
-                "stuff_probs": stuff_probs,
-                "point_counts": point_counts,
-                "pred_momentum": pred_momentum_list,
-            }
+            post_input = (
+                output_dict
+                if "outputs_by_label" in output_dict
+                else {
+                    "pred_masks": pred_masks_list,
+                    "pred_logits": pred_logits_list,
+                    "stuff_probs": stuff_probs,
+                    "point_counts": point_counts,
+                    "pred_momentum": pred_momentum_list,
+                }
+            )
 
             results = model.postprocess(
                 post_input,

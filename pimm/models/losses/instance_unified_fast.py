@@ -1,31 +1,7 @@
-"""Unified instance loss for detector-v4.
-
-Superset of the fast instance-segmentation loss that additionally supervises an
-arbitrary set of per-query heads (categorical *and* continuous), and supports an
-overlap-aware (multi-hot) mode for overlapping instances.
-
-Two modes, selected by the ``overlap`` flag (injected per-label by
-``UnifiedDetector``):
-
-* ``overlap=False`` (default) -- mutually-exclusive masks. Ground truth comes
-  from per-point ``instance`` ids (one-hot), matched with the cached fast
-  Hungarian matcher, mask/dice/cls identical to ``FastInstanceSegmentationLoss``.
-  Extra heads are supervised on matched pairs: continuous heads aggregate the
-  per-point target per-instance (mean/first) and apply a regression criterion;
-  categorical heads aggregate per-instance by mode/first and apply CE.
-
-* ``overlap=True`` -- overlapping masks. Ground truth comes from a multi-hot
-  membership matrix (``membership_key``, e.g. ``inst_pe``) plus a per-event
-  ``valid_key`` (e.g. ``ring_valid``); per-instance head targets are read from
-  per-instance tensors (``target_key``). Matching is a per-event scipy
-  Hungarian over float masks (focal mask + dice + class cost), exactly as in the
-  ring panoptic detector. This path requires a dataset that emits the membership
-  matrix; it mirrors ``ring_panoptic_detector`` math.
-"""
+"""Instance mask, class, and per-query-head losses for detector-v5."""
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Dict, List
 
 import torch
@@ -37,133 +13,25 @@ from pimm.models.losses.builder import LOSSES
 from pimm.models.losses.instance_fast import FastSingleLayerInstanceLoss
 from pimm.models.panda_detector.matcher_fast import get_target_masks, split_by_counts
 
-
-def _as_list(value):
-    if value is None:
-        return []
-    if isinstance(value, dict):
-        if "name" in value:
-            return [value]
-        return [dict(cfg, name=name) for name, cfg in value.items()]
-    return list(value)
-
-
-_DEFAULT_CONTINUOUS_CRITERION = dict(
-    type="SmoothL1RegressionLoss", beta=1.0, reduction="mean"
-)
-_DEFAULT_CATEGORICAL_CRITERION = dict(type="CrossEntropyHeadLoss", reduction="mean")
-
-
-def _normalize_query_heads(query_heads):
-    """Loss-side normalization (mirrors the model-side normalizer; kept here so
-    the loss is usable standalone)."""
-    heads = []
-    seen = set()
-    for cfg in _as_list(query_heads):
-        cfg = deepcopy(cfg)
-        name = cfg.get("name")
-        if not name:
-            raise ValueError("Each query head needs a non-empty 'name'")
-        if name in seen:
-            raise ValueError(f"Duplicate query head name: {name!r}")
-        seen.add(name)
-        kind = cfg.setdefault("kind", "continuous")
-        cfg.setdefault("pred_key", f"pred_{name}")
-        cfg.setdefault("target_key", name)
-        cfg.setdefault("loss_weight", 1.0)
-        cfg.setdefault("required", True)
-        if kind == "continuous":
-            cfg.setdefault("aggregation", "mean")
-            cfg.setdefault("criterion", deepcopy(_DEFAULT_CONTINUOUS_CRITERION))
-        else:
-            cfg.setdefault("aggregation", "mode")
-            cfg.setdefault("criterion", deepcopy(_DEFAULT_CATEGORICAL_CRITERION))
-        heads.append(cfg)
-    return heads
+_HEAD_CRITERIA = {
+    "continuous": {"type": "SmoothL1RegressionLoss", "beta": 1.0, "reduction": "mean"},
+    "categorical": {"type": "CrossEntropyHeadLoss", "reduction": "mean"},
+}
 
 
 @LOSSES.register_module()
 class FastUnifiedInstanceLoss(nn.Module):
-    """Unified instance loss for detector-v4: masks + arbitrary per-query heads.
+    """Combine instance mask/class losses with configured query-head losses.
 
-    Superset of :class:`FastInstanceSegmentationLoss` that supervises an arbitrary
-    set of per-query heads (categorical *and* continuous, via ``query_heads``) and
-    supports an overlap-aware mode. Two modes, selected by ``overlap``:
+    Non-overlap mode builds masks from per-point instance ids and aggregates
+    each matched instance's point targets for its query heads. Overlap mode uses
+    the configured multi-hot membership matrix, validity mask, and per-instance
+    head targets. ``aux_outputs`` provide deep supervision and are scaled by
+    ``aux_loss_weight``.
 
-    * ``overlap=False`` (default): mutually-exclusive masks. Ground truth is the
-      per-point ``truth_label`` instance ids; matching/mask/dice/class are
-      identical to the fast instance loss. Continuous heads aggregate the
-      per-point target per instance (mean/first); categorical heads aggregate by
-      mode/first and apply cross-entropy.
-    * ``overlap=True``: overlapping masks. Ground truth is a multi-hot membership
-      matrix (``membership_key``, e.g. ``inst_pe``) gated by a per-event
-      ``valid_key`` (e.g. ``ring_valid``); per-instance head targets come from
-      per-instance tensors. Matching is a per-event scipy Hungarian over float
-      masks, mirroring the ring panoptic detector.
-
-    Deep supervision over ``aux_outputs`` is summed and scaled by
-    ``aux_loss_weight``. ``forward(pred, input_dict)`` returns ``(loss,
-    components)``. Registered as ``FastUnifiedInstanceLoss``.
-
-    Args:
-        cost_mask (float): Matcher weight on the focal mask cost. Defaults to
-            ``1.0``.
-        cost_dice (float): Matcher weight on the Dice cost. Defaults to ``1.0``.
-        cost_class (float): Matcher weight on the classification cost. Defaults to
-            ``0.0``.
-        num_points (int): Sampled points for the mask cost (``0`` uses all).
-            Defaults to ``0``.
-        ignore_index (int): Instance id treated as void. Defaults to ``-1``.
-        loss_weight_focal (float): Weight on the focal mask loss. Defaults to
-            ``1.0``.
-        loss_weight_dice (float): Weight on the Dice loss. Defaults to ``1.0``.
-        cls_weight_matched (float): Weight on the matched-query CE term. Defaults
-            to ``2.0``.
-        cls_weight_noobj (float): Weight on the no-object CE term. Defaults to
-            ``0.1``.
-        focal_alpha (float): Focal-loss positive-class weight. Defaults to
-            ``0.25``.
-        focal_gamma (float): Focal-loss focusing exponent. Defaults to ``2.0``.
-        truth_label (str): ``input_dict`` key holding per-point instance ids
-            (non-overlap mode). Defaults to ``"instance"``.
-        aux_loss_weight (float): Scale on the summed auxiliary loss. Defaults to
-            ``1.0``.
-        query_heads: List (or name-keyed dict) of per-query head configs, each
-            with ``name``, ``kind`` (``"continuous"``/``"categorical"``),
-            ``pred_key``, ``target_key``, ``aggregation``, ``criterion``, and
-            ``loss_weight``. Defaults to ``None``.
-        overlap (bool): Use the overlap-aware (multi-hot) path. Defaults to
-            ``False``.
-        membership_key (str): ``input_dict`` key for the multi-hot membership
-            matrix (overlap mode). Defaults to ``"inst_pe"``.
-        valid_key (str): ``input_dict`` key for the per-event ring-valid mask
-            (overlap mode). Defaults to ``"ring_valid"``.
-        mask_pe_thresh (float): Threshold turning membership PE into binary masks
-            (overlap mode). Defaults to ``0.0``.
-        noobj_mask_loss_weight (float): Weight pushing unmatched query masks
-            toward empty (``0`` disables). Defaults to ``0.0``.
-
-    Example:
-        .. code-block:: python
-
-            >>> import torch
-            >>> from pimm.models.losses.instance_unified_fast import FastUnifiedInstanceLoss
-            >>> # non-overlap mode with one categorical per-query head ("pid")
-            >>> crit = FastUnifiedInstanceLoss(
-            ...     truth_label="instance",
-            ...     query_heads=[dict(name="pid", kind="categorical")])
-            >>> # pred needs pred_masks plus pred_<name> for each query head
-            >>> pred = {"pred_masks": [torch.randn(8, 50)],
-            ...         "pred_pid": [torch.randn(8, 5)]}
-            >>> inst = torch.zeros(50, dtype=torch.long)
-            >>> inst[10:30] = 1; inst[30:50] = 2
-            >>> input_dict = {"instance": inst.view(-1, 1),
-            ...               "pid": torch.randint(0, 5, (50, 1))}
-            >>> loss, comp = crit(pred, input_dict)   # scalar loss + diagnostics dict
-            >>> "pid" in comp                         # one scalar per query head
-            True
-            >>> # overlap=True instead expects a multi-hot membership matrix
-            >>> # (membership_key, e.g. "inst_pe") gated by valid_key ("ring_valid").
+    ``query_heads`` is a list of named mappings. Continuous heads use a
+    regression criterion; categorical heads use cross-entropy. Each mapping
+    selects its prediction key, target key, target aggregation, and loss weight.
     """
 
     def __init__(
@@ -180,8 +48,10 @@ class FastUnifiedInstanceLoss(nn.Module):
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         truth_label: str = "instance",
+        segment_key: str = "segment",
         aux_loss_weight: float = 1.0,
-        query_heads=None,
+        *,
+        query_heads,
         overlap: bool = False,
         membership_key: str = "inst_pe",
         valid_key: str = "ring_valid",
@@ -204,6 +74,7 @@ class FastUnifiedInstanceLoss(nn.Module):
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
             truth_label=truth_label,
+            segment_key=segment_key,
             query_heads=query_heads,
             overlap=overlap,
             membership_key=membership_key,
@@ -213,9 +84,6 @@ class FastUnifiedInstanceLoss(nn.Module):
         )
 
     def forward(self, pred: Dict, input_dict: Dict):
-        if hasattr(pred, "outputs"):
-            pred = pred.outputs
-
         target_cache = self.criterion.build_targets(pred, input_dict)
         final_loss, components = self.criterion(pred, input_dict, target_cache)
 
@@ -238,7 +106,7 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
     def __init__(
         self,
         *args,
-        query_heads=None,
+        query_heads,
         overlap=False,
         membership_key="inst_pe",
         valid_key="ring_valid",
@@ -246,18 +114,19 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         noobj_mask_loss_weight=0.0,
         **kwargs,
     ):
-        kwargs.pop("momentum_loss_weight", None)
-        kwargs.pop("iou_loss_weight", None)
         super().__init__(*args, momentum_loss_weight=0.0, iou_loss_weight=0.0, **kwargs)
         self.overlap = bool(overlap)
         self.membership_key = membership_key
         self.valid_key = valid_key
         self.mask_pe_thresh = float(mask_pe_thresh)
         self.noobj_mask_loss_weight = float(noobj_mask_loss_weight)
-        self.query_heads = _normalize_query_heads(query_heads)
+        self.query_heads = query_heads
         self.head_losses = nn.ModuleDict()
         for head in self.query_heads:
-            self.head_losses[head["name"]] = LOSSES.build(head["criterion"])
+            kind = head.get("kind", "continuous")
+            self.head_losses[head["name"]] = LOSSES.build(
+                head.get("criterion", _HEAD_CRITERIA[kind])
+            )
         self.aux_component_keys = {
             "focal",
             "dice",
@@ -278,9 +147,9 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
     def _build_overlap_target_cache(self, pred_masks_list, input_dict):
         """Per-event multi-hot masks + per-instance head targets from a
         membership matrix. Mirrors RingPanopticDetector._event_targets."""
-        assert self.membership_key in input_dict, (
-            f"overlap loss needs membership matrix input_dict[{self.membership_key!r}]"
-        )
+        assert (
+            self.membership_key in input_dict
+        ), f"overlap loss needs membership matrix input_dict[{self.membership_key!r}]"
         device = pred_masks_list[0].device
         counts = [pm.shape[1] for pm in pred_masks_list]
         membership = input_dict[self.membership_key]  # (N_total, R_max)
@@ -352,8 +221,9 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         losses = {}
         for head in self.query_heads:
             name = head["name"]
-            pred_key = head["pred_key"]
-            target_key = head["target_key"]
+            kind = head.get("kind", "continuous")
+            pred_key = head.get("pred_key", f"pred_{name}")
+            target_key = head.get("target_key", name)
             weight = float(head.get("loss_weight", 1.0))
             if weight == 0.0:
                 continue
@@ -373,16 +243,23 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
                 target_per_inst = target_full[meta["valid_rings"]]
             else:
                 target = self._batch_tensor(
-                    input_dict[target_key], batch_idx, counts, device, meta["valid_mask"]
+                    input_dict[target_key],
+                    batch_idx,
+                    counts,
+                    device,
+                    meta["valid_mask"],
                 )
                 target_per_inst = self._aggregate_target(
-                    target, meta["inverse"], meta["num_instances"], head["aggregation"]
+                    target,
+                    meta["inverse"],
+                    meta["num_instances"],
+                    head.get("aggregation", "mean" if kind == "continuous" else "mode"),
                 )
 
             pred_b = pred[pred_key][batch_idx].to(device)
             pred_matched = pred_b[idx_q.long()]
             target_matched = target_per_inst[idx_gt.long()]
-            if head["kind"] == "continuous":
+            if kind == "continuous":
                 target_matched = target_matched.to(pred_matched.dtype)
                 pred_matched, target_matched = self._align_regression_shapes(
                     pred_matched, target_matched
@@ -404,7 +281,7 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
             prob = ml.sigmoid()
             a, g = self.focal_alpha, self.focal_gamma
             pos = a * (1 - prob) ** g * (-F.logsigmoid(ml))
-            neg = (1 - a) * prob ** g * (-F.logsigmoid(-ml))
+            neg = (1 - a) * prob**g * (-F.logsigmoid(-ml))
             cost_mask = (pos @ gt_masks.T + neg @ (1 - gt_masks).T) / max(N, 1)
             num = 2 * (prob @ gt_masks.T)
             den = prob.sum(1, keepdim=True) + gt_masks.sum(1)[None, :]
@@ -433,9 +310,7 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         if self.overlap:
             indices = []
             for b, (pm_b, meta) in enumerate(zip(pred_masks_list, target_cache)):
-                logits_b = (
-                    pred["pred_logits"][b] if "pred_logits" in pred else None
-                )
+                logits_b = pred["pred_logits"][b] if "pred_logits" in pred else None
                 indices.append(
                     self._overlap_match(pm_b, logits_b, meta["target_masks"])
                 )
@@ -454,7 +329,7 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         total_loss_dice = z.clone()
         total_loss_cls = z.clone()
         total_loss_noobj_mask = z.clone()
-        total_loss_head = {h["name"]: z.clone() for h in self.query_heads}
+        total_head = {h["name"]: z.clone() for h in self.query_heads}
         num_batches_with_head = {h["name"]: 0 for h in self.query_heads}
         num_batches_with_loss = 0
 
@@ -465,7 +340,6 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         count_ce_matched = z.clone()
         total_ce_noobj = z.clone()
         count_ce_noobj = z.clone()
-        total_head = {h["name"]: z.clone() for h in self.query_heads}
         queries_total = z.clone()
         gt_instances_total = z.clone()
 
@@ -508,15 +382,16 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
                 unmatched[idx_q] = False
                 if unmatched.any():
                     nm = pm_b[unmatched]
-                    total_loss_noobj_mask = total_loss_noobj_mask + F.binary_cross_entropy_with_logits(
-                        nm, torch.zeros_like(nm)
+                    total_loss_noobj_mask = (
+                        total_loss_noobj_mask
+                        + F.binary_cross_entropy_with_logits(nm, torch.zeros_like(nm))
                     )
 
             # primary classification (matched -> pid, unmatched -> no-obj)
             if (
                 not self.overlap
                 and "pred_logits" in pred
-                and "segment" in input_dict
+                and self.segment_key in input_dict
             ):
                 logits_b = pred["pred_logits"][batch_idx]
                 inst_class = meta["inst_class"].to(pm_b.device)
@@ -536,7 +411,6 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
                 pred, input_dict, batch_idx, counts, meta, idx_q, idx_gt, pm_b.device
             )
             for name, value in head_losses.items():
-                total_loss_head[name] = total_loss_head[name] + value
                 total_head[name] = total_head[name] + value
                 num_batches_with_head[name] += 1
 
@@ -548,7 +422,7 @@ class FastUnifiedSingleLayerLoss(FastSingleLayerInstanceLoss):
         )
         if self.noobj_mask_loss_weight > 0:
             loss = loss + self.noobj_mask_loss_weight * (total_loss_noobj_mask / denom)
-        for name, value in total_loss_head.items():
+        for name, value in total_head.items():
             loss = loss + value / max(num_batches_with_head[name], 1)
 
         components = {

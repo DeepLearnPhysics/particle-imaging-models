@@ -187,6 +187,15 @@ class InstanceSegmentationEvaluator(HookBase):
         """Return optional model-provided label metadata."""
         return getattr(model, "label_specs", {}) or {}
 
+    @staticmethod
+    def _spec_value(spec, name, default=None):
+        """Read a field from a dictionary or dataclass label config."""
+        return (
+            spec.get(name, default)
+            if isinstance(spec, dict)
+            else getattr(spec, name, default)
+        )
+
     def _resolve_class_names(self, label, model):
         """Resolve class names from hook config, data config, or model specs."""
         class_names = self._select_for_label(self.class_names, label, None)
@@ -204,8 +213,9 @@ class InstanceSegmentationEvaluator(HookBase):
                 return tuple(data_cfg.names)
 
             spec = self._label_specs(model).get(label, {})
-            if "num_classes" in spec:
-                return tuple(range(int(spec["num_classes"])))
+            num_classes = self._spec_value(spec, "num_classes")
+            if num_classes is not None:
+                return tuple(range(int(num_classes)))
 
         if hasattr(data_cfg, "names"):
             return tuple(data_cfg.names)
@@ -222,18 +232,17 @@ class InstanceSegmentationEvaluator(HookBase):
         spec = self._label_specs(model).get(label, {})
         instance_key = (
             self._select_for_label(self.instance_key, label, None)
-            or spec.get("instance_key")
+            or self._spec_value(spec, "instance_key")
             or f"instance_{label}"
         )
         segment_key = (
             self._select_for_label(self.segment_key, label, None)
-            or spec.get("segment_key")
+            or self._spec_value(spec, "segment_key")
             or f"segment_{label}"
         )
-        fallback_key = (
-            self._select_for_label(self.segment_fallback_key, label, None)
-            or spec.get("segment_fallback_key")
-        )
+        fallback_key = self._select_for_label(
+            self.segment_fallback_key, label, None
+        ) or self._spec_value(spec, "segment_fallback_key")
         if segment_key not in input_dict and fallback_key in input_dict:
             segment_key = fallback_key
         return input_dict.get(instance_key), input_dict.get(segment_key)

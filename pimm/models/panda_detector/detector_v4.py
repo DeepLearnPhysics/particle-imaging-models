@@ -1,13 +1,7 @@
-"""Unified, fully-configurable Panda detector (detector-v4).
+"""Unified, fully configurable Panda detector (detector-v4).
 
-A single query-based (DETR / Mask2Former-style) instance/panoptic decoder that
-subsumes the whole panda detector family:
-
-* ``detector-v1m1``  -- mask + PID.
-* ``detector-v1m2``  -- + momentum / IoU heads.
-* ``detector-v3m1/2``-- multi-label (shared decoder, per-label query slices).
-* ``detector-v3m3``  -- generic per-query continuous regression heads.
-* ``ring-panoptic-detector`` -- overlap-aware (per-query sigmoid masks).
+This query-based instance and panoptic decoder supports the following config
+options:
 
 It exposes four axes as pure config:
 
@@ -17,7 +11,7 @@ It exposes four axes as pure config:
 2. **Arbitrary per-query heads** (``query_heads``): any number of categorical
    *and* continuous heads per label, on top of the primary categorical (PID)
    head that drives matching.
-3. **Configurable query count** per label (inherited from the v3 machinery).
+3. **Configurable query count** per label.
 4. **Overlapping queries** (``overlap`` per label): switches ground-truth
    construction + fusion between mutually-exclusive (one-hot, greedy NMS) and
    overlap-aware (multi-hot membership, independent sigmoid).

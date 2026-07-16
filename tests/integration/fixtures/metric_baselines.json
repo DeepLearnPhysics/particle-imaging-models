@@ -52,7 +52,7 @@
       }
     },
     "particle": {
-      "config": "configs/panda/panseg/detector-v4-pt-v3m2-ft-pid-fft.py",
+      "config": "configs/panda/panseg/detector-v5-pt-v3m2-ft-pid-fft-detector.py",
       "model_uri": "hf://DeepLearnPhysics/panda-particle@bd90792dfe83cd05b437b719564b311f0a0b785a",
       "model_revision": "bd90792dfe83cd05b437b719564b311f0a0b785a",
       "model_overrides": {
