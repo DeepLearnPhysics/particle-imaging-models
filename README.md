@@ -110,8 +110,8 @@ For Slurm, use `pimm submit`; for portable weights and Hub publication, use
 
 | Area | Implementations |
 |---|---|
-| Sparse backbones | Point Transformer v1/v2/v3, SparseUNet, LitePT |
-| Representation learning | Panda/Sonata, PoLAr-MAE, LeJEPA, Volt-MAE |
+| Sparse backbones | Point Transformer v1/v2/v3, SparseUNet, LitePT, Volt |
+| Representation learning | Panda/Sonata, PoLAr-MAE |
 | Downstream tasks | semantic segmentation, PointGroup, Panda Detector |
 | Data | PILArNet-M v1/v2 and custom packed point-cloud datasets |
 | Scale | local `torchrun`, DDP, experimental FSDP2, Slurm via Submitit |

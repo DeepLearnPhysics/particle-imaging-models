@@ -1,4 +1,4 @@
-"""Volt-v1m2: Sonata/LeJEPA-compatible Volt encoder + transposed-conv decoder.
+"""Volt-v1m2: Sonata-compatible Volt encoder + transposed-conv decoder.
 
 Differs from v1m1 by upsampling the encoder's per-token features back to
 per-input-point features through a SparseInverseConv3d decoder (matching
@@ -17,7 +17,7 @@ Pipeline:
     stem -> mask injection -> strided tokenizer -> RoPE blocks -> final norm
         -> SparseInverseConv3d decoder -> per-input-point Point
 
-Pair with LeJEPA/Sonata using `up_cast_level=0` (no pooling chain) and
+Pair with Sonata using `up_cast_level=0` (no pooling chain) and
 `head_in_channels=decoder_dim` (typically 256, matching Volt's default).
 """
 
@@ -199,9 +199,7 @@ class Block(PointModule):
             )
             cu[1:] = torch.cumsum(counts.to(torch.int32), dim=0)
             point["cu_seqlens"] = cu
-            point["max_seqlen"] = (
-                int(counts.max().item()) if counts.numel() else 0
-            )
+            point["max_seqlen"] = int(counts.max().item()) if counts.numel() else 0
             point["freqs_cis"] = self.pos_enc.compute_axial_cis_efficient(
                 indices[:, 1:].long()
             )

@@ -13,11 +13,10 @@ have not completed it yet.
 | Panda/Sonata pretraining | `panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask` | PT-v3m2 backbone on PILArNet-M |
 | Panda semantic segmentation | `panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft` | full fine-tune; requires compatible pretrained weight |
 | Panda semantic segmentation from scratch | `panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-scratch` | intended no-weight baseline; verify effective `weight=None` |
-| Panda Detector | `panda/panseg/detector-v4-pt-v3m2-ft-pid-fft` | panoptic/instance outputs; validate its target revision |
+| Panda Detector from Panda Base | `panda/panseg/detector-v5-pt-v3m2-ft-pid-fft` | full fine-tune after loading pretrained backbone weights |
+| Further fine-tune Panda Particle | `panda/panseg/detector-v5-pt-v3m2-ft-pid-fft-detector` | strictly loads the published backbone and task decoder |
 | PoLAr-MAE pretraining | `polarmae/pretrain-polarmae-pilarnet` | masked autoencoding |
 | PoLAr-MAE semantic segmentation | `polarmae/semseg/semseg-polarmae-pilarnet-fft` | downstream semantic task |
-| LeJEPA pretraining | `lejepa/pretrain/pretrain-lejepa-v1m5-pilarnet` | research recipe; inspect stability before publication |
-| Volt-MAE pretraining | `voltmae/pretrain-voltmae-pilarnet` | research recipe; inspect stability before publication |
 
 The {doc}`model chooser <../models/index>` lists published artifacts. The
 {doc}`config catalog <../reference/configuration>` lists every committed recipe

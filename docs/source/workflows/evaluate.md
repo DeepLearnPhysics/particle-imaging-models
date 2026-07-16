@@ -42,7 +42,7 @@ test = dict(type="SemSegTester", verbose=True)
 | {py:class}`~pimm.engines.hooks.eval.semantic_segmentation.SemSegEvaluator` | loss, per-class counts, mIoU, mAcc, allAcc, macro precision/recall/F1 | mIoU |
 | {py:class}`~pimm.engines.hooks.eval.instance_segmentation.InstanceSegmentationEvaluator` | instance/detection/class statistics and configured regression metrics | configured primary metric |
 | {py:class}`~pimm.engines.hooks.eval.pretrain.semantic_segmentation_pretrain.PretrainEvaluator` | frozen-feature linear-probe metrics | mF1 |
-| {py:class}`~pimm.engines.hooks.eval.pretrain.mae.MAEEvaluator` / {py:class}`~pimm.engines.hooks.eval.pretrain.hmae.HMAEEvaluator` | reconstruction losses and mask ratio | negative validation loss |
+| {py:class}`~pimm.engines.hooks.eval.pretrain.mae.MAEEvaluator` | reconstruction losses and mask ratio | negative validation loss |
 
 Instance evaluation commonly requires an event batch size of one; use the
 exact evaluator/config contract rather than copying semantic-segmentation batch

@@ -107,15 +107,13 @@ All paths below are under `panda/panseg/`.
 
 | Model | Target | Variants |
 |---|---|---|
-| `detector-v1m1-pt-v3m2-ft-pid` | particle/PID | `-dec`, `-fft`, `-scratch` |
-| `detector-v1m1-pt-v3m2-ft-vtx` | interaction/vertex | `-dec`, `-fft`, `-scratch` |
-| `detector-v1m2-pt-v3m2-ft-pid` | particle/PID with v1m2 detector | `-dec`, `-fft`, `-scratch` |
-| `detector-v4-pt-v3m2-ft-pid` | configurable v4 particle/PID detector | `-dec`, `-fft`, `-scratch` |
-| `detector-v4-pt-v3m2-ft-vtx` | configurable v4 interaction/vertex detector | `-dec`, `-fft`, `-scratch` |
+| `detector-v5-pt-v3m2-ft-pid` | configurable v5 particle/PID detector | `-dec`, `-fft`, `-fft-detector`, `-scratch` |
+| `detector-v5-pt-v3m2-ft-vtx` | configurable v5 interaction/vertex detector | `-dec`, `-fft`, `-fft-detector`, `-scratch` |
 
-The table expands to all 15 committed files. There is no v1m2 `vtx` config in
-this checkout. Start new work from v4 unless a checkpoint requires the older
-registered structure, and verify the target field/class order in the file.
+The table expands to eight files. The v5 `-dec` and `-fft` recipes
+accept backbone-only Panda pretraining weights; `-fft-detector` strictly loads
+the complete published task detector before further full fine-tuning. There is
+also a scratch variant for each target.
 
 ### PoLAr-MAE
 
@@ -125,18 +123,6 @@ registered structure, and verify the target field/class order in the file.
 | `polarmae/semseg/semseg-polarmae-pilarnet-fft` | full semantic fine-tuning |
 | `polarmae/semseg/semseg-polarmae-pilarnet-peft` | frozen-encoder/head-oriented parameter-efficient recipe |
 | `polarmae/semseg/semseg-polarmae-pilarnet-fft-reproduce` | evaluate the released fine-tuned checkpoint |
-
-### Other pretraining research
-
-| Config | Purpose |
-|---|---|
-| `hmae/pretrain-hmae-v1m1-pilarnet-1m-amp-seed0` | HMAE v1m1 with the configured hierarchical backbone |
-| `hmae/pretrain-hmae-v1m1-ptv4-pilarnet-1m-amp-seed0` | HMAE v1m1 with the PTv4 variant in the file |
-| `lejepa/pretrain/pretrain-lejepa-v1m5-pilarnet` | LeJEPA v1m5 research recipe |
-| `lejepa/pretrain/pretrain-lejepa-v1m5-pilarnet-small` | smaller-data LeJEPA v1m5 variant |
-| `voltmae/pretrain-voltmae-pilarnet` | Volt-MAE v1m1 pretraining |
-| `voltmae/pretrain-voltmae-pilarnet-L` | larger Volt-MAE v1m1 variant |
-| `voltmae/pretrain-voltmae-v1m2-pilarnet` | point-set Volt-MAE v1m2 baseline |
 
 ### Other detector data
 

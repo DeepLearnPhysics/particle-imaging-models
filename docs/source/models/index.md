@@ -68,8 +68,8 @@ configs are the authority for preprocessing and training settings.
 |---|---|
 | Panda Base | [`pretrain-sonata-v1m1-pilarnet-smallmask.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask.py) |
 | Panda Semantic | [`semseg-pt-v3m2-pilarnet-ft-5cls-fft.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft.py) |
-| Panda Particle | [`detector-v4-pt-v3m2-ft-pid-fft.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/panseg/detector-v4-pt-v3m2-ft-pid-fft.py) |
-| Panda Interaction | [`detector-v4-pt-v3m2-ft-vtx-fft.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/panseg/detector-v4-pt-v3m2-ft-vtx-fft.py) |
+| Panda Particle | [`detector-v5-pt-v3m2-ft-pid-fft-detector.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/panseg/detector-v5-pt-v3m2-ft-pid-fft-detector.py) |
+| Panda Interaction | [`detector-v5-pt-v3m2-ft-vtx-fft-detector.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/panda/panseg/detector-v5-pt-v3m2-ft-vtx-fft-detector.py) |
 | PoLAr-MAE Pretrain | [`pretrain-polarmae-pilarnet.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/polarmae/pretrain-polarmae-pilarnet.py) |
 | PoLAr-MAE Semantic | [`semseg-polarmae-pilarnet-fft-reproduce.py`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/configs/polarmae/semseg/semseg-polarmae-pilarnet-fft-reproduce.py) |
 

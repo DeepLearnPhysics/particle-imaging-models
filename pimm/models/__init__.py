@@ -17,6 +17,5 @@ from .panda_detector import *
 
 # Pretraining
 from .sonata import *
-from .lejepa import *
 from .polarmae import *
-from .voltmae import *
+from .volt import *

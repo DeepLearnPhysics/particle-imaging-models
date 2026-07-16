@@ -18,7 +18,7 @@ It is intended for two kinds of reader:
 |---|---|
 | Use a published model | registry-based model construction, checkpoint key mapping, local and Hugging Face loading |
 | Fine-tune | full, linear-probe, frozen-encoder, and PEFT recipes where available |
-| Pretrain | Panda/Sonata, PoLAr-MAE, LeJEPA, and Volt-MAE implementations and configs |
+| Pretrain | Panda/Sonata and PoLAr-MAE implementations and configs |
 | Segment events | semantic segmentation, PointGroup, and Panda Detector task models |
 | Scale a run | one typed launcher for local `torchrun` and Submitit-backed Slurm jobs |
 | Reproduce a run | source snapshot, resolved config, metadata, logs, RNG/optimizer/scheduler/loader state |

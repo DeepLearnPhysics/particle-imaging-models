@@ -44,7 +44,7 @@ from torch.nn.init import trunc_normal_
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModel
 from pimm.models.utils.structure import Point
-from pimm.models.voltmae.layers import (
+from pimm.models.volt.layers import (
     Block,
     RoPE,
     build_point_to_token,
@@ -127,14 +127,6 @@ class VoltBackbone(PointModel):
             ]
         )
 
-        # Final LayerNorm in the standard ViT/DINO position. Without this,
-        # pre-norm blocks let a DC component accumulate across the residual
-        # stream — backbone output `std` blew up to ~12 in real training,
-        # and that single dominant direction caused the OnlineCluster's
-        # prototype rows to align (loss locks to ln(num_prototypes)).
-        # Pass `final_norm=False` to disable for ablation / setups where a
-        # downstream head provides its own input norm (e.g. Volt-MAE's
-        # ReconHead) and you want the unnormalized residual stream.
         self.norm = nn.LayerNorm(embed_dim) if final_norm else nn.Identity()
 
         h_dim = embed_dim // num_heads
@@ -248,9 +240,9 @@ class VoltBackbone(PointModel):
             ),
             grid_coord=token_indices[:, 1:].int(),
             batch=token_indices[:, 0].long(),
-            grid_size=point.grid_size * self.stride
-            if "grid_size" in point.keys()
-            else None,
+            grid_size=(
+                point.grid_size * self.stride if "grid_size" in point.keys() else None
+            ),
             pooling_parent=point,
             pooling_inverse=point_to_token,
         )
@@ -263,9 +255,7 @@ class VoltBackbone(PointModel):
         # input point in each token — matches PT-v3m2's `head_indices`
         # semantics (point_transformer_v3m2_sonata.py:498,526).
         if "segment_motif" in point.keys() or "segment" in point.keys():
-            input_idx = torch.arange(
-                point.feat.shape[0], device=point.feat.device
-            )
+            input_idx = torch.arange(point.feat.shape[0], device=point.feat.device)
             head_indices, _ = torch_scatter.scatter_min(
                 input_idx, point_to_token, dim=0, dim_size=T
             )

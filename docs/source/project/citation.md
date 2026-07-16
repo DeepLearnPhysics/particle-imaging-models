@@ -49,16 +49,13 @@ values are approved.
 | Panda / Sonata | linked model card, recipe comments, and the implementation lineage in `pimm/models/sonata/` | canonical paper/BibTeX is not recorded centrally in this repository |
 | Panda Detector | model card plus detector/backbone sources | see TODO below |
 | PoLAr-MAE | [PoLAr-MAE source repository](https://github.com/DeepLearnPhysics/PoLAr-MAE) and released model card | pimm configs preserve compatibility, but this repository has no central citation manifest |
-| LeJEPA | implementation header in `pimm/models/lejepa/lejepa_v1m5.py` | identifies Balestriero & LeCun, *LeJEPA*, arXiv:2511.08544 (2025) |
 | Point Transformer V3 backbone | [Point Transformer V3 paper](https://arxiv.org/abs/2312.10035) and upstream implementation | cite it when the selected config builds a PTv3 backbone |
 | PILArNet-M | [canonical dataset card](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M) and its linked publication | license/citation should be copied into a future versioned data manifest |
-| HMAE / Volt-MAE and other research configs | file header, linked upstream implementation, and any accompanying model card | see TODO below |
 
 :::{admonition} TODO
 :class: pimm-todo
-Publish a reviewed citation mapping for Panda Detector, HMAE, Volt-MAE, and
-other research configs that do not yet have canonical method metadata in the
-repository.
+Publish a reviewed citation mapping for Panda Detector and other research
+configs that do not yet have canonical method metadata in the repository.
 :::
 
 If a source does not provide citation metadata, mark it as pending in your

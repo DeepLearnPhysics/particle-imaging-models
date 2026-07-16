@@ -131,8 +131,8 @@ implementation.
 
 | Need | Included |
 |---|---|
-| Sparse backbones | Point Transformer v1/v2/v3, SparseUNet, LitePT |
-| Representation learning | Panda/Sonata, PoLAr-MAE, LeJEPA, Volt-MAE |
+| Sparse backbones | Point Transformer v1/v2/v3, SparseUNet, LitePT, Volt |
+| Representation learning | Panda/Sonata, PoLAr-MAE |
 | Downstream tasks | semantic segmentation, PointGroup, Panda Detector |
 | Scale | local `torchrun`, DDP, experimental FSDP2 paths, Slurm via Submitit |
 | Portability | structured checkpoints, plain model weights, Hugging Face exports |
