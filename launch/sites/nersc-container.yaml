@@ -36,7 +36,7 @@ resources:
 # environment, for large-scale or pinned-artifact runs
 container:
   runtime: shifter
-  image: ghcr.io/deeplearnphysics/pimm-nersc:v0.4.2
+  image: ghcr.io/deeplearnphysics/pimm-nersc:v0.5.0
   module: gpu,nccl-plugin
   # binds:
   #   - /path/visible/in/the/container

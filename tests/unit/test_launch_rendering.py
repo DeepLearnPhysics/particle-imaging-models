@@ -85,7 +85,7 @@ def test_nersc_shifter_rendering():
 
     assert params["slurm_account"] == "m5238_g"
     assert params["gpus_per_node"] == 1
-    image = "ghcr.io/deeplearnphysics/pimm-nersc:v0.4.2"
+    image = "ghcr.io/deeplearnphysics/pimm-nersc:v0.5.0"
     assert params["slurm_additional_parameters"]["image"] == image
     assert f"--image={image}" in script
     assert "--module=gpu,nccl-plugin" in script
