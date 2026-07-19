@@ -33,13 +33,12 @@ paths:
   exp_root: "{repo_root}/exp"
 
 resources:
+  scheduler: slurm
   nnodes: 1
   nproc_per_node: 4
   cpus_per_proc: 12
   time: "12:00:00"
   mem: 192G
-
-slurm:
   account: <account>
   partition: <gpu-partition>
   gpu_directive: gres  # or gpus-per-node on clusters that require it
@@ -95,14 +94,33 @@ The command returns after queueing. Slurm output defaults to
 ```bash
 uv run pimm submit --site mycluster \
   --interactive \
-  --slurm.qos <interactive-qos> \
+  --resources.qos <interactive-qos> \
   --resources.nproc-per-node 1 \
   --resources.time 00:30:00 \
   --train.config tests/tiny_semseg
 ```
 
-This blocks in the terminal and ends if the SSH session disappears. Job
-chaining is rejected for interactive execution.
+A single interactive slot blocks in the terminal and ends if the SSH session
+disappears. With `--chain.jobs N` greater than one, pimm instead installs a
+`scron` watchdog that requests sequential `salloc` slots and resumes each slot
+from the newest complete checkpoint. This mode requires a cluster with
+`scrontab` and a login-node QOS such as NERSC's `cron` QOS.
+
+```bash
+uv run pimm submit --site nersc \
+  --interactive \
+  --chain.jobs 4 \
+  --resources.qos interactive \
+  --resources.time 02:00:00 \
+  --train.config my_study/sonata_v1
+
+uv run pimm watchdog ls
+uv run pimm watchdog rm <run-name>
+```
+
+The watchdog survives a dropped SSH session or login-node restart. It retries
+only when the previous slot wrote a newer complete checkpoint; repeated exits
+without checkpoint progress mark the chain failed instead of looping forever.
 
 ## Reusable execution recipes
 
@@ -154,6 +172,10 @@ uv run pimm submit --site mycluster \
 For a chain, each attempt must target the same run and enable resume after the
 first. Inspect the rendered attempts; scheduler requeue behavior and signal
 delivery differ by site.
+
+For a chained interactive run, inspect
+`slurm_logs/watchdog/<run-name>/driver.log`. Removing the watchdog stops future
+supervision; pass `--scancel` to also cancel the current driver and allocation.
 
 ## Cluster checklist
 

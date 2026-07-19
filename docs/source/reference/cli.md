@@ -1,20 +1,24 @@
 # Command-line reference
 
-pimm exposes three commands. Training-config values are intentionally not
+pimm exposes five commands. Training-config values are intentionally not
 typed launcher flags: put them after a bare `--` as `key=value` tokens.
 
 | Command | Use it for | Does not do |
 |---|---|---|
+| `pimm ls` | list Python training configs below an optional config directory | inspect launch recipes or site profiles |
 | `pimm launch` | run on the current node or inside an existing allocation | submit a scheduler job |
 | `pimm submit` | submit through Slurm with Submitit, or request an interactive allocation | evaluate a completed experiment |
+| `pimm watchdog` | inspect or remove supervisors for chained interactive runs | install a supervisor directly; `pimm submit` does that |
 | `pimm export` | consolidate model weights into a portable directory and optionally upload it | save resumable trainer state |
 
 Run commands through the checkout's locked environment:
 
 ```bash
 uv run pimm --help
+uv run pimm ls panda/pretrain
 uv run pimm launch --help
 uv run pimm submit --help
+uv run pimm watchdog --help
 uv run pimm export --help
 ```
 
@@ -78,9 +82,11 @@ uv run pimm submit \
   --dry-run
 ```
 
-`--interactive` renders and runs `salloc ... srun ...` in the terminal instead
-of queueing a Submitit batch job. Interactive submission is single-shot and
-rejects `--chain.jobs` greater than one.
+`--interactive` uses `salloc ... srun ...` instead of queueing a Submitit batch
+job. A single slot runs in the terminal. With `--chain.jobs N` greater than
+one, pimm installs a `scron` watchdog that supervises sequential, resuming
+interactive slots; the site must provide `scrontab` and a suitable login-node
+QOS.
 
 If `--submit.host HOST` is set, pimm SSHes to that host and invokes `pimm
 submit` there. `--no-remote` prevents that second hop; pimm adds it internally
@@ -96,14 +102,15 @@ have positive and negative forms, for example `--run.timestamp` and
 |---|---|
 | selection/output | `--site`, `--recipe`, `--dry-run`, `--output` |
 | paths | `--paths.repo-root`, `--paths.exp-root` |
-| resources | `--resources.nnodes`, `--resources.nproc-per-node`, `--resources.cpus-per-proc`, `--resources.time`, `--resources.mem` |
+| resources | `--resources.scheduler`, `--resources.nnodes`, `--resources.nproc-per-node`, `--resources.cpus-per-proc`, `--resources.time`, `--resources.mem`, `--resources.account`, `--resources.partition`, `--resources.qos`, `--resources.constraint`, `--resources.dependency`, `--resources.output`, `--resources.error`, `--resources.gpu-directive`, `--resources.job-name`, `--resources.signal-delay-s` |
 | run identity | `--run.name`, `--run.[no-]timestamp`, `--run.wandb-name`, `--run.wandb-project`, `--run.wandb-api-key` |
 | training handoff | `--train.config`, `--train.weight`, `--train.[no-]resume`, `--train.[no-]code-copy`, `--train.python` |
-| Slurm | `--slurm.account`, `--slurm.partition`, `--slurm.qos`, `--slurm.constraint`, `--slurm.dependency`, `--slurm.output`, `--slurm.error`, `--slurm.gpu-directive`, `--slurm.job-name`, `--slurm.signal-delay-s` |
-| container | `--container.runtime`, `--container.image`, `--container.module`, `--container.binds`, `--container.repo-mount`, `--container.unset-env`, `--container.setup`, `--container.interpreter` |
+| container | `--container.runtime`, `--container.image`, `--container.module`, `--container.binds`, `--container.repo-mount`, `--container.unset-env`, `--container.interpreter` |
+| environment bootstrap | `--setup` |
 | requeue | `--chain.jobs`, `--chain.[no-]resume-first`, `--chain.wandb-group`, `--chain.wandb-job-type` |
+| interactive watchdog | `--watchdog.qos`, `--watchdog.interval-min`, `--watchdog.time` |
 | rendezvous | `--rdzv.endpoint`, `--rdzv.id`, `--rdzv.backend` |
-| remote submit | `--submit.host`, `--submit.folder`, `--submit.setup`, `--no-remote` |
+| remote submit | `--submit.host`, `--submit.folder`, `--no-remote` |
 
 `--recipe` is a YAML path relative to the repository root, for example
 `--recipe launch/runs/e050_tail.yaml`. `--output PATH` writes the redacted
@@ -111,15 +118,33 @@ local script, Submitit manifest, or interactive `salloc` command. It does not
 redirect training logs.
 
 Three advanced mappings are deliberately absent from Tyro's flag list:
-`env`, `train.options`, and `slurm.additional_parameters`. Put them in launch
+`env`, `train.options`, and `resources.scheduler_options`. Put them in launch
 YAML. Prefer the post-`--` tail over `train.options` for one-off experiment
 overrides.
+
+`resources.scheduler` accepts only `local` and `slurm`. `pimm launch` always
+runs locally and ignores scheduler-only resource fields; `pimm submit` requires
+`resources.scheduler: slurm`.
 
 :::{caution}
 `--executor` is visible for schema compatibility, but the command verb wins:
 `launch` forces local and `submit` forces batch or interactive Slurm. Choose the
 verb rather than setting this field.
 :::
+
+## `pimm watchdog`
+
+Chained interactive submission installs the supervisor; this command manages
+installed supervisors without loading a launch config:
+
+```bash
+uv run pimm watchdog ls
+uv run pimm watchdog rm <run-name>
+uv run pimm watchdog rm <run-name> --scancel
+```
+
+`rm` removes the run's `scrontab` entry. `--scancel` also cancels the active
+watchdog driver and interactive allocation by Slurm job name.
 
 ## `pimm export`
 

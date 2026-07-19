@@ -17,7 +17,15 @@ import yaml
 
 from .config import build_run_name, validate_launch_config, validate_training_config
 from .local import build_train_sh_command, redact_config, render_script
-from .utils import ROOT, as_bool, chain_jobs, resources, scheduler, slurm_time_to_minutes, write_text
+from .utils import (
+    ROOT,
+    as_bool,
+    chain_jobs,
+    resources,
+    scheduler,
+    slurm_time_to_minutes,
+    write_text,
+)
 
 
 @dataclass
@@ -72,7 +80,7 @@ class SubmititTrainingJob:
 
 def build_slurm_job_name(cfg: dict[str, Any], run_name: str) -> str:
     """Sanitize the run name for Slurm's job-name field."""
-    name = str(cfg.get("slurm", {}).get("job_name") or run_name)
+    name = str(cfg.get("resources", {}).get("job_name") or run_name)
     name = re.sub(r"[^A-Za-z0-9_.+-]+", "-", name).strip("-")
     return name[:128] or "pimm"
 
@@ -91,8 +99,8 @@ def submitit_folder(cfg: dict[str, Any], run_name: str) -> Path:
 
 def user_slurm_log_path(cfg: dict[str, Any], run_name: str) -> str:
     """Return the Slurm log path users should tail for training output."""
-    slurm = cfg.get("slurm", {})
-    output = str(slurm.get("output") or "slurm-%j.out")
+    resource_cfg = cfg.get("resources", {})
+    output = str(resource_cfg.get("output") or "slurm-%j.out")
     # sbatch expands %x to the Slurm job name, but submitit's generated srun
     # command writes its own output file. Resolve %x here so both land in the
     # same user-facing path.
@@ -124,15 +132,15 @@ def experiment_config_path(cfg: dict[str, Any], run_name: str) -> Path:
 def submitit_parameters(cfg: dict[str, Any], run_name: str) -> dict[str, Any]:
     """Map pimm launch resources into submitit's Slurm parameter names."""
     res = resources(cfg)
-    slurm = cfg.get("slurm", {})
+    resource_cfg = cfg.get("resources", {})
     log_path = user_slurm_log_path(cfg, run_name)
     params: dict[str, Any] = {
         "name": build_slurm_job_name(cfg, run_name),
         "nodes": res["nnodes"],
         "tasks_per_node": 1,
         "cpus_per_task": res["cpus_per_proc"] * res["nproc_per_node"],
-        "timeout_min": slurm_time_to_minutes(res["time"]),
-        "slurm_signal_delay_s": int(slurm.get("signal_delay_s", 120)),
+        "timeout_min": slurm_time_to_minutes(resource_cfg.get("time")),
+        "slurm_signal_delay_s": int(resource_cfg.get("signal_delay_s", 120)),
         "slurm_use_srun": True,
         "slurm_srun_args": ["--output", log_path, "--error", log_path],
     }
@@ -143,23 +151,23 @@ def submitit_parameters(cfg: dict[str, Any], run_name: str) -> dict[str, Any]:
         ("constraint", "slurm_constraint"),
         ("dependency", "slurm_dependency"),
     ):
-        value = slurm.get(cfg_key)
+        value = resource_cfg.get(cfg_key)
         if value is not None and value != "":
             params[submitit_key] = value
-    if res.get("mem"):
-        params["slurm_mem"] = res["mem"]
+    if resource_cfg.get("mem"):
+        params["slurm_mem"] = resource_cfg["mem"]
 
-    gpu_directive = slurm.get("gpu_directive", "gres")
+    gpu_directive = resource_cfg.get("gpu_directive", "gres")
     if gpu_directive == "gres":
         params["slurm_gres"] = f"gpu:{res['nproc_per_node']}"
     elif gpu_directive == "gpus-per-node":
         params["gpus_per_node"] = res["nproc_per_node"]
     else:
-        raise SystemExit(f"Unsupported slurm.gpu_directive: {gpu_directive}")
+        raise SystemExit(f"Unsupported resources.gpu_directive: {gpu_directive}")
 
     additional = {
         "output": log_path,
-        "error": str(slurm.get("error") or log_path),
+        "error": str(resource_cfg.get("error") or log_path),
     }
     # A chained run requeues itself on timeout/preemption: submitit's checkpoint()
     # calls `scontrol requeue`, which SLURM rejects ("Requested operation is
@@ -168,11 +176,16 @@ def submitit_parameters(cfg: dict[str, Any], run_name: str) -> dict[str, Any]:
     # `#SBATCH --requeue` flag (submitit maps the bool True to a value-less flag).
     if chain_jobs(cfg) > 1:
         additional["requeue"] = True
-    additional.update(dict(slurm.get("additional_parameters") or {}))
-    for key in ("image", "module"):
-        value = slurm.get(key)
-        if value is not None and value != "":
-            additional[key] = value
+    scheduler_options = resource_cfg.get("scheduler_options") or {}
+    if not isinstance(scheduler_options, dict):
+        raise SystemExit("resources.scheduler_options must be a mapping")
+    additional.update(scheduler_options)
+    container = cfg.get("container", {})
+    if container.get("runtime") == "shifter":
+        for key in ("image", "module"):
+            value = container.get(key)
+            if value is not None and value != "":
+                additional[key] = value
     params["slurm_additional_parameters"] = additional
     return params
 
@@ -262,7 +275,7 @@ def remote_submit(argv: list[str], cfg: dict[str, Any]) -> str:
     if "--no-remote" not in remote_argv:
         remote_argv = _insert_before_training_tail(remote_argv, "--no-remote")
     remote_parts = [f"cd {shlex.quote(str(repo_root))}"]
-    remote_parts.extend(str(cmd) for cmd in submit_cfg.get("setup") or [])
+    remote_parts.extend(str(cmd) for cmd in cfg.get("setup") or [])
     remote_parts.append("mkdir -p slurm_logs")
     remote_parts.append(f"pimm submit {shlex.join(remote_argv)}")
     remote_inner = " && ".join(remote_parts)
@@ -273,7 +286,9 @@ def remote_submit(argv: list[str], cfg: dict[str, Any]) -> str:
 def submit(cfg: dict[str, Any], run_name: str) -> str:
     """Submit one Slurm job through submitit."""
     if scheduler(cfg) != "slurm":
-        raise SystemExit("pimm submit requires a Slurm site, e.g. --site s3df")
+        raise SystemExit(
+            "pimm submit requires resources.scheduler='slurm', e.g. --site s3df"
+        )
     repo_root = Path(str(cfg.get("paths", {}).get("repo_root", ROOT)))
     cwd = repo_root if repo_root.exists() else ROOT
     folder = submitit_folder(cfg, run_name)
@@ -297,7 +312,7 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
             exp_dir = experiment_config_path(cfg, run_name).parent
             exp_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(submission_file, exp_dir / "launch.sbatch")
-    except OSError:
+    except (AttributeError, OSError):
         pass
     log_path = user_slurm_log_path(cfg, run_name)
     config_path = experiment_config_path(cfg, run_name)
@@ -323,79 +338,197 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
     )
 
 
-def build_interactive_argv(cfg: dict[str, Any], run_name: str) -> list[str]:
+def build_interactive_argv(
+    cfg: dict[str, Any], run_name: str, script: str
+) -> list[str]:
     """Build a blocking `salloc ... srun ... bash -lc <script>` command.
 
-    Reuses the exact rendered launch script (container + train.sh + torchrun) that
-    a batch job runs, so interactive and batch behave identically; `salloc` just
-    grabs the allocation live instead of queuing. The slurm flags mirror the batch
-    parameters. The QOS is ``slurm.qos`` -- for NERSC's interactive queue pass
-    ``--slurm.qos interactive`` (or ``shared_interactive``).
+    `script` is a standalone rendered launch segment (container + train.sh +
+    torchrun) produced by `build_attempts`, identical to what a batch job runs;
+    `salloc` just grabs the allocation live instead of queuing. For a chained
+    interactive run each attempt passes its own pre-rendered script (the later
+    ones carry `-r true`), so the salloc flags below are shared while the inner
+    training segment differs per attempt. The Slurm flags mirror the batch
+    parameters. The QOS is ``resources.qos`` -- for NERSC's interactive queue
+    pass ``--resources.qos interactive`` (or ``shared_interactive``).
     """
     res = resources(cfg)
-    slurm = cfg.get("slurm", {})
+    resource_cfg = cfg.get("resources", {})
     nodes = int(res["nnodes"])
     gpus = int(res["nproc_per_node"])
     cpus = int(res["cpus_per_proc"])
-    qos = slurm.get("qos")
+    qos = resource_cfg.get("qos")
 
     alloc = [
         "salloc",
-        "--job-name", build_slurm_job_name(cfg, run_name),
-        "--nodes", str(nodes),
-        "--ntasks-per-node", "1",
-        "--cpus-per-task", str(cpus * gpus),
+        "--job-name",
+        build_slurm_job_name(cfg, run_name),
+        "--nodes",
+        str(nodes),
+        "--ntasks-per-node",
+        "1",
+        "--cpus-per-task",
+        str(cpus * gpus),
     ]
-    if slurm.get("account"):
-        alloc += ["--account", str(slurm["account"])]
-    if slurm.get("partition"):
-        alloc += ["--partition", str(slurm["partition"])]
+    if resource_cfg.get("account"):
+        alloc += ["--account", str(resource_cfg["account"])]
+    if resource_cfg.get("partition"):
+        alloc += ["--partition", str(resource_cfg["partition"])]
     if qos:
         alloc += ["--qos", str(qos)]
-    if slurm.get("constraint"):
-        alloc += ["--constraint", str(slurm["constraint"])]
-    if res.get("time"):
-        alloc += ["--time", str(res["time"])]
-    if res.get("mem"):
-        alloc += ["--mem", str(res["mem"])]
+    if resource_cfg.get("constraint"):
+        alloc += ["--constraint", str(resource_cfg["constraint"])]
+    if resource_cfg.get("time"):
+        alloc += ["--time", str(resource_cfg["time"])]
+    if resource_cfg.get("mem"):
+        alloc += ["--mem", str(resource_cfg["mem"])]
 
-    gpu_directive = slurm.get("gpu_directive", "gres")
+    gpu_directive = resource_cfg.get("gpu_directive", "gres")
     if gpu_directive == "gres":
         alloc += ["--gres", f"gpu:{gpus}"]
     elif gpu_directive == "gpus-per-node":
         alloc += ["--gpus-per-node", str(gpus)]
     else:
-        raise SystemExit(f"Unsupported slurm.gpu_directive: {gpu_directive}")
+        raise SystemExit(f"Unsupported resources.gpu_directive: {gpu_directive}")
 
     # Shifter image/module directives, mirroring the batch path's #SBATCH --image/
     # --module
-    for key in ("image", "module"):
-        value = slurm.get(key)
-        if value:
-            alloc += [f"--{key}", str(value)]
-    for key, value in (slurm.get("additional_parameters") or {}).items():
+    container = cfg.get("container", {})
+    if container.get("runtime") == "shifter":
+        for key in ("image", "module"):
+            value = container.get(key)
+            if value:
+                alloc += [f"--{key}", str(value)]
+    scheduler_options = resource_cfg.get("scheduler_options") or {}
+    if not isinstance(scheduler_options, dict):
+        raise SystemExit("resources.scheduler_options must be a mapping")
+    for key, value in scheduler_options.items():
         if value is not None and value != "":
             alloc += [f"--{key}", str(value)]
 
     # srun launches the rendered script one task per node (mirrors batch); the
     # script's rdzv derives MASTER_ADDR from $SLURM_JOB_NODELIST.
-    script = render_script(cfg, build_train_sh_command(cfg, run_name), run_name)
     return [*alloc, "srun", "--ntasks-per-node", "1", "bash", "-lc", script]
 
 
-def run_interactive(cfg: dict[str, Any], run_name: str, argv: list[str]) -> int:
-    """Run a blocking interactive allocation, streaming output to the terminal."""
+def render_interactive_commands(commands: list[tuple[Attempt, list[str]]]) -> str:
+    """Render the salloc command(s) for --dry-run / --output.
+
+    A single allocation renders as the bare command (unchanged). A chained run
+    renders one annotated block per attempt so the resume/wandb shape is visible.
+    """
+    if len(commands) == 1:
+        return shlex.join(commands[0][1]) + "\n"
+    total = len(commands)
+    blocks = [
+        f"# interactive attempt {index}/{total} "
+        f"(resume={attempt.resume}, wandb={attempt.wandb_name})\n"
+        f"{shlex.join(argv)}"
+        for index, (attempt, argv) in enumerate(commands, start=1)
+    ]
+    return "\n\n".join(blocks) + "\n"
+
+
+def _latest_checkpoint_mtime(cfg: dict[str, Any], run_name: str) -> float:
+    """Return the mtime of the run's newest complete checkpoint, or 0.0 if none.
+
+    Used to tell a walltime/preemption kill (training advanced the checkpoint
+    before dying -> resume the next allocation) apart from a startup crash (no
+    new checkpoint -> resuming would just repeat it). Mirrors the resume lookup
+    in scripts/train.sh, which reads `<exp_dir>/model`.
+    """
+    from pimm.utils.path import latest_complete_checkpoint
+
+    model_dir = experiment_config_path(cfg, run_name).parent / "model"
+    checkpoint = latest_complete_checkpoint(model_dir)
+    if checkpoint is None:
+        return 0.0
+    try:
+        return checkpoint.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def run_interactive(
+    cfg: dict[str, Any],
+    run_name: str,
+    commands: list[tuple[Attempt, list[str]]],
+) -> int:
+    """Run one or more blocking interactive allocations in sequence.
+
+    A single allocation (chain.jobs == 1) behaves exactly like a plain `salloc`.
+    With chain.jobs > 1 this is the interactive analogue of batch requeue
+    chaining: each attempt grabs its own short `salloc` slot and resumes from the
+    previous attempt's newest checkpoint, so a long run is reached through
+    several small interactive slots instead of one oversized allocation.
+
+    Interactive `salloc` installs no preemption signal and pimm has no timeout
+    handler, so a walltime kill and a crash share the same nonzero exit code. We
+    disambiguate with checkpoint progress: if the model dir gained a newer
+    complete checkpoint during the attempt, the kill was a walltime/preemption
+    and we resume; if not, it was a crash and we stop rather than spin re-running
+    the same failure.
+    """
     repo_root = Path(str(cfg.get("paths", {}).get("repo_root", ROOT)))
     cwd = repo_root if repo_root.exists() else ROOT
+    total = len(commands)
+    chained = total > 1
     print(
         f"{'=' * 80}\n"
         f"Interactive allocation (salloc) for run: {run_name}\n"
-        "  Runs live in this terminal and ends if you disconnect.\n"
+        + (
+            f"  Chained: up to {total} sequential salloc slots, each resuming the last.\n"
+            if chained
+            else ""
+        )
+        + "  Runs live in this terminal and ends if you disconnect.\n"
         f"  cd: {cwd}\n"
         f"{'=' * 80}",
         flush=True,
     )
-    return subprocess.run(argv, cwd=str(cwd)).returncode
+    for index, (attempt, argv) in enumerate(commands, start=1):
+        if chained:
+            print(
+                f"\n{'-' * 80}\n"
+                f"Interactive attempt {index}/{total} "
+                f"(resume={attempt.resume}, wandb={attempt.wandb_name})\n"
+                f"{'-' * 80}",
+                flush=True,
+            )
+        before = _latest_checkpoint_mtime(cfg, run_name)
+        try:
+            returncode = subprocess.run(argv, cwd=str(cwd)).returncode
+        except KeyboardInterrupt:
+            print("\nInterrupted; stopping interactive run.", flush=True)
+            return 130
+        if returncode == 0:
+            if chained and index < total:
+                print(
+                    f"Attempt {index}/{total} finished cleanly -- training "
+                    "completed before exhausting the chain. Stopping.",
+                    flush=True,
+                )
+            return 0
+        # Ctrl-C / SIGINT: the user asked to stop, not a slot timing out.
+        if returncode in (130, -2):
+            return returncode
+        if index >= total:
+            return returncode
+        if _latest_checkpoint_mtime(cfg, run_name) <= before:
+            print(
+                f"Attempt {index}/{total} exited {returncode} without writing a "
+                "newer checkpoint -- treating this as a crash, not a walltime "
+                "timeout (resuming would just repeat it). Stopping.",
+                flush=True,
+            )
+            return returncode
+        print(
+            f"Attempt {index}/{total} exited {returncode} after advancing the "
+            "checkpoint -- assuming a walltime/preemption kill. Requesting the "
+            "next allocation to resume...",
+            flush=True,
+        )
+    return 0
 
 
 def run_submit(
@@ -410,26 +543,39 @@ def run_submit(
     """Validate, dry-run, or submit a managed Slurm launch."""
     validate_launch_config(cfg)
     validate_training_config(cfg)
+    if scheduler(cfg) != "slurm":
+        raise SystemExit("pimm submit requires resources.scheduler='slurm'")
     run_name = build_run_name(cfg, launch_timestamp)
     if not run_name:
         raise SystemExit("Could not determine run name")
 
     if as_bool(cfg.get("interactive", False)):
-        if scheduler(cfg) != "slurm":
-            raise SystemExit("--interactive requires a Slurm site (e.g. --site nersc).")
-        if chain_jobs(cfg) > 1:
-            raise SystemExit(
-                "--interactive is single-shot and does not support chaining "
-                "(chain.jobs>1). Drop --interactive for a chained batch run."
+        # A chained interactive run needs its foreground driver to survive the
+        # login session/node; host it under a scron watchdog instead (unless we
+        # already ARE that watchdog's child, which runs the chain below). See
+        # pimm/launch/watchdog.py. Single-slot interactive stays foreground.
+        from .watchdog import CHILD_ENV, install_watchdog
+
+        if chain_jobs(cfg) > 1 and not os.environ.get(CHILD_ENV):
+            return install_watchdog(
+                cfg, run_name, remote_argv, dry_run=dry_run, output=output
             )
-        argv = build_interactive_argv(cfg, run_name)
+        # chain.jobs > 1 chains sequential salloc slots, each resuming the last:
+        # the interactive analogue of batch requeue chaining (see run_interactive).
+        attempts = build_attempts(cfg, run_name)
+        commands = [
+            (attempt, build_interactive_argv(cfg, run_name, attempt.script))
+            for attempt in attempts
+        ]
         if output:
-            path = write_text(output, shlex.join(argv) + "\n")
-            print(f"# wrote interactive salloc command: {path}")
+            path = write_text(output, render_interactive_commands(commands))
+            label = "command" if len(commands) == 1 else f"{len(commands)}-slot chain"
+            print(f"# wrote interactive salloc {label}: {path}")
         if dry_run:
-            print(shlex.join(argv))
+            rendered = render_interactive_commands(commands)
+            print(rendered, end="" if rendered.endswith("\n") else "\n")
             return 0
-        return run_interactive(cfg, run_name, argv)
+        return run_interactive(cfg, run_name, commands)
 
     manifest = render_manifest(cfg, run_name, redact=True)
     if output:
@@ -440,7 +586,11 @@ def run_submit(
         return 0
 
     submit_cfg = cfg.get("submit") or {}
-    result = remote_submit(remote_argv, cfg) if submit_cfg.get("host") and not no_remote else submit(cfg, run_name)
+    result = (
+        remote_submit(remote_argv, cfg)
+        if submit_cfg.get("host") and not no_remote
+        else submit(cfg, run_name)
+    )
     if result:
         print(result, end="" if result.endswith("\n") else "\n")
     return 0

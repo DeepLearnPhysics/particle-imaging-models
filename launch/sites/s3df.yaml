@@ -2,17 +2,88 @@ _base_: slurm.yaml
 
 site: s3df
 
-resources:
-  nproc_per_node: 1 # 1 gpu
-  mem: 512G
+# Optional entries are left commented so this profile keeps its current
+# behavior. Uncomment and customize only the settings this site needs.
+# interactive: true # `pimm submit` uses a blocking salloc instead of sbatch
 
-slurm:
+# Inherited from slurm.yaml; uncomment to override for this site.
+# paths:
+#   repo_root: .
+#   exp_root: "{repo_root}/exp"
+
+resources:
+  scheduler: slurm
+  # nnodes: 1
+  nproc_per_node: 1 # 1 gpu
+  # cpus_per_proc: 12
   account: mli:nu-ml-dev
   partition: ampere
+  # qos: regular
+  # constraint: gpu
+  # dependency: "afterok:12345"
+  # time: "24:00:00"
+  mem: 512G
+  # output: "slurm_logs/slurm-%j.out"
+  # error: "slurm_logs/slurm-%j.err"
+  # gpu_directive: gres # or gpus-per-node
+  # job_name: pimm
+  # signal_delay_s: 120
+  # scheduler_options:
+  #   exclusive: true
 
 # bare metal: jobs use the checkout's uv-managed .venv directly
 container:
   runtime: none
+  # image: /path/to/image.sif
+  # module: gpu
+  # binds:
+  #   - /path/visible/in/the/container
+  # repo_mount: /opt/pimm/src
+  # unset_env:
+  #   - LD_LIBRARY_PATH
+  # interpreter: /opt/pimm/.venv/bin/python
 
-env:
+# Submit from another login host and/or relocate submitit's metadata.
+# submit:
+#   host: iana
+#   folder: slurm_logs/submitit
+
+# setup:
+#   - module load cuda
+
+env:  # put secrets in .env, not here!
   NCCL_SOCKET_IFNAME: "^docker0,lo"
+  # EXTRA_VARIABLE: "value"
+
+# Optional rendezvous values override the automatically generated defaults.
+# rdzv:
+#   endpoint: host.example:29500
+#   id: pimm-run
+#   backend: c10d
+
+# Used only for chained interactive jobs supervised through scron.
+# watchdog:
+#   qos: cron
+#   interval_min: 5
+#   time: "1-00:00:00"
+
+# Per-run defaults are valid here, but reusable run choices usually belong in
+# launch/runs/*.yaml so the site profile remains portable.
+# run:
+#   name: my-run
+#   timestamp: true
+#   wandb_name: my-run
+#   wandb_project: my-project
+#   wandb_api_key: null # pass secrets at launch time; never commit a key
+# train:
+#   config: tests/tiny_semseg
+#   weight: /path/to/checkpoint
+#   resume: false
+#   code_copy: true
+#   python: /path/to/python
+#   options: {}
+# chain:
+#   jobs: 1
+#   resume_first: false
+#   wandb_group: null
+#   wandb_job_type: train-job

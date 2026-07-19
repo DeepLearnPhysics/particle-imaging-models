@@ -2,24 +2,59 @@ _base_: slurm.yaml
 
 site: nersc
 
-resources:
-  cpus_per_proc: 6
-  mem: 192G
+# Optional entries are left commented so this profile keeps its current
+# behavior. Uncomment and customize only the settings this site needs.
+# interactive: true # `pimm submit` uses a blocking salloc instead of sbatch
 
-slurm:
+# Inherited from slurm.yaml; uncomment to override for this site.
+# paths:
+#   repo_root: .
+#   exp_root: "{repo_root}/exp"
+
+resources:
+  # Scheduler-only settings are ignored by `pimm launch`.
+  scheduler: slurm
+  # nnodes: 1
+  # nproc_per_node: 4
+  cpus_per_proc: 6
   account: m5238_g
+  # partition: gpu
   qos: regular
   constraint: gpu
+  # dependency: "afterok:12345"
+  # time: "24:00:00"
   gpu_directive: gpus-per-node
+  mem: 192G
+  # output: "slurm_logs/slurm-%j.out"
+  # error: "slurm_logs/slurm-%j.err"
+  # job_name: pimm
+  # signal_delay_s: 120
+  # scheduler_options:
+  #   exclusive: true
 
 # bare metal: jobs use the checkout's uv-managed .venv, prepared once with
 # scripts/nersc_env.sh (MPI-enabled mpi4py and h5py against the Cray stack)
 container:
   runtime: none
-  setup:
-    - module load cray-mpich cray-hdf5-parallel nccl
+  # image: /path/to/image.sif
+  # module: gpu
+  # binds:
+  #   - /path/visible/in/the/container
+  # repo_mount: /opt/pimm/src
+  # unset_env:
+  #   - LD_LIBRARY_PATH
+  # interpreter: /opt/pimm/.venv/bin/python
 
-env:
+# Submit from another login host and/or relocate submitit's metadata.
+# submit:
+#   host: login.cluster.example
+#   folder: slurm_logs/submitit
+
+setup:
+  - module load cray-mpich cray-hdf5-parallel nccl
+  # - module load another-module
+
+env:  # put secrets in .env, not here!
   # Perlmutter compute nodes reach huggingface.co but the
   # Xet CAS transfer endpoint (cas-bridge.xethub.hf.co) stalls.
   # So we force the classic LFS/HTTPS path via cdn-lfs.
@@ -27,3 +62,37 @@ env:
   NCCL_SOCKET_IFNAME: "^docker0,lo"
   NCCL_NET_GDR_LEVEL: PHB
   HDF5_USE_FILE_LOCKING: "FALSE"
+  # EXTRA_VARIABLE: "value"
+
+# Optional rendezvous values override the automatically generated defaults.
+# rdzv:
+#   endpoint: host.example:29500
+#   id: pimm-run
+#   backend: c10d
+
+# Used only for chained interactive jobs supervised through scron.
+# watchdog:
+#   qos: cron
+#   interval_min: 5
+#   time: "1-00:00:00"
+
+# Per-run defaults are valid here, but reusable run choices usually belong in
+# launch/runs/*.yaml so the site profile remains portable.
+# run:
+#   name: my-run
+#   timestamp: true
+#   wandb_name: my-run
+#   wandb_project: my-project
+#   wandb_api_key: null # pass secrets at launch time; never commit a key
+# train:
+#   config: tests/tiny_semseg
+#   weight: /path/to/checkpoint
+#   resume: false
+#   code_copy: true
+#   python: /path/to/python
+#   options: {}
+# chain:
+#   jobs: 1
+#   resume_first: false
+#   wandb_group: null
+#   wandb_job_type: train-job

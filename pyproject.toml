@@ -10,6 +10,7 @@ dependencies = [
     "PyYAML",
     "submitit",
     "tyro",
+    "typing-extensions",
     "addict",
     "yapf",
 ]

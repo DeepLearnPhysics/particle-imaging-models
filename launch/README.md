@@ -116,6 +116,25 @@ pimm submit \
 Attempt 1 starts normally unless resume is requested. Requeued attempts resume
 from the newest complete checkpoint in the stable experiment directory.
 
+For chained interactive slots, add `--interactive`. pimm installs a `scron`
+watchdog so the sequence survives a dropped login session and resumes only
+after checkpoint progress:
+
+```bash
+pimm submit \
+  --site nersc \
+  --interactive \
+  --chain.jobs 4 \
+  --resources.qos interactive \
+  --resources.time 02:00:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+
+pimm watchdog ls
+```
+
+This requires a site with `scrontab` and a login-node QOS such as NERSC's
+`cron` QOS.
+
 ## Checkpoint Backend Policy
 
 `pimm launch` and `pimm submit` default `CheckpointSaverIteration` to DCP when
@@ -152,3 +171,7 @@ pimm submit \
   the current node.
 - `launch/runs/*.yaml`: optional named launch recipes focused on execution
   choices, not model architecture.
+
+All topology and scheduler settings live under `resources`; site profiles set
+`resources.scheduler` to `local` or `slurm`. The legacy `slurm:` YAML group and
+`--slurm.*` flags warn and are removed in pimm 0.6.0.

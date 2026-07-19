@@ -3,16 +3,19 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 
-from pimm.cli.common import parse_typed_command
+from pimm.cli.common import parse_typed_command, redact_cli_argv
 from pimm.launch.config import finalize_config
 from pimm.launch.schema import SubmitCommand
 from pimm.launch.utils import timestamp
 from pimm.launch.submit import run_submit
 
 
-def parse_command(argv: list[str], launch_timestamp: str) -> tuple[SubmitCommand, list[str]]:
+def parse_command(
+    argv: list[str], launch_timestamp: str
+) -> tuple[SubmitCommand, list[str]]:
     """Parse typed `pimm submit` args with defaults from site and recipe YAML."""
     return parse_typed_command(
         SubmitCommand,
@@ -37,6 +40,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     # `pimm submit` is a Slurm executor: batch (queued) or interactive (live alloc).
     cfg["executor"] = "interactive" if cfg.get("interactive") else "batch"
+    # Record the exact user-facing command so it can be reproduced. The rendered
+    # job script exports this env var; the training engine then folds it into the
+    # run config (-> wandb config / config.py / run_metadata.json). Unlike the
+    # long auto-generated train.sh/torchrun command, this is the command to re-run.
+    cfg.setdefault("env", {}).setdefault(
+        "PIMM_LAUNCH_COMMAND", "pimm submit " + shlex.join(redact_cli_argv(raw_argv))
+    )
     return run_submit(
         cfg,
         launch_timestamp=launch_timestamp,

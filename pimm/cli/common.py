@@ -6,11 +6,33 @@ from typing import TypeVar
 
 import tyro
 
+from pimm.launch.compat import normalize_legacy_cli
 from pimm.launch.config import load_config
 from pimm.launch.schema import LaunchCommand, LaunchConfig
 
-
 CommandT = TypeVar("CommandT", bound=LaunchCommand)
+SECRET_OPTION_PARTS = ("api-key", "token", "secret", "password", "passwd", "credential")
+
+
+def redact_cli_argv(argv: list[str]) -> list[str]:
+    """Replace secret CLI values before recording a reproducible command."""
+    result = []
+    redact_next = False
+    for arg in argv:
+        if redact_next:
+            result.append("<redacted>")
+            redact_next = False
+            continue
+        option, separator, _ = arg.partition("=")
+        normalized = option.lower().replace("_", "-")
+        if option.startswith("--") and any(
+            part in normalized for part in SECRET_OPTION_PARTS
+        ):
+            result.append(f"{option}=<redacted>" if separator else option)
+            redact_next = not separator
+        else:
+            result.append(arg)
+    return result
 
 
 def split_training_tail(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -48,6 +70,7 @@ def parse_typed_command(
 ) -> tuple[CommandT, list[str]]:
     """Parse a Tyro command after loading site/recipe defaults."""
     tyro_args, training_overrides = split_training_tail(argv)
+    tyro_args = normalize_legacy_cli(tyro_args)
     if not tyro_args:
         tyro_args = ["--help"]
     site = bootstrap_value(tyro_args, "site") or default_site

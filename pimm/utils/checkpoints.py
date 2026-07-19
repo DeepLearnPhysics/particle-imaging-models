@@ -407,6 +407,12 @@ def configure_logger_from_checkpoint(trainer, checkpoint):
     """Configure the lazy W&B writer to rewind to checkpoint history state."""
     if not _cfg_get(trainer.cfg, "use_wandb", False):
         return
+    if _cfg_get(trainer.cfg, "wandb_fresh_run_on_resume", False):
+        trainer.logger.info(
+            "Starting a fresh W&B run for this checkpoint continuation; "
+            "model and trainer state still resume exactly."
+        )
+        return
     writer = getattr(trainer, "writer", None)
     configure_resume = getattr(writer, "resume_from_checkpoint", None)
     if configure_resume is None:

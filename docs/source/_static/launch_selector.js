@@ -75,7 +75,7 @@
   function rowDisabled(key) {
     if (key === "nodes") return !isSlurm(); // multi-node needs Slurm
     if (key === "jobType" || key === "walltime") return !isSlurm();
-    if (key === "chain") return !isSlurm() || state.jobType === "interactive";
+    if (key === "chain") return !isSlurm(); // batch requeue or chained interactive slots
     return false;
   }
 
@@ -91,7 +91,8 @@
       if (state.jobType === "interactive") {
         parts.push("--interactive");
       }
-      if (state.jobType === "batch" && state.chain === "4") {
+      if (state.chain === "4") {
+        // Batch requeues; interactive runs 4 sequential resuming salloc slots.
         parts.push("--chain.jobs 4");
       }
     } else {

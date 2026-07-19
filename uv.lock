@@ -1642,6 +1642,7 @@ dependencies = [
     { name = "addict" },
     { name = "pyyaml" },
     { name = "submitit" },
+    { name = "typing-extensions" },
     { name = "tyro" },
     { name = "yapf" },
 ]
@@ -1706,6 +1707,7 @@ requires-dist = [
     { name = "addict" },
     { name = "pyyaml" },
     { name = "submitit" },
+    { name = "typing-extensions" },
     { name = "tyro" },
     { name = "yapf" },
 ]

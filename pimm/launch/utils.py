@@ -63,16 +63,22 @@ def shell_join(parts: list[Any]) -> str:
 
 
 def scheduler(cfg: dict[str, Any]) -> str:
-    """Return "local" or "slurm" from the executor.
-
-    Driven by `cfg["executor"]` (local => local; batch/interactive => slurm), set
-    by the verb, NOT by the site name. Falls back to the legacy site-name rule for
-    configs that predate the executor field.
-    """
+    """Return the scheduler used by the current launcher command."""
+    configured = cfg.get("resources", {}).get("scheduler")
+    if configured not in {"local", "slurm"}:
+        raise SystemExit(
+            "resources.scheduler must be 'local' or 'slurm', "
+            f"got {configured!r}"
+        )
     executor = cfg.get("executor")
-    if executor:
-        return "local" if str(executor) == "local" else "slurm"
-    return "local" if str(cfg.get("site", "local")) == "local" else "slurm"
+    if executor is None:
+        return configured
+    if executor not in {"local", "batch", "interactive"}:
+        raise SystemExit(
+            "executor must be 'local', 'batch', or 'interactive', "
+            f"got {executor!r}"
+        )
+    return "local" if executor == "local" else configured
 
 
 def nproc_is_auto(cfg: dict[str, Any]) -> bool:
@@ -95,17 +101,24 @@ def resources(cfg: dict[str, Any]) -> dict[str, Any]:
     detect all visible GPUs"; it is preserved as "auto" rather than coerced.
     """
     raw = cfg.get("resources", {})
+    if not isinstance(raw, dict):
+        raise SystemExit("resources must be a mapping")
+
+    def positive_int(key: str) -> int:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise SystemExit(f"resources.{key} must be a positive integer")
+        return value
+
     nproc = raw.get("nproc_per_node")
-    if str(nproc).lower() == "auto":
+    if nproc == "auto":
         nproc_value: Any = "auto"
     else:
-        nproc_value = int(nproc or 1)
+        nproc_value = positive_int("nproc_per_node")
     return {
-        "nnodes": int(raw.get("nnodes") or 1),
+        "nnodes": positive_int("nnodes"),
         "nproc_per_node": nproc_value,
-        "cpus_per_proc": int(raw.get("cpus_per_proc") or 1),
-        "time": raw.get("time"),
-        "mem": raw.get("mem"),
+        "cpus_per_proc": positive_int("cpus_per_proc"),
     }
 
 
@@ -155,4 +168,3 @@ def write_text(path: str, text: str) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return output_path
-

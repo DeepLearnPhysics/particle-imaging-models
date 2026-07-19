@@ -1,11 +1,9 @@
 run:
   name: E050-Head512TailWD20-pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20-100000-100ep-lr1e-4-wd0.2-ema0.9995-bs48-seed0
 
-slurm:
-  job_name: panda-h512tail-e050
-
 resources:
   time: "72:00:00"
+  job_name: panda-h512tail-e050
 
 train:
   config: panda/pretrain_geometry_combos/pretrain-sonata-v1m1-pilarnet-e050-head512-tail-wd20

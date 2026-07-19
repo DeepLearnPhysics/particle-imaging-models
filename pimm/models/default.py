@@ -71,6 +71,19 @@ class DefaultSegmentorV2(nn.Module):
                 p.requires_grad = False
             self.backbone.eval()
 
+    def train(self, mode=True):
+        """Set module mode while keeping a frozen probe backbone in eval mode.
+
+        ``nn.Module.train()`` recurses into every child module.  The trainer calls
+        it at the start of each epoch, so setting the backbone to eval mode only
+        in ``__init__`` is not enough: BatchNorm buffers would keep updating and
+        dropout/drop-path would remain active during a nominal linear probe.
+        """
+        super().train(mode)
+        if self.freeze_backbone:
+            self.backbone.eval()
+        return self
+
     def forward(self, input_dict, return_point=False):
         point = Point(input_dict)
         point = self.backbone(point)

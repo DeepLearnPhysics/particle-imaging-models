@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from .compat import normalize_legacy_config
 from .utils import (
     LAUNCH_DIR,
     PLACEHOLDER_RE,
@@ -35,6 +36,7 @@ def load_yaml(path: Path, _seen: set[Path] | None = None) -> dict[str, Any]:
         raise SystemExit(f"Launch config must be a mapping: {path}")
 
     base_spec = data.pop("_base_", None)
+    data = normalize_legacy_config(data, source=str(path))
     if base_spec is None:
         return data
 
@@ -300,14 +302,15 @@ def validate_launch_config(cfg: dict[str, Any]) -> None:
     required = [
         "paths.repo_root",
         "paths.exp_root",
+        "resources.scheduler",
         "resources.nnodes",
         "resources.nproc_per_node",
         "resources.cpus_per_proc",
         "container.runtime",
     ]
     if scheduler(cfg) == "slurm":
-        required.extend(["resources.time", "slurm.gpu_directive"])
-        if str(cfg.get("resources", {}).get("nproc_per_node")).lower() == "auto":
+        required.extend(["resources.time", "resources.gpu_directive"])
+        if cfg.get("resources", {}).get("nproc_per_node") == "auto":
             raise SystemExit(
                 "resources.nproc_per_node='auto' is only valid for the local "
                 "executor; set an explicit GPU count for Slurm (batch/interactive)."
@@ -315,8 +318,15 @@ def validate_launch_config(cfg: dict[str, Any]) -> None:
     for dotted_path in required:
         require_path(cfg, dotted_path)
 
+    gpu_directive = cfg.get("resources", {}).get("gpu_directive")
+    if gpu_directive not in {"gres", "gpus-per-node"}:
+        raise SystemExit(
+            "resources.gpu_directive must be 'gres' or 'gpus-per-node', "
+            f"got {gpu_directive!r}"
+        )
+
     runtime = cfg.get("container", {}).get("runtime")
-    if runtime in {"singularity", "shifter"}:
+    if runtime in {"apptainer", "singularity", "shifter", "docker"}:
         require_path(cfg, "container.image")
 
 

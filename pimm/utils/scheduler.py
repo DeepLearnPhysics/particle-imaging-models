@@ -12,6 +12,10 @@ from .registry import Registry
 SCHEDULERS = Registry("schedulers")
 
 
+def resolve_iters(value, total_steps):
+    return int(value) if value > 1 else int(value * total_steps)
+
+
 @SCHEDULERS.register_module()
 class MultiStepLR(lr_scheduler.MultiStepLR):
     """Multi-step scheduler that accepts milestone ratios of total steps."""
@@ -152,6 +156,13 @@ class OneCycleLR(lr_scheduler.OneCycleLR):
         three_phase=False,
         last_epoch=-1,
     ):
+        # Allow pct_start to be given as an absolute warmup-step count (> 1); the
+        # parent OneCycleLR requires a fraction in (0, 1).
+        if pct_start > 1:
+            assert (
+                total_steps is not None
+            ), "pct_start given in steps (> 1) requires total_steps"
+            pct_start = resolve_iters(pct_start, total_steps) / total_steps
         super().__init__(
             optimizer=optimizer,
             max_lr=max_lr,

@@ -36,7 +36,7 @@ def test_local_uv_rendering(monkeypatch):
 
     assert "sh /work/pimm/scripts/train.sh -m 1 -g 1" in script
     assert "-p /work/.venv/bin/python" in script
-    assert "singularity" not in script
+    assert "apptainer" not in script
     assert "shifter" not in script
 
 
@@ -46,7 +46,7 @@ def test_generic_slurm_uv_rendering():
         executor="batch",
         python="/work/.venv/bin/python",
     )
-    cfg["slurm"].update(account="science", partition="gpu")
+    cfg["resources"].update(account="science", partition="gpu")
 
     manifest = _manifest(cfg)
     params = manifest["parameters"]
@@ -56,7 +56,7 @@ def test_generic_slurm_uv_rendering():
     assert params["slurm_partition"] == "gpu"
     assert params["slurm_gres"] == "gpu:1"
     assert "-p /work/.venv/bin/python" in script
-    assert "singularity" not in script
+    assert "apptainer" not in script
     assert "shifter" not in script
 
 
@@ -70,7 +70,7 @@ def test_s3df_apptainer_rendering():
     assert params["slurm_account"] == "mli:nu-ml-dev"
     assert params["slurm_partition"] == "ampere"
     assert params["slurm_gres"] == "gpu:1"
-    assert "singularity run --nv" in script
+    assert "apptainer run --nv" in script
     assert cfg["container"]["image"] in script
     assert "/work/pimm:/opt/pimm/src" in script
     assert "-p /opt/pimm/.venv/bin/python" in script
@@ -85,8 +85,9 @@ def test_nersc_shifter_rendering():
 
     assert params["slurm_account"] == "m5238_g"
     assert params["gpus_per_node"] == 1
-    assert params["slurm_additional_parameters"]["image"] == "youngsm/pimm-nersc:main"
-    assert "--image=youngsm/pimm-nersc:main" in script
+    image = "ghcr.io/deeplearnphysics/pimm-nersc:v0.4.2"
+    assert params["slurm_additional_parameters"]["image"] == image
+    assert f"--image={image}" in script
     assert "--module=gpu,nccl-plugin" in script
     assert "--volume=/work/pimm:/opt/pimm/src" in script
     assert "-p /opt/pimm/.venv/bin/python" in script

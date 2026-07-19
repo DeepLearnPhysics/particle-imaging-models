@@ -95,12 +95,13 @@ duplicate entire live configs into prose.
 |---|---|
 | `site` | profile under `launch/sites/` |
 | `paths.repo_root`, `paths.exp_root` | checkout and experiment roots |
-| `resources.nnodes`, `nproc_per_node` | nodes and GPUs/processes per node |
-| `resources.cpus_per_proc`, `time`, `mem` | job resources |
+| `resources.scheduler` | `local` or `slurm` |
+| `resources.nnodes`, `nproc_per_node`, `cpus_per_proc` | nodes, GPUs/processes per node, and CPUs per process |
+| `resources.time`, `mem`, `account`, `partition`, `qos`, `constraint`, `output`, `gpu_directive` | scheduler requests and policy |
 | `run.name`, `run.timestamp` | experiment path naming |
 | `train.config`, `train.weight`, `train.resume`, `train.code_copy` | training entry and provenance behavior |
-| `container.*` | runtime, image, binds, interpreter, setup |
-| `slurm.*` | account, partition, QOS, constraint, output, GPU directive |
+| `container.*` | runtime, image, binds, interpreter |
+| `setup` | shell bootstrap lines run before training |
 | `chain.*` | repeated/requeued job attempts |
 
 The current exhaustive flag set comes from the typed dataclasses and is listed

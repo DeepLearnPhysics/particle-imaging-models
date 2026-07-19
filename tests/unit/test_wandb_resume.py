@@ -170,6 +170,46 @@ def test_checkpoint_logger_state_drives_resume_from(monkeypatch):
     assert backend.init_calls[-1]["resume_from"] == "actual-run?_step=8"
 
 
+def test_checkpoint_logger_can_start_fresh_continuation(monkeypatch):
+    backend = FakeWandb()
+    monkeypatch.setattr(events, "wandb", backend)
+
+    writer = events.WandbSummaryWriter(project="pimm", name="continuation")
+    messages = []
+    trainer = type(
+        "Trainer",
+        (),
+        {
+            "cfg": {
+                "use_wandb": True,
+                "wandb_fresh_run_on_resume": True,
+            },
+            "writer": writer,
+            "logger": SimpleNamespace(info=messages.append),
+        },
+    )()
+
+    configure_logger_from_checkpoint(
+        trainer,
+        {
+            "logger": {
+                "wandb": {
+                    "run_id": "original-run",
+                    "resume_step": 15001,
+                }
+            }
+        },
+    )
+    writer.add_scalar("train/loss", 1.0, 15001)
+
+    assert backend.init_calls[-1]["name"] == "continuation"
+    assert "resume_from" not in backend.init_calls[-1]
+    assert messages == [
+        "Starting a fresh W&B run for this checkpoint continuation; "
+        "model and trainer state still resume exactly."
+    ]
+
+
 def test_new_runs_keep_legacy_step_axis_with_one_row_per_iteration(monkeypatch):
     backend = FakeWandb()
     monkeypatch.setattr(events, "wandb", backend)

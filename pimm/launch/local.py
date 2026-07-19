@@ -97,7 +97,7 @@ def container_repo_root(cfg: dict[str, Any]) -> str:
     container = cfg.get("container", {})
     runtime = container.get("runtime")
     repo_mount = container.get("repo_mount")
-    if runtime in {"singularity", "shifter", "docker"} and repo_mount:
+    if runtime in {"singularity", "apptainer", "shifter", "docker"} and repo_mount:
         return str(repo_mount)
     return host_repo_root(cfg)
 
@@ -107,7 +107,7 @@ def repo_bind(cfg: dict[str, Any]) -> str | None:
     container = cfg.get("container", {})
     runtime = container.get("runtime")
     repo_mount = container.get("repo_mount")
-    if runtime not in {"singularity", "shifter", "docker"} or not repo_mount:
+    if runtime not in {"singularity", "apptainer", "shifter", "docker"} or not repo_mount:
         return None
     host_root_path = Path(host_repo_root(cfg)).expanduser()
     host_root = str(
@@ -140,7 +140,7 @@ def interpreter_args(cfg: dict[str, Any]) -> list[str]:
     Priority: explicit `train.python`; else, when a container is configured, its
     absolute `container.interpreter` (None -> rely on the image's `python` on
     PATH); else, for a local run with no container, the launcher's own
-    `sys.executable` (the active project environment). For a Slurm run with no container,
+    `sys.executable` (the active conda env). For a Slurm run with no container,
     return [] so train.sh uses its own `python` default.
     """
     train_cfg = cfg.get("train", {})
@@ -148,7 +148,7 @@ def interpreter_args(cfg: dict[str, Any]) -> list[str]:
     if python is None:
         container = cfg.get("container", {})
         runtime = container.get("runtime")
-        if runtime in {"singularity", "shifter", "docker"}:
+        if runtime in {"singularity", "apptainer", "shifter", "docker"}:
             python = container.get("interpreter")
         elif scheduler(cfg) == "local":
             python = sys.executable
@@ -197,19 +197,21 @@ def build_container_command(cfg: dict[str, Any], train_cmd: str) -> str:
     """Wrap the train.sh command with site setup and the configured container."""
     container = cfg.get("container", {})
     runtime = container.get("runtime")
-    setup = list(container.get("setup") or [])
+    setup = list(cfg.get("setup") or [])
     setup.append(
         "export MASTER_ADDR MASTER_PORT "
         f"OMP_NUM_THREADS={resources(cfg)['cpus_per_proc']}"
     )
     inner_cmd = "\n".join([*setup, train_cmd])
 
-    # enter with a clean shell so host startup files cannot shadow the image's
-    # interpreter; image and site setup provide the required environment
+    # Enter the container with a hermetic shell: do NOT source the host
+    # ~/.bash_profile/~/.bashrc, whose conda init (often an absolute-path call)
+    # would shadow the image's interpreter. The image's own ENV provides PATH; any
+    # module/env setup belongs in top-level `setup`, not the user's dotfiles.
     shell = ["--noprofile", "--norc", "-c"]
 
-    if runtime == "singularity":
-        parts: list[Any] = ["singularity", "run", "--nv"]
+    if runtime == "singularity" or runtime == "apptainer":
+        parts: list[Any] = ["apptainer", "run", "--nv"]
         binds = bind_specs(cfg)
         if binds:
             parts += ["-B", ",".join(str(bind) for bind in binds)]
@@ -277,7 +279,11 @@ def render_script(cfg: dict[str, Any], train_cmd: str, run_name: str | None = No
     lines = [
         "#!/bin/bash",
         "",
-        "set -euo pipefail",
+        # No `-u` (nounset): environment-bootstrap scripts run from `setup`
+        # (conda activate, lmod) routinely reference unset vars and would abort
+        # under nounset. The lines we generate use `${VAR:-default}` and are
+        # nounset-safe anyway, so -u buys nothing here.
+        "set -eo pipefail",
         "",
     ]
     if scheduler(cfg) == "slurm":

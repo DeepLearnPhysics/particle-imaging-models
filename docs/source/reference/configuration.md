@@ -5,7 +5,7 @@ pimm has two configuration systems with different responsibilities:
 | System | Location | Controls |
 |---|---|---|
 | experiment config | Python under `configs/` | data, transforms, model, loss, optimization, hooks, evaluation |
-| launch config | YAML under `launch/` plus typed flags | site, resources, paths, container, Slurm, naming, resume handoff |
+| launch config | YAML under `launch/` plus typed flags | site, resources, paths, container, naming, resume handoff |
 
 The practical guide to inheritance, list replacement, common fields, and
 overrides is {doc}`Configuration <../operations/configuration>`. This page is

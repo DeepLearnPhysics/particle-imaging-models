@@ -3,16 +3,19 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 
-from pimm.cli.common import parse_typed_command
+from pimm.cli.common import parse_typed_command, redact_cli_argv
 from pimm.launch.config import finalize_config
 from pimm.launch.local import launch
 from pimm.launch.schema import LaunchCommand
 from pimm.launch.utils import timestamp
 
 
-def parse_command(argv: list[str], launch_timestamp: str) -> tuple[LaunchCommand, list[str]]:
+def parse_command(
+    argv: list[str], launch_timestamp: str
+) -> tuple[LaunchCommand, list[str]]:
     """Parse typed `pimm launch` args with defaults from site and recipe YAML."""
     return parse_typed_command(
         LaunchCommand,
@@ -37,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
     # `pimm launch` is the local executor by definition (run on the current node),
     # regardless of which site's environment/container is selected.
     cfg["executor"] = "local"
+    # Record the exact user-facing command so the run can be reproduced (the
+    # training engine folds this into the run config / run_metadata.json).
+    cfg.setdefault("env", {}).setdefault(
+        "PIMM_LAUNCH_COMMAND", "pimm launch " + shlex.join(redact_cli_argv(raw_argv))
+    )
     return launch(
         cfg,
         launch_timestamp=launch_timestamp,
