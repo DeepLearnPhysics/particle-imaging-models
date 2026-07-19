@@ -160,7 +160,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.STANDARD_CACHE_IMAGE }},mode=max,ignore-error=${{ github.repository != 'DeepLearnPhysics/particle-imaging-models' }}
           provenance: mode=max
           sbom: false
-          outputs: type=image,push=${{ github.repository == 'DeepLearnPhysics/particle-imaging-models' }},oci-mediatypes=false
+          outputs: type=image,push=${{ github.repository == 'DeepLearnPhysics/particle-imaging-models' }},oci-mediatypes=true
 
       - name: Install Cosign
         if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
