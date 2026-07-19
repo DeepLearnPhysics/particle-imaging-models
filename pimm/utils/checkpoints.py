@@ -57,21 +57,6 @@ EXPORT_CONFIG_READ_NAMES = (
 )
 
 
-def hf_cache_dir():
-    """Resolve pimm's preferred HF download cache directory.
-
-    Priority: ``PIMM_HF_CACHE`` > ``$MODEL_DIR/hub`` (keep Hub downloads next to
-    checkpoints) > ``None`` (HF's own ``HF_HOME``/``HF_HUB_CACHE`` defaults).
-    """
-    explicit = os.environ.get("PIMM_HF_CACHE")
-    if explicit:
-        return explicit
-    model_dir = os.environ.get("MODEL_DIR")
-    if model_dir:
-        return os.path.join(model_dir, "hub")
-    return None
-
-
 def configure_hf_cache():
     """Point Hugging Face's own cache env at pimm's cache, once, so EVERY hub
     download in this process shares one location -- pimm's `hf://` warm-start and
@@ -82,13 +67,10 @@ def configure_hf_cache():
     ``HF_HUB_CACHE``/``HF_HOME`` (respected, already shared) > ``$MODEL_DIR/hub``
     > HF's default. Returns the active cache dir (or ``None``).
     """
-    explicit = os.environ.get("PIMM_HF_CACHE")
-    if explicit:
-        os.environ["HF_HUB_CACHE"] = explicit
-        return explicit
     if os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME"):
         return os.environ.get("HF_HUB_CACHE")
-    target = hf_cache_dir()  # PIMM_HF_CACHE is empty here, so this is $MODEL_DIR/hub or None
+    model_dir = os.environ.get("MODEL_DIR")
+    target = os.path.join(model_dir, "hub") if model_dir else None
     if target:
         os.environ["HF_HUB_CACHE"] = target
     return target
@@ -106,7 +88,7 @@ def parse_hf_uri(uri):
     ``@revision`` attaches to it, and anything after is the in-repo file path.
     ``revision``/``filename`` are ``None``/``""`` when absent.
     """
-    if not is_remote_weight(uri):
+    if not (isinstance(uri, str) and uri.startswith(HF_URI_PREFIX)):
         raise ValueError(f"Not an hf:// reference: {uri}")
     spec = uri[len(HF_URI_PREFIX):]
     revision = None
@@ -141,7 +123,7 @@ def resolve_remote_weight(uri):
     node's local rank 0 fetches; the others read the warm cache after a barrier,
     so the Hub is hit once per node (correct for node-local caches).
     """
-    if not is_remote_weight(uri):
+    if not (isinstance(uri, str) and uri.startswith(HF_URI_PREFIX)):
         return uri
     repo_id, revision, filename = parse_hf_uri(uri)
 
@@ -915,12 +897,12 @@ class CheckpointManager:
             rules = [(keywords, replacement if replacement is not None else keywords)]
         self.trainer.logger.info("=> Loading checkpoint & weight ...")
         weight_path = self.trainer.cfg.weight
-        if is_remote_weight(weight_path):
+        if isinstance(weight_path, str) and weight_path.startswith(HF_URI_PREFIX):
             if self.trainer.cfg.resume:
                 raise ValueError(
                     f"resume=True is not supported with an hf:// weight ({weight_path}). "
                     "The Hub holds model weights only, not trainer state "
-                    "(optimizer/scheduler/step/dataloader — the DCP 'trainer.dcp/' is "
+                    "(optimizer/scheduler/step/dataloader is "
                     "never uploaded). Set resume=False to warm-start a new run from these "
                     "weights, or point `weight` at a local checkpoint dir (.../model/last) "
                     "to resume the original run."
