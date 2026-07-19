@@ -455,6 +455,13 @@ class Trainer(TrainerBase):
                 value = self.cfg.get(cfg_key, None)
                 if value is not None:
                     wandb_kwargs[wandb_key] = value
+            # Surface the original `pimm submit/launch` command in the run Notes
+            # (top of the Overview tab) so it is visible without digging into the
+            # Config. wandb's own "Command" panel still shows the long auto-
+            # captured train.py argv, which we cannot override.
+            launch_command = self.cfg.get('launch_command', None)
+            if launch_command:
+                wandb_kwargs['notes'] = launch_command
             writer = WandbSummaryWriter(**wandb_kwargs) if comm.is_main_process() else None
             self.logger.info(f"Weights & Biases writer initialized with project: {self.cfg.get('wandb_project', 'pimm')}")
         else:

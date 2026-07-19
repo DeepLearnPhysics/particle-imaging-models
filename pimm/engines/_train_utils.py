@@ -154,6 +154,10 @@ def _save_config_artifacts(cfg, file_path, options):
 
     metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(),
+        # The original user-facing `pimm submit/launch ...` command (set by the
+        # launcher via PIMM_LAUNCH_COMMAND) -- the command to re-run this job.
+        "launch_command": cfg.get("launch_command") or os.environ.get("PIMM_LAUNCH_COMMAND"),
+        # The resolved train.py argv this process was actually invoked with.
         "command": sys.argv,
         "cwd": os.getcwd(),
         "host": socket.gethostname(),

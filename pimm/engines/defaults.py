@@ -114,6 +114,15 @@ def default_config_parser(file_path, options, *, save_artifacts=True):
         cfg.seed = get_random_seed()
     object.__setattr__(cfg, "_config_file", file_path)
 
+    # Record the original `pimm submit/launch` command (exported into the job by
+    # the launcher) so it surfaces in the run config -> wandb config, config.py,
+    # resolved_config.json, and run_metadata.json. This is the command to re-run,
+    # unlike the long auto-generated train.sh/torchrun command wandb captures.
+    # Set unconditionally (also on resume) so wandb config always carries it.
+    launch_command = os.environ.get("PIMM_LAUNCH_COMMAND")
+    if launch_command and cfg.get("launch_command") is None:
+        cfg.launch_command = launch_command
+
     model_path = os.path.join(cfg.save_path, "model")
     try:
         os.makedirs(model_path, exist_ok=True)

@@ -546,11 +546,22 @@ class PrototypeUsageLogger(HookBase):
     writer under ``{prefix}/<head>/...``. ``after_train`` removes all registered
     hooks. Registered as ``PrototypeUsageLogger``.
 
+    When ``log_pooling_levels`` is set it ALSO hooks each teacher/student
+    ``backbone`` and, by walking the ``pooling_parent`` chain of the returned
+    ``Point`` (read-only, so the model's later up-cast is untouched), logs the
+    cross-rank average number of points per event at each hierarchy stage under
+    ``{prefix}/<backbone>/points_per_event/level{k}`` (``level0`` = finest input
+    resolution, increasing with pooling depth). This surfaces redundant pooling
+    stages -- e.g. a deepest level that collapses to ~1 point per event after
+    many pooling operations.
+
     Args:
-        log_frequency (int): Log statistics every this many head forward passes.
-            Defaults to ``10``.
+        log_frequency (int): Log statistics every this many head/backbone forward
+            passes. Defaults to ``10``.
         prefix (str): Namespace prefix for the logged keys. Defaults to
             ``"prototypes"``.
+        log_pooling_levels (bool): Also log average points-per-event at each
+            backbone pooling stage. Defaults to ``True``.
 
     Note:
         Specific to models exposing a Sonata-like ``teacher``/``student``
@@ -566,17 +577,21 @@ class PrototypeUsageLogger(HookBase):
             hooks = [dict(type="PrototypeUsageLogger", log_frequency=20)]
             # → every 20 head forward passes writes, per head, the cross-rank
             #   "prototypes/<teacher|student>/<head>/{used_count,unused_percent,
-            #   tokens_per_prototype,assignment_entropy}" to the writer
+            #   tokens_per_prototype,assignment_entropy}" to the writer, plus
+            #   "prototypes/<teacher|student>/backbone/points_per_event/level{k}"
+            #   for each pooling stage
     """
 
     def __init__(
         self,
         log_frequency=10,
-        prefix="prototypes"
+        prefix="prototypes",
+        log_pooling_levels=True,
     ):
         """Configure prototype usage logging cadence and namespace."""
         self.log_frequency = log_frequency
         self.prefix = prefix
+        self.log_pooling_levels = log_pooling_levels
         self.hook_handles = []
         self._step_counters = {}
     
@@ -627,6 +642,19 @@ class PrototypeUsageLogger(HookBase):
                 if 'head' in head_name.lower():
                     self.trainer.logger.info(f"Registering prototype monitor on {head_name}")
                     hook = head.register_forward_hook(self._prototype_stats_hook(f"student/{head_name}"))
+                    self.hook_handles.append(hook)
+
+        # Register hooks on the backbones to log per-stage point counts.
+        if self.log_pooling_levels:
+            for role in ("teacher", "student"):
+                sub = getattr(sonata_module, role, None)
+                if isinstance(sub, torch.nn.ModuleDict) and "backbone" in sub:
+                    self.trainer.logger.info(
+                        f"Registering pooling-level monitor on {role}/backbone"
+                    )
+                    hook = sub["backbone"].register_forward_hook(
+                        self._pooling_levels_hook(f"{role}/backbone")
+                    )
                     self.hook_handles.append(hook)
     
     def _prototype_stats_hook(self, name):
@@ -719,7 +747,79 @@ class PrototypeUsageLogger(HookBase):
                 "assignment_entropy": entropy.item()
             }
         return stats
-    
+
+    def _pooling_levels_hook(self, name):
+        """Create a forward hook that logs avg points/event at each pooling stage."""
+        def hook_fn(module, input, output):
+            # Only log during training steps; eval/probe passes also call the
+            # backbone but are not what we want to characterize here.
+            if not getattr(self.trainer.model, "training", False):
+                return
+            point = output[0] if isinstance(output, tuple) else output
+            if not hasattr(point, "keys") or "feat" not in point:
+                return
+
+            key = f"pooling::{name}"
+            self._step_counters[key] = self._step_counters.get(key, 0) + 1
+            if self._step_counters[key] % self.log_frequency != 0:
+                return
+
+            stats = self._get_pooling_stats(point)
+            if not stats:
+                return
+
+            if hasattr(self.trainer, "writer") and self.trainer.writer is not None:
+                current_iter = self.trainer.comm_info.get("iter", 0) + 1
+                current_epoch = self.trainer.epoch + 1
+                global_step = (current_epoch - 1) * len(self.trainer.train_loader) + current_iter
+                for level, value in stats.items():
+                    self.trainer.writer.add_scalar(
+                        f"{self.prefix}/{name}/points_per_event/level{level}",
+                        value,
+                        global_step,
+                    )
+
+        return hook_fn
+
+    def _get_pooling_stats(self, point):
+        """Average points per event at each pooling stage (cross-rank).
+
+        Walks the ``pooling_parent`` chain WITHOUT consuming it (the model still
+        needs it for up-casting). ``level0`` is the finest input resolution and
+        the level index grows with pooling depth, so the largest level index is
+        the most aggressively pooled stage.
+        """
+        import torch.distributed as dist
+        from pimm.utils.comm import get_world_size
+
+        with torch.no_grad():
+            # Walk from the returned (coarsest) point to the finest parent.
+            chain = [point]
+            cur = point
+            while "pooling_parent" in cur.keys():
+                cur = cur["pooling_parent"]
+                chain.append(cur)
+            levels = list(reversed(chain))  # finest first
+
+            world_size = get_world_size()
+            stats = {}
+            for k, lvl in enumerate(levels):
+                n_points = float(lvl["feat"].shape[0])
+                if "batch" in lvl.keys():
+                    n_events = float(int(lvl["batch"].max().item()) + 1)
+                elif "offset" in lvl.keys():
+                    n_events = float(lvl["offset"].shape[0])
+                else:
+                    n_events = 1.0
+                totals = torch.tensor(
+                    [n_points, n_events], device=lvl["feat"].device, dtype=torch.float64
+                )
+                if world_size > 1:
+                    dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+                total_points, total_events = totals[0].item(), totals[1].item()
+                stats[k] = total_points / total_events if total_events > 0 else 0.0
+        return stats
+
     def after_train(self):
         """Clean up hooks when training is done."""
         for handle in self.hook_handles:
@@ -727,7 +827,10 @@ class PrototypeUsageLogger(HookBase):
     
     def __repr__(self):
         """Return a compact configuration summary for logs."""
-        return f"{self.__class__.__name__}(log_frequency={self.log_frequency}, prefix='{self.prefix}')"
+        return (
+            f"{self.__class__.__name__}(log_frequency={self.log_frequency}, "
+            f"prefix='{self.prefix}', log_pooling_levels={self.log_pooling_levels})"
+        )
 
 @HOOKS.register_module()
 class FeatureStdMonitor(HookBase):

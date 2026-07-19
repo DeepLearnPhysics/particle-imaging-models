@@ -24,9 +24,14 @@ Periodic uploads run in a background thread (``background=True``) so they never
 block the training step. Place ``PushToHub`` *after* the checkpoint saver in the
 ``hooks`` list so the files it reads are already written for the current step.
 
-Caveat: uploading large checkpoints repeatedly to the same path accumulates blobs
-in the repo's LFS history. For frequent periodic pushes, prefer a dedicated repo
-and/or a long ``every_n_epochs`` cadence.
+Uploading large checkpoints repeatedly to the same path accumulates orphaned blobs
+in the repo's LFS history (each push is a new commit; the old blob stays
+referenced by the old commit and counts against storage). To reclaim that space we
+``super_squash_history``: a cheap server-side metadata op (no re-upload) that
+collapses history to a single commit. By default it runs once at the end of
+training (``squash_history=True``); for long runs with many periodic pushes set
+``squash_every_n_pushes=N`` to also squash mid-run and keep storage bounded to
+~N checkpoints.
 
 Failures are logged but never crash the run.
 """
@@ -84,18 +89,32 @@ class PushToHub(HookBase):
         every_n_epochs (int, optional): Push the rolling checkpoint in
             ``after_epoch`` every N epochs. ``None`` disables. Defaults to
             ``None``.
+        every_n_steps (int, optional): Push the rolling checkpoint in
+            ``after_step`` every N global steps -- use this to match an
+            iteration-oriented saver like ``CheckpointSaverIteration`` (set it to
+            the saver's ``save_freq``). The step counter is seeded from resumed
+            progress in ``before_train``. ``None`` disables. Defaults to ``None``.
         background (bool): Run periodic raw uploads in a background thread so
             they never block the training step (uploads to the same path are
             serialized). The final ``after_train`` push is always blocking.
             Defaults to ``True``.
+        squash_history (bool): Squash the repo's git/LFS history once in
+            ``after_train`` (after the final push) to reclaim orphaned LFS blobs.
+            Cheap server-side metadata op; irreversible (drops history).
+            Defaults to ``True``.
+        squash_every_n_pushes (int, optional): Also squash after every N
+            successful periodic pushes (``on_best``/``every_n_epochs``) so a long
+            run does not accumulate unbounded LFS storage before it ends. ``None``
+            disables mid-run squashing. Defaults to ``None``.
 
     Note:
         Uploads run on rank 0 only, and failures are logged but never crash the
         run. Place ``PushToHub`` **after** the checkpoint saver in the ``hooks``
         list so the files it reads are already written. Repeatedly uploading
-        large checkpoints to the same path accumulates LFS blobs in the repo's
-        history, so prefer a dedicated repo and/or a long ``every_n_epochs``
-        cadence for frequent pushes.
+        large checkpoints to the same path accumulates orphaned LFS blobs in the
+        repo's history; ``squash_history`` (end of run) and
+        ``squash_every_n_pushes`` (mid run) reclaim that storage via
+        ``super_squash_history``.
 
     Example:
         Add to ``cfg.hooks`` after the checkpoint saver; by default it uploads
@@ -127,7 +146,10 @@ class PushToHub(HookBase):
         on_train_end=True,
         on_best=False,
         every_n_epochs=None,
+        every_n_steps=None,
         background=True,
+        squash_history=True,
+        squash_every_n_pushes=None,
     ):
         """Configure the target repo, what to push, and when."""
         self.repo_id = repo_id
@@ -140,11 +162,16 @@ class PushToHub(HookBase):
         self.on_train_end = on_train_end
         self.on_best = on_best
         self.every_n_epochs = every_n_epochs
+        self.every_n_steps = every_n_steps
         self.background = background
+        self.squash_history = squash_history
+        self.squash_every_n_pushes = squash_every_n_pushes
         self._api = None
         self._repo_ready = False
         self._seen_best = -float("inf")
         self._futures = {}  # path_in_repo -> in-flight future (one per path)
+        self._push_count = 0
+        self._step_count = 0
 
     def _get_api(self):
         if self._api is None:
@@ -247,32 +274,76 @@ class PushToHub(HookBase):
             self.trainer.logger.warning(f"PushToHub: failed to push {name}: {exc}")
             return False
 
-    def after_step(self):
-        """Push model_best when the best metric improves (cadence sync)."""
-        if not self.on_best:
-            return
-        best = float(self.trainer.best_metric_value)
-        if best > self._seen_best:
-            # Only advance _seen_best on a successful push, so a transient failure
-            # (e.g. model_best.pth not written yet) is retried on a later step.
-            if self._push("model_best", background=self.background, weights_only=True):
-                self._seen_best = best
-
-    def after_epoch(self):
-        """Push the rolling checkpoint every N epochs when configured."""
-        if not self.every_n_epochs:
-            return
-        if (self.trainer.epoch + 1) % self.every_n_epochs == 0:
-            self._push("last", background=self.background, weights_only=True)
-
-    def after_train(self):
-        """Push the configured checkpoint when training finishes (blocking)."""
-        if self.on_train_end:
-            self._push(self.checkpoint, background=False)
-        # Drain any in-flight background uploads so the job does not exit early.
+    def _drain_futures(self):
+        """Block until all in-flight background uploads finish; best-effort."""
         for future in self._futures.values():
             try:
                 future.result()
             except Exception as exc:  # pragma: no cover - best-effort upload
                 if is_main_process():
                     self.trainer.logger.warning(f"PushToHub: background upload failed: {exc}")
+        self._futures.clear()
+
+    def _squash(self):
+        """Squash repo history to reclaim orphaned LFS blobs; best-effort, never fatal.
+
+        Server-side metadata op (no re-upload), so it is cheap. In-flight background
+        uploads are drained first so a concurrent commit cannot race the squash.
+        """
+        if not is_main_process():
+            return
+        self._drain_futures()
+        try:
+            self._get_api().super_squash_history(
+                repo_id=self.repo_id, repo_type="model", branch=self.revision,
+            )
+            self.trainer.logger.info(f"PushToHub: squashed history of {self.repo_id}")
+        except Exception as exc:  # pragma: no cover - best-effort
+            self.trainer.logger.warning(f"PushToHub: failed to squash history: {exc}")
+
+    def _record_push(self):
+        """Count a successful periodic push and squash on the configured cadence."""
+        self._push_count += 1
+        if self.squash_every_n_pushes and self._push_count % self.squash_every_n_pushes == 0:
+            self._squash()
+
+    def before_train(self):
+        """Seed the step counter from resumed progress (mirrors the iteration saver)."""
+        self._step_count = int(getattr(self.trainer, "global_step", 0) or (
+            self.trainer.start_epoch * len(self.trainer.train_loader)
+            + self.trainer.start_iter
+        ))
+
+    def after_step(self):
+        """Push model_best on improvement and/or the rolling ckpt on a step cadence."""
+        self._step_count += 1
+        if self.on_best:
+            best = float(self.trainer.best_metric_value)
+            if best > self._seen_best:
+                # Only advance _seen_best on a successful push, so a transient failure
+                # (e.g. model_best.pth not written yet) is retried on a later step.
+                if self._push("model_best", background=self.background, weights_only=True):
+                    self._seen_best = best
+                    self._record_push()
+        if self.every_n_steps and self._step_count % self.every_n_steps == 0:
+            if self._push("last", background=self.background, weights_only=True):
+                self._record_push()
+
+    def after_epoch(self):
+        """Push the rolling checkpoint every N epochs when configured."""
+        if not self.every_n_epochs:
+            return
+        if (self.trainer.epoch + 1) % self.every_n_epochs == 0:
+            if self._push("last", background=self.background, weights_only=True):
+                self._record_push()
+
+    def after_train(self):
+        """Push the configured checkpoint when training finishes (blocking)."""
+        if self.on_train_end:
+            self._push(self.checkpoint, background=False)
+        # Squash drains in-flight uploads first; otherwise just drain so the job
+        # does not exit before background uploads finish.
+        if self.squash_history or self.squash_every_n_pushes:
+            self._squash()
+        else:
+            self._drain_futures()
