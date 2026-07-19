@@ -71,7 +71,9 @@ def test_s3df_apptainer_rendering():
     assert params["slurm_partition"] == "ampere"
     assert params["slurm_gres"] == "gpu:1"
     assert "apptainer run --nv" in script
-    assert cfg["container"]["image"] in script
+    image = "/sdf/data/neutrino/youngsam/images/pimm_v0.5.0.sif"
+    assert cfg["container"]["image"] == image
+    assert image in script
     assert "/work/pimm:/opt/pimm/src" in script
     assert "-p /opt/pimm/.venv/bin/python" in script
 
