@@ -63,9 +63,9 @@ def configure_hf_cache():
     `from_pretrained`, the `PushToHub` `HfApi`, and any direct `huggingface_hub`
     use. Sets ``HF_HUB_CACHE`` rather than threading ``cache_dir=`` per call.
 
-    Precedence: ``PIMM_HF_CACHE`` (always wins) > an existing
-    ``HF_HUB_CACHE``/``HF_HOME`` (respected, already shared) > ``$MODEL_DIR/hub``
-    > HF's default. Returns the active cache dir (or ``None``).
+    Precedence: an existing ``HF_HUB_CACHE``/``HF_HOME`` (respected, already
+    shared) > ``$MODEL_DIR/hub`` > HF's default. Returns the active cache dir
+    (or ``None``).
     """
     if os.environ.get("HF_HUB_CACHE") or os.environ.get("HF_HOME"):
         return os.environ.get("HF_HUB_CACHE")
@@ -118,10 +118,11 @@ def resolve_remote_weight(uri):
         hf://<repo_id>/<path/to/file>      -> a single file (e.g. model_best.pth)
         hf://<repo_id>@<revision>/<file>   -> a file at a branch/tag/commit
 
-    Downloads land in the Hugging Face cache (``PIMM_HF_CACHE`` overrides, else
-    ``HF_HOME``); subsequent runs hit the cache. In a multi-rank job only each
-    node's local rank 0 fetches; the others read the warm cache after a barrier,
-    so the Hub is hit once per node (correct for node-local caches).
+    Downloads land in the Hugging Face cache (``HF_HUB_CACHE``/``HF_HOME``, or
+    ``$MODEL_DIR/hub`` when neither is set); subsequent runs hit the cache. In a
+    multi-rank job only each node's local rank 0 fetches; the others read the
+    warm cache after a barrier, so the Hub is hit once per node (correct for
+    node-local caches).
     """
     if not (isinstance(uri, str) and uri.startswith(HF_URI_PREFIX)):
         return uri
