@@ -345,7 +345,7 @@ name = "cnms"
 version = "2.0.0+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/cnms-2.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/cnms-2.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:b136b5927fa76b360b9de9108e7f29bb37921a84620c57de4709a2c8f0979142" },
@@ -578,7 +578,7 @@ version = "2.8.3+cu126torch2.10"
 source = { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3%2Bcu126torch2.10-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "einops" },
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3%2Bcu126torch2.10-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a3ece51c513e69a9c0947f36507c8f5e3a5aab9c7cbba54dd6eb42e1b2bacec3" },
@@ -677,8 +677,22 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/db/33/acd0ce6863b6c0d7735007df01815403f5589a21ff8c2e1ee2587a38f548/h5py-3.16.0.tar.gz", hash = "sha256:a0dbaad796840ccaa67a4c144a0d0c8080073c34c76d5a6941d6818678ef2738", size = 446526, upload-time = "2026-03-06T13:49:08.07Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/f9/557ce3aad0fe8471fb5279bab0fc56ea473858a022c4ce8a0b8f303d64e9/h5py-3.16.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:ec86d4fffd87a0f4cb3d5796ceb5a50123a2a6d99b43e616e5504e66a953eca3", size = 3090112, upload-time = "2026-03-06T13:47:37.634Z" },
     { url = "https://files.pythonhosted.org/packages/cb/92/a8851d936547efe30cc0ce5245feac01f3ec6171f7899bc3f775c72030b3/h5py-3.16.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:8975273c2c5921c25700193b408e28d6bdd0111c37468b2d4e25dcec4cd1d84d", size = 5065352, upload-time = "2026-03-06T13:47:41.489Z" },
     { url = "https://files.pythonhosted.org/packages/64/0b/e0c8c69da1d8838da023a50cd3080eae5d475691f7636b35eff20bb6ef20/h5py-3.16.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:7c4dd4cf5f0a4e36083f73172f6cfc25a5710789269547f132a20975bfe2434c", size = 5076216, upload-time = "2026-03-06T13:47:45.315Z" },
+]
+
+[[package]]
+name = "hdf5plugin"
+version = "7.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h5py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/64/0fc6b68e5bc671e7b81d67b930fbed3a4e8a2a92dc4af0f7282b2a2ff988/hdf5plugin-7.0.0.tar.gz", hash = "sha256:e6e6b1f8b0c4d2ca87e616ddc31d08330b36207e466357040f95269e5e0401c8", size = 68284761, upload-time = "2026-06-25T20:59:40.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/ad/b28f4102e619c262b29bfcd13ccf6799e26f9ff113d2fdce19050ae29448/hdf5plugin-7.0.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:97ea4ff6114223c5e8ccce7e23cc6cd398b58c02f4e988e967aeea914fcb8030", size = 6259223, upload-time = "2026-06-25T20:59:26.246Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/0b/855e50e27eab8338c71c3157672c065cd2a2ab38887b3ea4bf128cbd89a1/hdf5plugin-7.0.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4ad4ab0d3367699d132e61b1cc382a0c640a7dba56536e5105508205ebbe8762", size = 45012013, upload-time = "2026-06-25T20:59:35.029Z" },
 ]
 
 [[package]]
@@ -1380,6 +1394,8 @@ version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/76/21/7d2a95e4bba9dc13d043ee156a356c0a8f0c6309dff6b21b4d71a073b8a8/numpy-2.2.6.tar.gz", hash = "sha256:e29554e2bef54a90aa5cc07da6ce955accb83f21ab5de01a62c8478897b264fd", size = 20276440, upload-time = "2025-05-17T22:38:04.611Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/22/c2/4b9221495b2a132cc9d2eb862e21d42a009f5a60e45fc44b00118c174bff/numpy-2.2.6-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:8e41fd67c52b86603a91c1a505ebaef50b3314de0213461c7a6e99c9a3beff90", size = 14360048, upload-time = "2025-05-17T21:28:21.406Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/77/dc2fcfc66943c6410e2bf598062f5959372735ffda175b39906d54f02349/numpy-2.2.6-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:37e990a01ae6ec7fe7fa1c26c55ecb672dd98b19c3d0e1d1f326fa13cb38d163", size = 5340542, upload-time = "2025-05-17T21:28:30.931Z" },
     { url = "https://files.pythonhosted.org/packages/b4/63/3de6a34ad7ad6646ac7d2f55ebc6ad439dbbf9c4370017c50cf403fb19b5/numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fc7b73d02efb0e18c000e9ad8b83480dfcd5dfd11065997ed4c6747470ae8915", size = 16801050, upload-time = "2025-05-17T21:29:27.675Z" },
     { url = "https://files.pythonhosted.org/packages/01/c8/dc6ae86e3c61cfec1f178e5c9f7858584049b6093f843bca541f94120920/numpy-2.2.6-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:8fc377d995680230e83241d8a96def29f204b5782f371c532579b4f20607a289", size = 18614185, upload-time = "2025-05-17T21:30:18.703Z" },
     { url = "https://files.pythonhosted.org/packages/af/30/feba75f143bdc868a1cc3f44ccfa6c4b9ec522b36458e738cd00f67b573f/numpy-2.2.6-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce47521a4754c8f4593837384bd3424880629f718d87c5d44f8ed763edd63543", size = 16643476, upload-time = "2025-05-17T21:45:11.871Z" },
@@ -1640,6 +1656,7 @@ version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "addict" },
+    { name = "pimm-data" },
     { name = "pyyaml" },
     { name = "submitit" },
     { name = "typing-extensions" },
@@ -1692,7 +1709,7 @@ train = [
     { name = "tensorboardx", marker = "sys_platform == 'linux'" },
     { name = "termcolor", marker = "sys_platform == 'linux'" },
     { name = "timm", marker = "sys_platform == 'linux'" },
-    { name = "torch", marker = "sys_platform == 'linux'" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
     { name = "torch-cluster", marker = "sys_platform == 'linux'" },
     { name = "torch-geometric", marker = "sys_platform == 'linux'" },
     { name = "torch-scatter", marker = "sys_platform == 'linux'" },
@@ -1705,6 +1722,7 @@ train = [
 [package.metadata]
 requires-dist = [
     { name = "addict" },
+    { name = "pimm-data", git = "https://github.com/OmarAlterkait/pimm-data" },
     { name = "pyyaml" },
     { name = "submitit" },
     { name = "typing-extensions" },
@@ -1768,6 +1786,18 @@ train = [
 ]
 
 [[package]]
+name = "pimm-data"
+version = "0.3.0"
+source = { git = "https://github.com/OmarAlterkait/pimm-data#aea39aff0b6410c324b6eb0d93a9f7b82b0323ba" }
+dependencies = [
+    { name = "h5py" },
+    { name = "hdf5plugin" },
+    { name = "numpy" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
+    { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1790,7 +1820,7 @@ name = "pointgroup-ops"
 version = "0.0.0+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointgroup_ops-0.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointgroup_ops-0.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:49cd34b0ccd175d4fed041cbff3accf14b440916b95c58ae45db67006d749987" },
@@ -1805,7 +1835,7 @@ version = "1.0.0+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointops-1.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
     { name = "numpy" },
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointops-1.0.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:fe500c31d1b114976275f1941918f162455b82e4d4cdb863b658f6b8c3e3f2ac" },
@@ -1822,7 +1852,7 @@ name = "pointrope"
 version = "0.1.0+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:4c2de39e7f1be3bf3f23aba6b57cffe4f7f2866321207f0cbf73b5bee6254a5c" },
@@ -2058,7 +2088,7 @@ name = "pytorch3d-ops"
 version = "0.7.9+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pytorch3d_ops-0.7.9%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:d6e5b24fb0e88d4724385e0b804a922b011b44c7ab5dc7e0836969981583fa5f" },
@@ -2267,7 +2297,7 @@ name = "serialize-cuda"
 version = "0.1.0+cu126torch2.10"
 source = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/serialize_cuda-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }
 dependencies = [
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/serialize_cuda-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl", hash = "sha256:be1e9c80ea672e9d6b82d51477405eec0bf58cc66372a5daa8b1b33be9adc622" },
@@ -2586,7 +2616,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "pyyaml" },
     { name = "safetensors" },
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
     { name = "torchvision" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/08/54/ece85b0eef3700c90db8271a43669b05a0ebbe2edb1962329c34374a297e/timm-1.0.27.tar.gz", hash = "sha256:315dfe63186ca9fb7ff941268941231fd5be259f2b4bb4afa28560ae1015cb9a", size = 2439861, upload-time = "2026-05-08T19:38:36.844Z" }
@@ -2619,6 +2649,9 @@ wheels = [
 name = "torch"
 version = "2.10.0+cu126"
 source = { registry = "https://download.pytorch.org/whl/cu126" }
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
 dependencies = [
     { name = "cuda-bindings" },
     { name = "filelock" },
@@ -2646,6 +2679,26 @@ dependencies = [
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu126/torch-2.10.0%2Bcu126-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:a256b51e8ca00770a47fe7ab865e3211d2a080d4f1cdc814cdcfb073b36cf1a1", upload-time = "2026-01-21T19:34:06Z" },
+]
+
+[[package]]
+name = "torch"
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "filelock" },
+    { name = "fsspec" },
+    { name = "jinja2" },
+    { name = "networkx" },
+    { name = "setuptools" },
+    { name = "sympy" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7f/e7/19894fdb51c7dbaf94f5a79bb0871da0992e8e4241e579cb006da46d2e58/torch-2.13.0-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:94f0de129916f77b8dc2c7a8eff644cfeddfe59e39c9f55e9f6e17543410281d", size = 111178962, upload-time = "2026-07-08T16:05:49.855Z" },
 ]
 
 [[package]]
@@ -2726,7 +2779,7 @@ version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
     { name = "urllib3" },
 ]
 wheels = [
@@ -2740,7 +2793,7 @@ source = { registry = "https://download.pytorch.org/whl/cu126" }
 dependencies = [
     { name = "numpy" },
     { name = "pillow" },
-    { name = "torch" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu126/torchvision-0.25.0%2Bcu126-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:02525b6a66df95c2b2a8ef9fdfc006e979ae4673e02fb8ecb492d4bdb40ce5c9", upload-time = "2026-01-21T22:37:00Z" },
