@@ -13,6 +13,7 @@ dependencies = [
     "typing-extensions",
     "addict",
     "yapf",
+    "pimm-data",
 ]
 
 [dependency-groups ]
@@ -115,6 +116,7 @@ torch-scatter = { url = "https://github.com/DeepLearnPhysics/particle-imaging-mo
 torch-sparse = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_sparse-0.6.18-cp310-cp310-linux_x86_64.whl" }
 torch-cluster = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/torch_cluster-1.6.3-cp310-cp310-linux_x86_64.whl" }
 flash-attn = { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3%2Bcu126torch2.10-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl" }
+pimm-data = { git = "https://github.com/OmarAlterkait/pimm-data" }
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
