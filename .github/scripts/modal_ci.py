@@ -94,6 +94,7 @@ if PIMM_IMAGE:
     # re-imports this module) sees PIMM_IMAGE and resolves the image-mode paths.
     image = (
         modal.Image.from_registry(PIMM_IMAGE, add_python="3.10")
+        .apt_install("git")
         # not pip_install: the image's PATH resolves `python` to its pip-less
         # uv venv, so target Modal's interpreter explicitly
         .run_commands(
@@ -125,6 +126,7 @@ else:
             "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
             add_python="3.10",
         )
+        .apt_install("git")
         .pip_install("huggingface_hub", f"uv=={UV_VERSION}")
         .add_local_dir(
             REPO_ROOT,
