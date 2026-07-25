@@ -23,7 +23,7 @@ class Resources:
     ``pimm submit`` requires ``scheduler='slurm'`` and consumes them.
     """
 
-    scheduler: Literal["local", "slurm"] = "local"
+    scheduler: Literal["local", "slurm", "gcloud"] = "local"
     nnodes: int = 1
     nproc_per_node: Annotated[
         int | Literal["auto"],

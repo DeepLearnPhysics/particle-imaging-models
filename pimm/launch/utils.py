@@ -65,9 +65,9 @@ def shell_join(parts: list[Any]) -> str:
 def scheduler(cfg: dict[str, Any]) -> str:
     """Return the scheduler used by the current launcher command."""
     configured = cfg.get("resources", {}).get("scheduler")
-    if configured not in {"local", "slurm"}:
+    if configured not in {"local", "slurm", "gcloud"}:
         raise SystemExit(
-            "resources.scheduler must be 'local' or 'slurm', "
+            "resources.scheduler must be 'local', 'slurm', or 'gcloud', "
             f"got {configured!r}"
         )
     executor = cfg.get("executor")

@@ -308,22 +308,47 @@ def validate_launch_config(cfg: dict[str, Any]) -> None:
         "resources.cpus_per_proc",
         "container.runtime",
     ]
-    if scheduler(cfg) == "slurm":
+    active_scheduler = scheduler(cfg)
+    if active_scheduler in {"slurm", "gcloud"} and (
+        cfg.get("resources", {}).get("nproc_per_node") == "auto"
+    ):
+        raise SystemExit(
+            "resources.nproc_per_node='auto' is only valid for the local "
+            "executor; set an explicit GPU count for Slurm/gcloud (batch)."
+        )
+    if active_scheduler == "slurm":
         required.extend(["resources.time", "resources.gpu_directive"])
-        if cfg.get("resources", {}).get("nproc_per_node") == "auto":
-            raise SystemExit(
-                "resources.nproc_per_node='auto' is only valid for the local "
-                "executor; set an explicit GPU count for Slurm (batch/interactive)."
-            )
+    elif active_scheduler == "gcloud":
+        # Cloud Batch runs the image directly (no host checkout to bind), so the
+        # image is mandatory; the GCS bucket is derived from a gs:// exp_root.
+        required.extend(
+            [
+                "container.image",
+                "resources.scheduler_options.project",
+                "resources.scheduler_options.location",
+                "resources.scheduler_options.machine_type",
+                "resources.time",
+            ]
+        )
     for dotted_path in required:
         require_path(cfg, dotted_path)
 
-    gpu_directive = cfg.get("resources", {}).get("gpu_directive")
-    if gpu_directive not in {"gres", "gpus-per-node"}:
-        raise SystemExit(
-            "resources.gpu_directive must be 'gres' or 'gpus-per-node', "
-            f"got {gpu_directive!r}"
-        )
+    # gpu_directive is a Slurm concept only; skip the check for other schedulers.
+    if active_scheduler == "slurm":
+        gpu_directive = cfg.get("resources", {}).get("gpu_directive")
+        if gpu_directive not in {"gres", "gpus-per-node"}:
+            raise SystemExit(
+                "resources.gpu_directive must be 'gres' or 'gpus-per-node', "
+                f"got {gpu_directive!r}"
+            )
+
+    if active_scheduler == "gcloud":
+        exp_root = str(cfg.get("paths", {}).get("exp_root", ""))
+        if not exp_root.startswith("gs://"):
+            raise SystemExit(
+                "gcloud site requires paths.exp_root to be a gs:// URI "
+                f"(mounted via gcsfuse on the Batch VM), got {exp_root!r}"
+            )
 
     runtime = cfg.get("container", {}).get("runtime")
     if runtime in {"apptainer", "singularity", "shifter", "docker"}:
