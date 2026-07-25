@@ -95,8 +95,7 @@ env:
   WANDB_CACHE_DIR: /tmp/wandb/cache
   WANDB_ARTIFACT_DIR: /tmp/wandb/artifacts
   # WANDB_API_KEY is a secret -- do NOT commit it here. Pass it at submit time:
-  #   uv run pimm submit --site gcloud ... --run.wandb-api-key "$WANDB_API_KEY"
-  # (the submit scripts' --gcloud branch already forwards $WANDB_API_KEY).
+  #   pimm submit --site gcloud ... --run.wandb-api-key "$WANDB_API_KEY"
   #
   # It is REQUIRED: the gcloud VM does not see the local .env, so submission
   # fails fast if WANDB_API_KEY is empty/unset (a run cannot authenticate to
