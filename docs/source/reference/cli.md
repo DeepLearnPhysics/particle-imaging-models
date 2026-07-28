@@ -1,6 +1,6 @@
 # Command-line reference
 
-pimm exposes five commands. Training-config values are intentionally not
+pimm exposes six commands. Training-config values are intentionally not
 typed launcher flags: put them after a bare `--` as `key=value` tokens.
 
 | Command | Use it for | Does not do |
@@ -9,6 +9,7 @@ typed launcher flags: put them after a bare `--` as `key=value` tokens.
 | `pimm launch` | run on the current node or inside an existing allocation | submit a scheduler job |
 | `pimm submit` | submit through Slurm with Submitit, or request an interactive allocation | evaluate a completed experiment |
 | `pimm watchdog` | inspect or remove supervisors for chained interactive runs | install a supervisor directly; `pimm submit` does that |
+| `pimm trace` | summarize or export per-rank structured trace logs | replace experiment metrics or an operator-level profiler |
 | `pimm export` | consolidate model weights into a portable directory and optionally upload it | save resumable trainer state |
 
 Run commands through the checkout's locked environment:
@@ -19,6 +20,7 @@ uv run pimm ls panda/pretrain
 uv run pimm launch --help
 uv run pimm submit --help
 uv run pimm watchdog --help
+uv run pimm trace --help
 uv run pimm export --help
 ```
 
@@ -145,6 +147,31 @@ uv run pimm watchdog rm <run-name> --scancel
 
 `rm` removes the run's `scrontab` entry. `--scancel` also cancels the active
 watchdog driver and interactive allocation by Slurm job name.
+
+## `pimm trace`
+
+```text
+pimm trace summarize RUN_DIR
+pimm trace export RUN_DIR [-o OUTPUT]
+```
+
+`RUN_DIR` can be an experiment directory or its `structured_logs/` directory.
+`summarize` reports the last step and event for every traced process, unmatched
+spans, and p50/p95/maximum phase durations. `export` merges base and rotated
+JSONL segments into a Perfetto-compatible Chrome Trace document. Its default
+destination is `<run>/analysis/structured_trace.json`.
+
+Structured logging is disabled by default. Enable it through the experiment
+config:
+
+```bash
+uv run pimm launch \
+  --train.config <config> \
+  -- structured_logging.enabled=true
+```
+
+See {doc}`Structured logging <../operations/structured_logging>` for the event
+schema, storage controls, and failure-diagnosis workflow.
 
 ## `pimm export`
 

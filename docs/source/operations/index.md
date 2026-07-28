@@ -25,6 +25,12 @@ On-disk formats, atomic saves, warm starts, exact-resume boundary, and topology 
 Console, TensorBoard, W&B, health monitors, and profiling.
 :::
 
+:::{grid-item-card} Structured logging
+:link: structured_logging
+:link-type: doc
+Per-rank phase traces for distributed stalls, stragglers, and restarts.
+:::
+
 :::{grid-item-card} Reproducibility
 :link: reproducibility
 :link-type: doc
@@ -45,6 +51,7 @@ Find an exact symptom, run one diagnostic, and apply the narrow fix.
 configuration
 checkpoints
 logging
+structured_logging
 reproducibility
 troubleshooting
 ```

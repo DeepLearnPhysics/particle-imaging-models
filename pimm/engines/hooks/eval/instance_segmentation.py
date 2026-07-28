@@ -21,6 +21,7 @@ from pimm.engines.metrics import (
 
 from pimm.engines.hooks.default import HookBase
 from pimm.engines.hooks.builder import HOOKS
+from pimm.observability import structured_logger as sl
 from pimm.models.utils.structure import Point
 from pimm.models.utils.misc import offset2bincount
 import torch.nn.functional as F
@@ -279,8 +280,10 @@ class InstanceSegmentationEvaluator(HookBase):
         if self.trainer.cfg.evaluate and self.every_n_steps == 0:
             self.eval()
 
+    @sl.log_trace_span("evaluation.instance_segmentation")
     def eval(self):
         """Evaluate instance masks, class labels, ARI, and momentum metrics."""
+        sl.add_step_tag("evaluation")
         label_msg = ", ".join(self._label_name(label) for label in self.labels)
         self.trainer.logger.info(
             f">>>>>>>>>>>>>> Start Instance Segmentation Evaluation [{label_msg}] >>>>>>>>>>>>>>>>"

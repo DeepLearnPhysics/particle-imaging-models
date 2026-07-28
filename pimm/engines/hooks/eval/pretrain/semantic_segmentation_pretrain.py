@@ -3,6 +3,7 @@ import pimm.utils.comm as comm
 from pimm.distributed import unwrap_model
 from pimm.engines.hooks.default import HookBase
 from pimm.engines.hooks.builder import HOOKS
+from pimm.observability import structured_logger as sl
 
 def _get_writer_step(trainer):
     """Local train step for logging; writer applies any configured offset."""
@@ -229,8 +230,10 @@ class PretrainEvaluator(HookBase):
 
         return batch_features, batch_labels_dict
 
+    @sl.log_trace_span("evaluation.pretrain_semantic_segmentation")
     def eval(self):
         """Collect event features, train probes, and log downstream metrics."""
+        sl.add_step_tag("evaluation")
         # only run on rank 0
         rank = comm.get_rank()
         if rank != 0:

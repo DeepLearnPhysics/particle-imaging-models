@@ -21,6 +21,7 @@ from pimm.engines.metrics import (
 
 from pimm.engines.hooks.default import HookBase
 from pimm.engines.hooks.builder import HOOKS
+from pimm.observability import structured_logger as sl
 from pimm.models.utils.structure import Point
 from pimm.models.utils.misc import offset2bincount
 import torch.nn.functional as F
@@ -107,8 +108,10 @@ class SemSegEvaluator(HookBase):
         if self.trainer.cfg.evaluate and self.every_n_steps == 0:
             self.eval()
 
+    @sl.log_trace_span("evaluation.semantic_segmentation")
     def eval(self):
         """Compute point-wise validation metrics and publish mIoU to comm_info."""
+        sl.add_step_tag("evaluation")
         self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
         self.trainer.model.eval()
         

@@ -7,6 +7,7 @@ import torch
 from pimm.engines.hooks.builder import HOOKS
 from pimm.utils.checkpoints import checkpoint_model_state_dict
 from pimm.engines.hooks.default import HookBase
+from pimm.observability import structured_logger as sl
 
 
 @HOOKS.register_module()
@@ -48,11 +49,13 @@ class FinalEvaluator(HookBase):
         """Select whether final evaluation uses model_last instead of model_best."""
         self.test_last = test_last
 
+    @sl.log_trace_span("evaluation.final")
     def after_train(self):
         """Build the tester and execute final evaluation after training exits."""
         if not self.trainer.cfg.get("evaluate", True):
             self.trainer.logger.info("Skipping final evaluation (evaluate=False)")
             return
+        sl.add_step_tag("evaluation")
 
         # Import lazily to avoid pimm.engines.test importing hooks while hooks
         # are still being registered.

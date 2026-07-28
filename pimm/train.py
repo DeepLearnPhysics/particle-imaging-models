@@ -28,27 +28,50 @@ from pimm.engines.defaults import (
     default_setup,
 )
 from pimm.engines.train import TRAINERS
+from pimm.observability import structured_logger as sl
 from pimm.utils import comm
 
 
 def main_worker(cfg):
     """Build and run the trainer after config normalization."""
     cfg = default_setup(cfg)
-    trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
-    trainer.train()
+    with sl.log_trace_span("trainer_build"):
+        trainer = TRAINERS.build(dict(type=cfg.train.type, cfg=cfg))
+    with sl.log_trace_span("training"):
+        trainer.train()
+
 
 def main():
     """Parse CLI args, initialize distributed state, and start training."""
     logging.basicConfig(level=logging.INFO)
-    
+
     args = default_argument_parser().parse_args()
     cfg = default_config_parser(args.config_file, args.options)
 
+    sl.init_structured_logger(
+        source="training",
+        output_dir=cfg.save_path,
+        enable=cfg.structured_logging.enabled,
+        max_file_size_mb=cfg.structured_logging.max_file_size_mb,
+        backup_count=cfg.structured_logging.backup_count,
+    )
+    sl.log_trace_instant("process_start")
+
     try:
-        comm.setup_distributed()
-        main_worker(cfg)
+        with sl.log_trace_span("distributed_setup"):
+            comm.setup_distributed()
+        with sl.log_trace_span("trainer_lifecycle"):
+            main_worker(cfg)
     finally:
-        comm.cleanup_distributed()
+        try:
+            with sl.log_trace_span("distributed_cleanup"):
+                comm.cleanup_distributed()
+        finally:
+            try:
+                sl.log_trace_instant("process_end")
+            finally:
+                sl.shutdown_structured_logger()
+
 
 if __name__ == "__main__":
     main()
