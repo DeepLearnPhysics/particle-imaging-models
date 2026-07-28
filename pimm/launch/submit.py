@@ -543,11 +543,26 @@ def run_submit(
     """Validate, dry-run, or submit a managed Slurm launch."""
     validate_launch_config(cfg)
     validate_training_config(cfg)
-    if scheduler(cfg) != "slurm":
-        raise SystemExit("pimm submit requires resources.scheduler='slurm'")
+    active_scheduler = scheduler(cfg)
+    if active_scheduler not in {"slurm", "gcloud"}:
+        raise SystemExit(
+            "pimm submit requires resources.scheduler='slurm' or 'gcloud'"
+        )
     run_name = build_run_name(cfg, launch_timestamp)
     if not run_name:
         raise SystemExit("Could not determine run name")
+
+    if active_scheduler == "gcloud":
+        # Google Cloud Batch: managed queue that provisions an A100 VM, runs the
+        # pimm image, and writes artifacts to a gcsfuse-mounted gs:// bucket.
+        from .gcloud import run_gcloud
+
+        return run_gcloud(
+            cfg,
+            run_name,
+            dry_run=dry_run,
+            output=output,
+        )
 
     if as_bool(cfg.get("interactive", False)):
         # A chained interactive run needs its foreground driver to survive the

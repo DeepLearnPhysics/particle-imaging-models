@@ -72,6 +72,49 @@ pimm submit \
 Use `--dry-run` to print the submitit manifest and `--output PATH` to write it.
 `--submit.host iana` can be used when submission should happen from a remote login host.
 
+## Managed Google Cloud Batch Submission
+
+Submit to Google Cloud Batch with `--site gcloud`. Batch queues the job,
+provisions a single A100 VM, runs the published pimm container image, writes
+artifacts to a gcsfuse-mounted `gs://` bucket, and tears the VM down.
+
+Prerequisites: an authenticated `gcloud` CLI on the submit host, `gsutil` (for
+code staging), a GCS bucket for output, A100 quota in the chosen region, and the
+pimm image published to a registry the VM can pull (e.g.
+`ghcr.io/deeplearnphysics/pimm:main`, built by `.github/workflows/docker.yml`).
+
+Edit `launch/sites/gcloud.yaml` for your project (project, location, machine
+type, `gs://` exp_root, and data paths), then submit:
+
+```bash
+# WANDB_API_KEY is read automatically from a `WANDB_API_KEY=...` line in the
+# repo `.env`, so with that in place the flag below can be omitted.
+pimm submit \
+  --site gcloud \
+  --resources.time 04:00:00 \
+  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  --run.wandb-api-key "$WANDB_API_KEY"   # optional; overrides the `.env` value
+```
+
+Notes:
+
+- `paths.exp_root` must be a `gs://` URI. The backend derives the bucket, mounts
+  it at `resources.scheduler_options.gcs_mount_path`, and rewrites `EXP_ROOT` to
+  that local mount, so training and checkpoint code need no cloud-storage
+  awareness.
+- `resources.nproc_per_node` must be an explicit GPU count (`auto` is local-only).
+- `resources.time` becomes the Batch `maxRunDuration`.
+- `resources.scheduler_options.stage_code: true` rsyncs the local checkout to the
+  bucket at submit time so code edits take effect without rebuilding the image;
+  the image then supplies only the environment.
+- `WANDB_API_KEY` is required; submission fails fast if it is unset. Provide it
+  EITHER via a `WANDB_API_KEY=...` line in the repo `.env` (read automatically at
+  submit time) OR via `--run.wandb-api-key` (which overrides `.env`). The submit
+  host injects the key into the rendered Batch job — the `.env` file itself is
+  never staged to the VM.
+- Use `--dry-run` to print the rendered Batch job JSON and `--output PATH` to
+  write it.
+
 ## Container Repo Mounts
 
 The Docker images ship only the locked environment - no pimm source is baked
@@ -165,6 +208,9 @@ pimm submit \
   `scripts/nersc_env.sh`.
 - `launch/sites/nersc-container.yaml`: containerized NERSC alternative
   (Shifter, frozen image environment) for large-scale or pinned runs.
+- `launch/sites/gcloud.yaml`: Google Cloud Batch profile (A100 VM, published
+  pimm image, `gs://` output mounted via gcsfuse); submitted with `pimm submit
+  --site gcloud`.
 - `container.repo_mount`: in-container path where `paths.repo_root` is mounted
   so `pimm` imports resolve to the checkout; defaults to `/opt/pimm/src`.
 - `launch/sites/local.yaml`: no scheduler/container wrapper; runs directly on
@@ -173,5 +219,5 @@ pimm submit \
   choices, not model architecture.
 
 All topology and scheduler settings live under `resources`; site profiles set
-`resources.scheduler` to `local` or `slurm`. The legacy `slurm:` YAML group and
+`resources.scheduler` to `local`, `slurm`, or `gcloud`. The legacy `slurm:` YAML group and
 `--slurm.*` flags warn and are removed in pimm 0.6.0.

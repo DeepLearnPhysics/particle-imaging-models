@@ -237,6 +237,29 @@ def load_config(
     return cfg
 
 
+def wandb_api_key_from_dotenv(root: Path = ROOT) -> str | None:
+    """Read only WANDB_API_KEY from the repo `.env`, ignoring all other vars.
+
+    Batch launches kept failing when the shell's $WANDB_API_KEY was empty and
+    got dropped/misparsed on the command line. Reading the single key straight
+    from `.env` here makes a real key the default without exposing any other
+    secrets from that file to the remote job.
+    """
+    env_path = root / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() != "WANDB_API_KEY":
+            continue
+        value = value.strip().strip("'").strip('"').strip()
+        return value or None
+    return None
+
+
 def finalize_config(
     cfg: dict[str, Any],
     *,
@@ -252,8 +275,17 @@ def finalize_config(
     run_cfg = cfg.setdefault("run", {})
     if run_cfg.get("wandb_project"):
         train_cfg.setdefault("options", {})["wandb_project"] = run_cfg["wandb_project"]
-    if run_cfg.get("wandb_api_key"):
-        cfg.setdefault("env", {})["WANDB_API_KEY"] = run_cfg["wandb_api_key"]
+    # Precedence: explicit --run.wandb-api-key, then an already-set env value,
+    # then the single WANDB_API_KEY from the repo `.env`. Only this one var is
+    # ever taken from `.env` — no other secrets leak into the job env. This is
+    # what lets a gcloud submit authenticate to W&B either by passing
+    # --run.wandb-api-key or by keeping WANDB_API_KEY=... in the repo `.env`
+    # (the `.env` file itself is never staged to the VM).
+    wandb_key = run_cfg.get("wandb_api_key") or cfg.get("env", {}).get("WANDB_API_KEY")
+    if not str(wandb_key or "").strip():
+        wandb_key = wandb_api_key_from_dotenv()
+    if str(wandb_key or "").strip():
+        cfg.setdefault("env", {})["WANDB_API_KEY"] = wandb_key
 
     rdzv_cfg = cfg.get("rdzv") or {}
     env = cfg.setdefault("env", {})
@@ -308,22 +340,47 @@ def validate_launch_config(cfg: dict[str, Any]) -> None:
         "resources.cpus_per_proc",
         "container.runtime",
     ]
-    if scheduler(cfg) == "slurm":
+    active_scheduler = scheduler(cfg)
+    if active_scheduler in {"slurm", "gcloud"} and (
+        cfg.get("resources", {}).get("nproc_per_node") == "auto"
+    ):
+        raise SystemExit(
+            "resources.nproc_per_node='auto' is only valid for the local "
+            "executor; set an explicit GPU count for Slurm/gcloud (batch)."
+        )
+    if active_scheduler == "slurm":
         required.extend(["resources.time", "resources.gpu_directive"])
-        if cfg.get("resources", {}).get("nproc_per_node") == "auto":
-            raise SystemExit(
-                "resources.nproc_per_node='auto' is only valid for the local "
-                "executor; set an explicit GPU count for Slurm (batch/interactive)."
-            )
+    elif active_scheduler == "gcloud":
+        # Cloud Batch runs the image directly (no host checkout to bind), so the
+        # image is mandatory; the GCS bucket is derived from a gs:// exp_root.
+        required.extend(
+            [
+                "container.image",
+                "resources.scheduler_options.project",
+                "resources.scheduler_options.location",
+                "resources.scheduler_options.machine_type",
+                "resources.time",
+            ]
+        )
     for dotted_path in required:
         require_path(cfg, dotted_path)
 
-    gpu_directive = cfg.get("resources", {}).get("gpu_directive")
-    if gpu_directive not in {"gres", "gpus-per-node"}:
-        raise SystemExit(
-            "resources.gpu_directive must be 'gres' or 'gpus-per-node', "
-            f"got {gpu_directive!r}"
-        )
+    # gpu_directive is a Slurm concept only; skip the check for other schedulers.
+    if active_scheduler == "slurm":
+        gpu_directive = cfg.get("resources", {}).get("gpu_directive")
+        if gpu_directive not in {"gres", "gpus-per-node"}:
+            raise SystemExit(
+                "resources.gpu_directive must be 'gres' or 'gpus-per-node', "
+                f"got {gpu_directive!r}"
+            )
+
+    if active_scheduler == "gcloud":
+        exp_root = str(cfg.get("paths", {}).get("exp_root", ""))
+        if not exp_root.startswith("gs://"):
+            raise SystemExit(
+                "gcloud site requires paths.exp_root to be a gs:// URI "
+                f"(mounted via gcsfuse on the Batch VM), got {exp_root!r}"
+            )
 
     runtime = cfg.get("container", {}).get("runtime")
     if runtime in {"apptainer", "singularity", "shifter", "docker"}:
