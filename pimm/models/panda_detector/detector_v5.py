@@ -91,85 +91,9 @@ class PostprocessConfig:
     dedup_same_pid: bool | None = None
 
 
-@dataclass
-class PointFilterConfig:
-    """Optional point selection applied before decoder cross-attention."""
-
-    type: Literal["stuff", "energy_threshold"] = "stuff"
-    threshold: float = 0.5
-    drop_classes: list[int] = field(default_factory=list)
-    train_filter_use_gt: bool = False
-    energy_channel: int = 0
-    energy_threshold: float = 0.0
-
-
 def _config_kwargs(config) -> dict[str, Any]:
     """Return dataclass fields that have concrete values."""
     return {name: value for name, value in asdict(config).items() if value is not None}
-
-
-class PointFilter(nn.Module):
-    """Select points before decoder cross-attention."""
-
-    def __init__(
-        self,
-        type="stuff",
-        full_in_channels=0,
-        hidden_channels=256,
-        threshold=0.5,
-        drop_classes=None,
-        train_filter_use_gt=False,
-        energy_channel=0,
-        energy_threshold=0.0,
-    ):
-        super().__init__()
-        self.type = type
-        self.threshold = float(threshold)
-        self.drop_classes = list(drop_classes or [])
-        self.train_filter_use_gt = bool(train_filter_use_gt)
-        self.energy_channel = int(energy_channel)
-        self.energy_threshold = float(energy_threshold)
-        if type == "stuff":
-            self.head = nn.Sequential(
-                nn.Linear(full_in_channels, hidden_channels),
-                nn.ReLU(),
-                nn.Linear(hidden_channels, 1),
-            )
-        elif type == "energy_threshold":
-            self.head = None
-        else:
-            raise ValueError(f"Unknown PointFilter type: {type!r}")
-
-    @staticmethod
-    def _ensure_nonempty(keep):
-        if not keep.any():
-            keep = keep.clone()
-            keep[0] = True
-        return keep
-
-    def forward(self, feat, gt_segment=None, training=False):
-        """Return the kept-point mask and optional learned-filter logits."""
-        logits = None
-        if self.type == "stuff":
-            logits = self.head(feat).squeeze(-1)
-            if (
-                training
-                and self.train_filter_use_gt
-                and gt_segment is not None
-                and self.drop_classes
-            ):
-                segment = gt_segment
-                if segment.dim() == 2 and segment.shape[1] == 1:
-                    segment = segment.squeeze(1)
-                drop = torch.zeros_like(segment, dtype=torch.bool)
-                for class_id in self.drop_classes:
-                    drop |= segment == int(class_id)
-                keep = ~drop
-            else:
-                keep = logits.sigmoid() < self.threshold
-        else:
-            keep = feat[:, self.energy_channel] > self.energy_threshold
-        return self._ensure_nonempty(keep), logits
 
 
 class GenericMultiTaskDecoder(nn.Module):
@@ -202,7 +126,6 @@ class GenericMultiTaskDecoder(nn.Module):
         pos_emb=True,
         mlp_point_proj=False,
         supervise_attn_mask=True,
-        point_filter_cfg: PointFilterConfig | None = None,
     ) -> None:
         super().__init__()
         self.labels = tuple(label_specs)
@@ -309,13 +232,6 @@ class GenericMultiTaskDecoder(nn.Module):
                     if head.head_mlp
                     else nn.Linear(input_dim, int(output_dim))
                 )
-        self.point_filter = None
-        if point_filter_cfg is not None:
-            self.point_filter = PointFilter(
-                full_in_channels=full_in_channels,
-                hidden_channels=hidden_channels,
-                **_config_kwargs(point_filter_cfg),
-            )
         self.apply(self._init_weights)
 
     @staticmethod
@@ -483,30 +399,10 @@ class GenericMultiTaskDecoder(nn.Module):
                 output[head.pred_key] = values
         return output
 
-    @staticmethod
-    def _scatter_mask_logits(masks, keep, num_points):
-        if masks is None:
-            return None
-        full = masks.new_full((masks.shape[0], num_points), -1e4)
-        full[:, keep] = masks
-        return full
-
     def forward(self, point):
         """Decode a full-resolution point batch for every configured label."""
         point_full = self.up_cast(point)
-        num_points = point_full.feat.shape[0]
-        keep = None
-        filter_logits = None
-        # filter out points that we don't want to learn masks for (stuff like noise)
-        if self.point_filter is not None:
-            keep, filter_logits = self.point_filter(
-                point_full.feat,
-                gt_segment=getattr(point_full, "_filter_gt_segment", None),
-                training=self.training,
-            )
-            decoder_point = point_full[keep]
-        else:
-            decoder_point = point_full.copy()
+        decoder_point = point_full.copy()
         # run an MLP through the backbone features that projects down
         # to the hidden dimension of the decoder (and mixes per-depth information)
         decoder_point.feat = self.full_point_proj(decoder_point.feat)
@@ -518,14 +414,6 @@ class GenericMultiTaskDecoder(nn.Module):
         masks = decoder["final_mask_logits"]
         auxiliary_queries = decoder.get("aux_q_list", [])
         auxiliary_masks = decoder.get("aux_mask_logits_list", [])
-        if keep is not None:
-            # Losses and postprocessing use original point indexing, so filtered
-            # mask columns are restored with an effectively-zero mask logit.
-            masks = self._scatter_mask_logits(masks, keep, num_points)
-            auxiliary_masks = [
-                self._scatter_mask_logits(aux_masks, keep, num_points)
-                for aux_masks in auxiliary_masks
-            ]
 
         outputs = {}
         for label in self.labels:
@@ -553,8 +441,6 @@ class GenericMultiTaskDecoder(nn.Module):
                 prediction["stuff_logits"] = logits
                 prediction["stuff_probs"] = logits.sigmoid()
             outputs[label] = prediction
-        if filter_logits is not None:
-            outputs["__filter_logits__"] = filter_logits
         return outputs
 
 
@@ -582,8 +468,6 @@ class UnifiedDetector(PointModel):
         hidden_channels: int,
         num_heads: int,
         eval_label: str | None = None,
-        point_filter: dict[str, Any] | None = None,
-        filter_loss_weight: float = 1.0,
         depth: int = 3,
         mlp_ratio: float = 4.0,
         qkv_bias: bool = False,
@@ -614,8 +498,6 @@ class UnifiedDetector(PointModel):
             hidden_channels: Decoder and query embedding width.
             num_heads: Attention heads in every decoder block.
             eval_label: Label used for unprefixed evaluation outputs.
-            point_filter: Optional ``PointFilter`` constructor arguments.
-            filter_loss_weight: Weight for learned point-filter supervision.
             depth: Number of shared transformer decoder blocks.
             supervise_attn_mask: Include intermediate mask predictions in the
                 auxiliary losses.
@@ -631,10 +513,6 @@ class UnifiedDetector(PointModel):
         self.labels = tuple(self.label_specs)
         self.eval_label = self.labels[-1] if eval_label is None else eval_label
         self.postprocess_cfg = PostprocessConfig(**postprocess)
-        self.point_filter_cfg = (
-            None if point_filter is None else PointFilterConfig(**point_filter)
-        )
-        self.filter_loss_weight = float(filter_loss_weight)
         self.backbone = build_model(backbone)
 
         self.criteria_by_label = {}
@@ -670,7 +548,6 @@ class UnifiedDetector(PointModel):
             pos_emb,
             mlp_point_proj,
             supervise_attn_mask,
-            self.point_filter_cfg,
         )
 
     def up_cast(self, point):
@@ -700,24 +577,6 @@ class UnifiedDetector(PointModel):
             stuff_logits, target, reduction="mean"
         )
 
-    def _compute_filter_loss(self, filter_logits, input_dict):
-        classes = self.point_filter_cfg.drop_classes
-        if not classes:
-            return None
-        spec = self.label_specs[self.eval_label]
-        segment_key = spec.segment_key
-        if segment_key not in input_dict:
-            return None
-        segment = input_dict[segment_key]
-        if segment.dim() == 2 and segment.shape[1] == 1:
-            segment = segment.squeeze(1)
-        target = torch.zeros_like(filter_logits)
-        for class_id in classes:
-            target[segment == int(class_id)] = 1.0
-        return self.filter_loss_weight * F.binary_cross_entropy_with_logits(
-            filter_logits, target
-        )
-
     def forward(self, input_dict, return_point=False):
         """Run the backbone, query decoder, and configured task losses."""
 
@@ -726,19 +585,9 @@ class UnifiedDetector(PointModel):
         point = self.backbone(point)
         point = self.up_cast(point)
 
-        # find what we need to filter out
-        if self.point_filter_cfg is not None and self.training:
-            spec = self.label_specs[self.eval_label]
-            segment_key = spec.segment_key
-            if segment_key in input_dict:
-                point._filter_gt_segment = input_dict[segment_key]
-
         # run query decoder on a copy of the point
         decoder_point = Point(point.copy())
-        if hasattr(point, "_filter_gt_segment"):
-            decoder_point._filter_gt_segment = point._filter_gt_segment
         outputs_by_label = self.decoder(decoder_point)
-        filter_logits = outputs_by_label.pop("__filter_logits__", None)
 
         result = {}
         total_loss = None
@@ -781,14 +630,6 @@ class UnifiedDetector(PointModel):
                     )
                     total_loss = total_loss + stuff_loss
                     result[f"{label}_stuff_loss"] = stuff_loss
-
-        if filter_logits is not None and self.training:
-            filter_loss = self._compute_filter_loss(filter_logits, input_dict)
-            if filter_loss is not None:
-                total_loss = (
-                    filter_loss if total_loss is None else total_loss + filter_loss
-                )
-                result["filter_loss"] = filter_loss
 
         if emit_predictions or return_point:
             primary = outputs_by_label[self.eval_label]
