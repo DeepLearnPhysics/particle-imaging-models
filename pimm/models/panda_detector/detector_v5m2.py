@@ -1,9 +1,7 @@
-"""A much simplified version of detector_v4.
+"""Detector v5m2: detector v5 with post-final-query mask prediction.
 
-This has the same functionality as detector_v4, but is much
-simpler and easier to understand.
-
-A breaking change is the keyword argument format.
+This preserves the detector-v5 parameter layout while correcting its final-mask
+off-by-one behavior.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from pimm.models.losses import build_criteria
 from pimm.models.modules import PointModel
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
-from pimm.utils import PimmDeprecationWarning, warn
 from pimm.utils.comm import reduce_scalar_outputs_for_logging
 
 from .layers import Block, MLP
@@ -265,6 +262,15 @@ class GenericMultiTaskDecoder(nn.Module):
         )
         return queries, query_pos, counts, valid
 
+    def _predict_final_masks(self, queries, point_features):
+        """Predict masks from the post-final-block queries without new parameters."""
+        final_block = self.blocks[-1]
+        point_features = final_block.norm_kv(point_features.float()).to(
+            point_features.dtype
+        )
+        mask_embeddings = final_block.mask_mlp(queries)
+        return mask_embeddings @ point_features.T
+
     def _forward_decoder(self, point, return_aux=False):
         """Run the decoder blocks on packed points and event-major queries."""
         point_pos = self.pos_emb(point.coord) if self.pos_emb else None
@@ -283,8 +289,10 @@ class GenericMultiTaskDecoder(nn.Module):
 
         auxiliary_queries = []
         auxiliary_masks = []
-        final_masks = None
         for block in self.blocks:
+            auxiliary_query = None
+            if return_aux and self.supervise_attn_mask:
+                auxiliary_query = self.final_norm(queries * query_valid_f)
             queries, masks, _, _ = block(
                 queries,
                 point.feat,
@@ -297,11 +305,16 @@ class GenericMultiTaskDecoder(nn.Module):
             )
             if masks is not None:
                 masks = masks * query_valid_f
-                final_masks = masks
+                if auxiliary_query is not None:
+                    auxiliary_queries.append(auxiliary_query)
+                    auxiliary_masks.append(masks)
             queries = queries * query_valid_f
-            if return_aux:
-                auxiliary_queries.append(self.final_norm(queries))
-                auxiliary_masks.append(masks if self.supervise_attn_mask else None)
+
+        # Each block predicts its attention mask before updating the queries.
+        # Run the existing last mask head once more so the returned masks are
+        # produced from the final, post-block query state.
+        final_masks = self._predict_final_masks(queries, point.feat)
+        final_masks = final_masks * query_valid_f
 
         output = {
             "out_q": self.final_norm(queries),
@@ -310,8 +323,8 @@ class GenericMultiTaskDecoder(nn.Module):
             "query_valid": query_valid.squeeze(-1).bool(),
         }
         if return_aux:
-            output["aux_q_list"] = auxiliary_queries[:-1]
-            output["aux_mask_logits_list"] = auxiliary_masks[:-1]
+            output["aux_q_list"] = auxiliary_queries
+            output["aux_mask_logits_list"] = auxiliary_masks
         return output
 
     def up_cast(self, point):
@@ -445,7 +458,7 @@ class GenericMultiTaskDecoder(nn.Module):
         return outputs
 
 
-@MODELS.register_module("detector-v5")
+@MODELS.register_module("detector-v5m2")
 class UnifiedDetector(PointModel):
     """Backbone, shared query decoder, losses, and panoptic postprocessing.
 
@@ -507,13 +520,6 @@ class UnifiedDetector(PointModel):
         The remaining attention, normalization, and dropout arguments are
         forwarded unchanged to every decoder block.
         """
-        warn(
-            "`detector-v5` is deprecated because its final mask logits are "
-            "predicted before the final decoder query update. Use "
-            "`detector-v5m2`, which predicts masks from the final updated queries.",
-            PimmDeprecationWarning,
-            stacklevel=3,
-        )
         super().__init__()
         self.label_specs = {
             label: LabelConfig(**config) for label, config in label_configs.items()
