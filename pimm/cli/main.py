@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
             "  launch   run training locally or inside an allocation\n"
             "  submit   submit training to Slurm through submitit\n"
             "  watchdog manage supervisors for chained interactive runs\n"
+            "  trace    inspect or export structured trace logs\n"
             "  export   export model weights (optionally push to the HF Hub)"
         )
         return 0
@@ -50,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
         from .watchdog import main as watchdog_main
 
         return watchdog_main(args)
+    if command == "trace":
+        from .trace import main as trace_main
+
+        return trace_main(args)
     if command == "export":
         from .export import main as export_main
 

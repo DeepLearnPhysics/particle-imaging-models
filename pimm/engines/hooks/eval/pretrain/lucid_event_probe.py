@@ -14,6 +14,7 @@ from pimm.distributed import unwrap_model
 
 from pimm.engines.hooks.builder import HOOKS
 from pimm.engines.hooks.default import HookBase
+from pimm.observability import structured_logger as sl
 
 
 def _get_writer_step(trainer):
@@ -310,7 +311,9 @@ class EventLinearProbeEvaluator(HookBase):
         test_idx = torch.cat(test_indices, dim=0)
         return X[train_idx], y[train_idx], X[test_idx], y[test_idx]
 
+    @sl.log_trace_span("evaluation.event_linear_probe")
     def eval(self):
+        sl.add_step_tag("evaluation")
         if comm.get_rank() != 0:
             if comm.get_world_size() > 1:
                 comm.synchronize()

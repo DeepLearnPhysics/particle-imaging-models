@@ -44,6 +44,10 @@ from pimm.distributed import (
     unwrap_model,
 )
 from pimm.models import build_model
+from pimm.observability import structured_logger as sl
+from pimm.observability.structured_logger.structured_logging import (
+    _structured_logger_disabled,
+)
 from pimm.utils.events import EventStorage, ExceptionWriter, WandbSummaryWriter
 from pimm.utils.logger import get_root_logger
 from pimm.utils.optimizer import build_optimizer
@@ -58,6 +62,7 @@ TRAINERS = Registry("trainers")
 AMP_DTYPE = dict(
     bfloat16=torch.bfloat16,
 )
+_END_OF_DATALOADER = object()
 
 
 class TrainerBase:
@@ -99,6 +104,8 @@ class TrainerBase:
         self.data_iterator: Iterator = enumerate([])
         self.storage: EventStorage | None = None
         self.writer: SummaryWriter | None = None
+        self._trace_hooks = False
+        self._trace_batch_stats_every = 0
 
     def register_hooks(self, hooks) -> None:
         """Build hooks and attach this trainer through weak references."""
@@ -111,6 +118,17 @@ class TrainerBase:
             # See http://engineering.hearsaysocial.com/2013/06/16/circular-references-in-python/
             h.trainer = weakref.proxy(self)
         self.hooks.extend(hooks)
+
+    def _call_hooks(self, method_name, *args) -> None:
+        """Call one lifecycle method on every hook, optionally tracing each one."""
+        for hook in self.hooks:
+            callback = getattr(hook, method_name)
+            if self._trace_hooks:
+                hook_name = type(hook).__name__
+                with sl.log_trace_span(f"hook.{hook_name}.{method_name}"):
+                    callback(*args)
+            else:
+                callback(*args)
 
     def train(self):
         """Run the generic train/epoch/step lifecycle."""
@@ -136,19 +154,19 @@ class TrainerBase:
         """Apply global numeric settings and call before-train hooks."""
         if self.cfg.matmul_precision is not None:
             torch.set_float32_matmul_precision(self.cfg.matmul_precision)
-        for h in self.hooks:
-            h.before_train()
+        with sl.log_trace_span("hooks.before_train"):
+            self._call_hooks("before_train")
 
     def before_epoch(self):
         """Call hooks before the current epoch starts."""
-        for h in self.hooks:
-            h.before_epoch()
+        with sl.log_trace_span("hooks.before_epoch"):
+            self._call_hooks("before_epoch")
 
     def before_step(self):
         """Call hooks before consuming the current batch."""
         self._flush_writer_step()
-        for h in self.hooks:
-            h.before_step()
+        with sl.log_trace_span("hooks.before_step"):
+            self._call_hooks("before_step")
 
     def run_step(self):
         """Run one optimization step for the current batch."""
@@ -156,13 +174,13 @@ class TrainerBase:
 
     def after_step(self):
         """Call hooks after the current optimization step."""
-        for h in self.hooks:
-            h.after_step()
+        with sl.log_trace_span("hooks.after_step"):
+            self._call_hooks("after_step")
 
     def after_epoch(self):
         """Call epoch-end hooks and reset per-epoch event histories."""
-        for h in self.hooks:
-            h.after_epoch()
+        with sl.log_trace_span("hooks.after_epoch"):
+            self._call_hooks("after_epoch")
         self._flush_writer_step()
         self.storage.reset_histories()
 
@@ -178,14 +196,17 @@ class TrainerBase:
     def after_train(self):
         """Synchronize workers, call final hooks, and close the writer."""
         # Sync GPU before running train hooks
-        comm.synchronize()
-        for h in self.hooks:
-            h.after_train()
+        with sl.log_trace_span("training_synchronize"):
+            comm.synchronize()
+        with sl.log_trace_span("hooks.after_train"):
+            self._call_hooks("after_train")
         self._close_writer()
 
     def _training_already_complete(self):
         """Return whether restored progress is already at the run horizon."""
-        return int(getattr(self, "start_epoch", 0)) >= int(getattr(self, "max_epoch", 0))
+        return int(getattr(self, "start_epoch", 0)) >= int(
+            getattr(self, "max_epoch", 0)
+        )
 
     def _finish_completed_resume(self):
         """Exit a resumed, already-complete run without final checkpoint churn."""
@@ -195,7 +216,9 @@ class TrainerBase:
                 f"start_epoch={self.start_epoch}, max_epoch={self.max_epoch}. "
                 "Exiting without running more steps."
             )
-        comm.synchronize()
+        sl.log_trace_instant("training_already_complete")
+        with sl.log_trace_span("training_synchronize"):
+            comm.synchronize()
         self._close_writer()
 
     def _close_writer(self):
@@ -232,14 +255,29 @@ class Trainer(TrainerBase):
 
     def __init__(self, cfg):
         """Build model, data loaders, optimizer, scheduler, hooks, and writer."""
-        super(Trainer, self).__init__()
+        super().__init__()
+        self.cfg = cfg
+
+        # deal with structured logging
+        structured_cfg = cfg.get("structured_logging", {})
+        tracing_enabled = not _structured_logger_disabled()
+        self._trace_hooks = tracing_enabled and bool(
+            structured_cfg.get("trace_hooks", False)
+        )
+        self._trace_batch_stats_every = (
+            max(0, int(structured_cfg.get("batch_stats_every", 1) or 0))
+            if tracing_enabled
+            else 0
+        )
+
         self.epoch = 0
         self.start_epoch = 0
         self.start_iter = 0
         self.global_step = 0
         self.samples_seen = 0
         self.train_state = TrainState()
-        self.parallel_context = create_parallel_context(cfg)
+        with sl.log_trace_span("build.parallel_context"):
+            self.parallel_context = create_parallel_context(cfg)
         # When resuming, use cfg.epoch as the absolute horizon so we can
         # extend training beyond the previous end without changing schedules.
         self.max_epoch = cfg.epoch
@@ -249,28 +287,32 @@ class Trainer(TrainerBase):
             file_mode="a" if cfg.resume else "w",
         )
         self.logger.info("=> Loading config ...")
-        self.cfg = cfg
         self.logger.info(f"Save path: {cfg.save_path}")
         self.logger.info(f"Config:\n{cfg.pretty_text}")
         self.logger.info("=> Building model ...")
-        self.model = self.build_model()
+        with sl.log_trace_span("build.model"):
+            self.model = self.build_model()
         self.logger.info("=> Building train dataset & dataloader ...")
-        self.train_loader = self.build_train_loader()
+        with sl.log_trace_span("build.train_loader"):
+            self.train_loader = self.build_train_loader()
         self.logger.info("=> Building val dataset & dataloader ...")
-        self.val_loader = self.build_val_loader()
-        self.test_loader = self.build_test_loader()
+        with sl.log_trace_span("build.evaluation_loaders"):
+            self.val_loader = self.build_val_loader()
+            self.test_loader = self.build_test_loader()
         self.logger.info("=> Building optimize, scheduler, scaler(amp) ...")
-        self.optimizer = self.build_optimizer()
-        self.scheduler = self.build_scheduler()
-        self.scaler = self.build_scaler()
+        with sl.log_trace_span("build.optimization"):
+            self.optimizer = self.build_optimizer()
+            self.scheduler = self.build_scheduler()
+            self.scaler = self.build_scaler()
         self.logger.info("=> Building hooks ...")
-        self.register_hooks(self.cfg.hooks)
+        with sl.log_trace_span("build.hooks"):
+            self.register_hooks(self.cfg.hooks)
         self.logger.info("=> Running config modifiers ...")
-        for h in self.hooks:
-            h.modify_config(self.cfg)
+        with sl.log_trace_span("hooks.modify_config"):
+            self._call_hooks("modify_config", self.cfg)
         self.logger.info("=> Building writer ...")
-        self.writer = self.build_writer()
-        
+        with sl.log_trace_span("build.writer"):
+            self.writer = self.build_writer()
 
     def train(self):
         """Run training from the configured or restored epoch/iteration."""
@@ -278,7 +320,7 @@ class Trainer(TrainerBase):
         with EventStorage() as self.storage, ExceptionWriter(), anomaly_context:
             # Checkpoint hooks can restore start_epoch, start_iter, and counters.
             self.before_train()
-            
+
             # Keep metric writers aligned with the absolute optimization step.
             iter_per_epoch = self._iters_per_epoch()
             resumed_iter = self.global_step or (
@@ -289,10 +331,20 @@ class Trainer(TrainerBase):
                 self._align_writer_step(resumed_iter)
                 self.logger.info(f"Resuming from iteration {resumed_iter}")
             if self._training_already_complete():
+                if resumed_iter > 0 and iter_per_epoch > 0:
+                    last_completed_index = resumed_iter - 1
+                    sl.set_step(
+                        resumed_iter,
+                        relative_step=0,
+                        epoch=last_completed_index // iter_per_epoch,
+                        iteration=last_completed_index % iter_per_epoch,
+                    )
                 self._finish_completed_resume()
                 return
-            
+
             self.logger.info(">>>>>>>>>>>>>>>> Start Training >>>>>>>>>>>>>>>>")
+            sl.log_trace_instant("training_start")
+            process_step = 0
             for self.epoch in range(self.start_epoch, self.max_epoch):
                 resume_mid_epoch = (
                     self.epoch == self.start_epoch and self.start_iter > 0
@@ -305,34 +357,80 @@ class Trainer(TrainerBase):
                 self.comm_info["epoch"] = self.epoch
                 self.comm_info["iter_per_epoch"] = iter_per_epoch
                 self.model.train()
-                
+
                 start_iter = self.start_iter if resume_mid_epoch else 0
                 if start_iter > 0:
                     self.logger.info(
                         f"Resuming epoch {self.epoch} from dataloader position {start_iter}"
                     )
-                self.data_iterator = enumerate(self.train_loader, start=start_iter)
+                self.data_iterator = iter(self.train_loader)
 
+                # Epoch-boundary hooks belong to the first intended step of
+                # this epoch, not the final step context left by the previous
+                # epoch.
+                sl.set_step(
+                    self.epoch * iter_per_epoch + start_iter + 1,
+                    relative_step=process_step + 1,
+                    epoch=self.epoch,
+                    iteration=start_iter,
+                )
                 self.before_epoch()
-                for (
-                    self.comm_info["iter"],
-                    self.comm_info["input_dict"],
-                ) in self.data_iterator:
-                    self.before_step()
-                    self.run_step()
-                    # Capture the next resume point before checkpoint hooks run.
-                    self._record_step_state()
-                    self.after_step()
-                    # Iterable streams have no natural length; cap the epoch at a
-                    # fixed step count so every DDP rank stops together (avoids a
-                    # collective-op hang on uneven per-rank shard lengths).
-                    if self._train_is_iterable and (
-                        self.comm_info["iter"] + 1
-                    ) >= iter_per_epoch:
+                for iteration in range(start_iter, iter_per_epoch):
+                    absolute_step = self.epoch * iter_per_epoch + iteration + 1
+                    self.comm_info["iter"] = iteration
+                    if iteration != start_iter:
+                        sl.set_step(
+                            absolute_step,
+                            relative_step=process_step + 1,
+                            epoch=self.epoch,
+                            iteration=iteration,
+                        )
+                    with sl.log_trace_span("step"):
+                        with sl.log_trace_span("data_fetch"):
+                            input_dict = next(self.data_iterator, _END_OF_DATALOADER)
+                        if input_dict is _END_OF_DATALOADER:
+                            sl.log_trace_instant("dataloader_exhausted")
+                            break
+
+                        process_step += 1
+                        self.comm_info["input_dict"] = input_dict
+                        self._log_trace_batch_stats(absolute_step)
+                        self.before_step()
+                        self.run_step()
+                        # Capture the next resume point before checkpoint hooks run.
+                        self._record_step_state()
+                        self.after_step()
+
+                    # Iterable streams have no natural length. The bounded range
+                    # above keeps every rank at the configured epoch length.
+                    if self._train_is_iterable and iteration + 1 >= iter_per_epoch:
                         break
                 self.start_iter = 0
                 self.after_epoch()
             self.after_train()
+            sl.log_trace_instant("training_end")
+
+    def _log_trace_batch_stats(self, absolute_step):
+        """Record cheap rank-local batch shape scalars without synchronizing CUDA."""
+        frequency = self._trace_batch_stats_every
+        if frequency <= 0 or absolute_step % frequency != 0:
+            return
+        input_dict = self.comm_info.get("input_dict")
+        if not isinstance(input_dict, dict):
+            return
+
+        scalars = {}
+        offset = input_dict.get("offset")
+        if offset is not None:
+            try:
+                scalars["batch.local_samples"] = len(offset)
+            except TypeError:
+                pass
+        coord = input_dict.get("coord")
+        if hasattr(coord, "shape") and len(coord.shape) > 0:
+            scalars["batch.local_points"] = int(coord.shape[0])
+        if scalars:
+            sl.log_trace_scalar(scalars)
 
     def _align_writer_step(self, global_step):
         """Align writer-internal step counters after checkpoint resume."""
@@ -360,7 +458,6 @@ class Trainer(TrainerBase):
 
         self.train_state = TrainState.from_trainer(self)
 
-
     def run_step(self):
         """Move one batch to device, run forward/backward, and update LR."""
         if version.parse(torch.__version__) >= version.parse("2.4"):
@@ -372,58 +469,68 @@ class Trainer(TrainerBase):
             # deprecated warning
             auto_cast = torch.cuda.amp.autocast
 
-        input_dict = move_batch_to_device(
-            self.comm_info["input_dict"],
-            self.parallel_context.device,
-        )
+        with sl.log_trace_span("batch_to_device"):
+            input_dict = move_batch_to_device(
+                self.comm_info["input_dict"],
+                self.parallel_context.device,
+            )
         # Store the device-resident batch so hooks and checkpoint state agree.
         self.comm_info["input_dict"] = input_dict
 
-        with auto_cast(
-            enabled=self.cfg.enable_amp,
-            dtype=AMP_DTYPE[self.cfg.amp_dtype],
-        ):
-            output_dict = self.model(input_dict)
-            loss = output_dict["loss"]
+        with sl.log_trace_span("forward"):
+            with auto_cast(
+                enabled=self.cfg.enable_amp,
+                dtype=AMP_DTYPE[self.cfg.amp_dtype],
+            ):
+                output_dict = self.model(input_dict)
+                loss = output_dict["loss"]
         # Log average points per sample for throughput analysis
         if "offset" in input_dict:
-            output_dict["avg_pts"] = input_dict["coord"].shape[0] / len(input_dict["offset"])
+            output_dict["avg_pts"] = input_dict["coord"].shape[0] / len(
+                input_dict["offset"]
+            )
         self.optimizer.zero_grad()
         if self.cfg.enable_amp:
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            if self.cfg.clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.cfg.clip_grad
-                )
-            self.scaler.step(self.optimizer)
+            with sl.log_trace_span("backward"):
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                if self.cfg.clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.cfg.clip_grad
+                    )
+            with sl.log_trace_span("optimizer"):
+                self.scaler.step(self.optimizer)
 
-            # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
-            # Fix torch warning scheduler step before optimizer step.
-            scaler = self.scaler.get_scale()
-            self.scaler.update()
-            if scaler <= self.scaler.get_scale():
-                self.scheduler.step()
+                # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
+                # Fix torch warning scheduler step before optimizer step.
+                scaler = self.scaler.get_scale()
+                self.scaler.update()
+                if scaler <= self.scaler.get_scale():
+                    self.scheduler.step()
         else:
-            loss.backward()
-            if self.cfg.clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.cfg.clip_grad
-                )
-            self.optimizer.step()
-            self.scheduler.step()
+            with sl.log_trace_span("backward"):
+                loss.backward()
+                if self.cfg.clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.cfg.clip_grad
+                    )
+            with sl.log_trace_span("optimizer"):
+                self.optimizer.step()
+                self.scheduler.step()
         if self.cfg.empty_cache and self.parallel_context.device.type == "cuda":
-            torch.cuda.empty_cache()
+            with sl.log_trace_span("cuda_empty_cache"):
+                torch.cuda.empty_cache()
         self.comm_info["model_output_dict"] = output_dict
 
     def after_epoch(self):
         """Run epoch-end hooks, clear histories, and optionally empty CUDA cache."""
-        for h in self.hooks:
-            h.after_epoch()
+        with sl.log_trace_span("hooks.after_epoch"):
+            self._call_hooks("after_epoch")
         self._flush_writer_step()
         self.storage.reset_histories()
         if self.cfg.empty_cache_per_epoch:
-            torch.cuda.empty_cache()
+            with sl.log_trace_span("cuda_empty_cache"):
+                torch.cuda.empty_cache()
 
     def build_model(self):
         """Construct the model and wrap it for the configured parallel strategy."""
@@ -439,18 +546,20 @@ class Trainer(TrainerBase):
 
     def build_writer(self):
         """Create a main-rank summary writer for TensorBoard or W&B."""
-        if self.cfg.get('use_wandb', False):
+        if self.cfg.get("use_wandb", False):
             wandb_kwargs = dict(
-                project=self.cfg.get('wandb_project', 'pimm'),
-                name=self.cfg.get('wandb_run_name', os.path.basename(self.cfg.save_path)),
+                project=self.cfg.get("wandb_project", "pimm"),
+                name=self.cfg.get(
+                    "wandb_run_name", os.path.basename(self.cfg.save_path)
+                ),
                 config=self.cfg,
-                step_offset=self.cfg.get('log_step_offset', 0),
+                step_offset=self.cfg.get("log_step_offset", 0),
             )
             for cfg_key, wandb_key in (
-                ('wandb_group', 'group'),
-                ('wandb_job_type', 'job_type'),
-                ('wandb_run_id', 'id'),
-                ('wandb_resume', 'resume'),
+                ("wandb_group", "group"),
+                ("wandb_job_type", "job_type"),
+                ("wandb_run_id", "id"),
+                ("wandb_resume", "resume"),
             ):
                 value = self.cfg.get(cfg_key, None)
                 if value is not None:
@@ -459,13 +568,19 @@ class Trainer(TrainerBase):
             # (top of the Overview tab) so it is visible without digging into the
             # Config. wandb's own "Command" panel still shows the long auto-
             # captured train.py argv, which we cannot override.
-            launch_command = self.cfg.get('launch_command', None)
+            launch_command = self.cfg.get("launch_command", None)
             if launch_command:
-                wandb_kwargs['notes'] = launch_command
-            writer = WandbSummaryWriter(**wandb_kwargs) if comm.is_main_process() else None
-            self.logger.info(f"Weights & Biases writer initialized with project: {self.cfg.get('wandb_project', 'pimm')}")
+                wandb_kwargs["notes"] = launch_command
+            writer = (
+                WandbSummaryWriter(**wandb_kwargs) if comm.is_main_process() else None
+            )
+            self.logger.info(
+                f"Weights & Biases writer initialized with project: {self.cfg.get('wandb_project', 'pimm')}"
+            )
         else:
-            writer = SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
+            writer = (
+                SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
+            )
             self.logger.info(f"Tensorboard writer logging dir: {self.cfg.save_path}")
         return writer
 
@@ -587,10 +702,12 @@ class Trainer(TrainerBase):
     def build_test_loader(self):
         """Build the optional test loader used by evaluation hooks."""
         test_loader = None
-        if self.cfg.evaluate and hasattr(self.cfg.data, 'test'):
+        if self.cfg.evaluate and hasattr(self.cfg.data, "test"):
             test_data = build_dataset(self.cfg.data.test)
             if comm.get_world_size() > 1:
-                test_sampler = torch.utils.data.distributed.DistributedSampler(test_data)
+                test_sampler = torch.utils.data.distributed.DistributedSampler(
+                    test_data
+                )
             else:
                 test_sampler = None
             test_loader = torch.utils.data.DataLoader(
@@ -620,7 +737,7 @@ class Trainer(TrainerBase):
         """Build an AMP gradient scaler when mixed precision is enabled."""
         if not self.cfg.enable_amp:
             return None
-            
+
         # Use standard grad scaler for DDP
         if version.parse(torch.__version__) >= version.parse("2.4"):
             grad_scaler = partial(torch.amp.GradScaler, device="cuda")
@@ -760,7 +877,9 @@ class GRPOTrainer(Trainer):
                 chunk["metric_count"] = len(sliced_trajectories)
                 chunk["metric_sums"] = self._rollout_metric_sums(sliced_trajectories)
                 if "reward_stds" in chunk:
-                    chunk["reward_stds"] = [sliced_event.get("reward_std", event.get("reward_std"))]
+                    chunk["reward_stds"] = [
+                        sliced_event.get("reward_std", event.get("reward_std"))
+                    ]
                 if "rloo_score_means" in chunk and "rloo_score_mean" in sliced_event:
                     chunk["rloo_score_means"] = [sliced_event["rloo_score_mean"]]
                 if "rloo_score_stds" in chunk and "rloo_score_std" in sliced_event:
@@ -778,13 +897,21 @@ class GRPOTrainer(Trainer):
             key for key, value in first_output.items() if torch.is_tensor(value)
         ]
         for key in tensor_keys:
-            values = [(output[key], weight) for output, weight in weighted_outputs if key in output]
+            values = [
+                (output[key], weight)
+                for output, weight in weighted_outputs
+                if key in output
+            ]
             if not values:
                 continue
             if "_min" in key:
-                combined[key] = torch.stack([value.detach() for value, _ in values]).min()
+                combined[key] = torch.stack(
+                    [value.detach() for value, _ in values]
+                ).min()
             elif "_max" in key or "abs_max" in key:
-                combined[key] = torch.stack([value.detach() for value, _ in values]).max()
+                combined[key] = torch.stack(
+                    [value.detach() for value, _ in values]
+                ).max()
             else:
                 combined[key] = torch.stack(
                     [value.detach() * float(weight) for value, weight in values]
@@ -900,7 +1027,9 @@ class GRPOTrainer(Trainer):
         for key in tracked:
             if key not in first or key not in last:
                 continue
-            first_value = first[key].detach() if torch.is_tensor(first[key]) else first[key]
+            first_value = (
+                first[key].detach() if torch.is_tensor(first[key]) else first[key]
+            )
             last_value = last[key].detach() if torch.is_tensor(last[key]) else last[key]
             combined[f"{key}_update0"] = first_value
             combined[f"{key}_last"] = last_value
@@ -920,66 +1049,67 @@ class GRPOTrainer(Trainer):
         else:
             auto_cast = torch.cuda.amp.autocast
 
-        input_dict = move_batch_to_device(
-            self.comm_info["input_dict"],
-            self.parallel_context.device,
-        )
+        with sl.log_trace_span("batch_to_device"):
+            input_dict = move_batch_to_device(
+                self.comm_info["input_dict"],
+                self.parallel_context.device,
+            )
         # The model rollout and loss APIs expect all tensors on one device.
         self.comm_info["input_dict"] = input_dict
 
         model_impl = unwrap_model(self.model)
         if not hasattr(model_impl, "sample_grpo_batch"):
-            raise RuntimeError(
-                "GRPOTrainer requires model.sample_grpo_batch"
-            )
+            raise RuntimeError("GRPOTrainer requires model.sample_grpo_batch")
         if not hasattr(model_impl, "grpo_loss_from_batch"):
-            raise RuntimeError(
-                "GRPOTrainer requires model.grpo_loss_from_batch"
-            )
+            raise RuntimeError("GRPOTrainer requires model.grpo_loss_from_batch")
 
         policy_updates = self._policy_updates_per_rollout()
         microbatch_size = self._trajectory_microbatch_size()
-        with auto_cast(
-            enabled=self.cfg.enable_amp,
-            dtype=AMP_DTYPE[self.cfg.amp_dtype],
-        ):
-            rollout_batch = model_impl.sample_grpo_batch(input_dict)
+        with sl.log_trace_span("grpo_rollout"):
+            with auto_cast(
+                enabled=self.cfg.enable_amp,
+                dtype=AMP_DTYPE[self.cfg.amp_dtype],
+            ):
+                rollout_batch = model_impl.sample_grpo_batch(input_dict)
 
         update_outputs = []
         for update_index in range(policy_updates):
-            if microbatch_size > 0:
-                output_dict = self._optimizer_update_grpo_microbatched(
-                    model_impl,
-                    rollout_batch,
-                    update_index=update_index,
-                    policy_updates=policy_updates,
-                    microbatch_size=microbatch_size,
-                    auto_cast=auto_cast,
-                )
-            else:
-                with auto_cast(
-                    enabled=self.cfg.enable_amp,
-                    dtype=AMP_DTYPE[self.cfg.amp_dtype],
-                    device_type=self.parallel_context.device.type,
-                ):
-                    output_dict = model_impl.grpo_loss_from_batch(
+            with sl.log_trace_span("grpo_policy_update"):
+                if microbatch_size > 0:
+                    output_dict = self._optimizer_update_grpo_microbatched(
+                        model_impl,
                         rollout_batch,
                         update_index=update_index,
-                        policy_updates_per_rollout=policy_updates,
+                        policy_updates=policy_updates,
+                        microbatch_size=microbatch_size,
+                        auto_cast=auto_cast,
                     )
-                    loss = output_dict["loss"]
-                self._optimizer_update(loss)
+                else:
+                    with auto_cast(
+                        enabled=self.cfg.enable_amp,
+                        dtype=AMP_DTYPE[self.cfg.amp_dtype],
+                        device_type=self.parallel_context.device.type,
+                    ):
+                        output_dict = model_impl.grpo_loss_from_batch(
+                            rollout_batch,
+                            update_index=update_index,
+                            policy_updates_per_rollout=policy_updates,
+                        )
+                        loss = output_dict["loss"]
+                    self._optimizer_update(loss)
             update_outputs.append(output_dict)
 
         if self.cfg.empty_cache and self.parallel_context.device.type == "cuda":
-            torch.cuda.empty_cache()
+            with sl.log_trace_span("cuda_empty_cache"):
+                torch.cuda.empty_cache()
         combined = self._combine_grpo_outputs(update_outputs)
         if "offset" in input_dict:
             avg_pts = input_dict["coord"].shape[0] / len(input_dict["offset"])
             combined["avg_pts"] = torch.as_tensor(
                 avg_pts, device=input_dict["coord"].device, dtype=torch.float32
             )
-        combined = self._sync_grpo_scalar_metrics(combined)
+        with sl.log_trace_span("grpo_metric_sync"):
+            combined = self._sync_grpo_scalar_metrics(combined)
         self.comm_info["model_output_dict"] = combined
 
 

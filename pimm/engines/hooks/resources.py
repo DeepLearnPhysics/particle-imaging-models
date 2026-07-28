@@ -5,6 +5,7 @@ import gc
 import torch
 
 import pimm.utils.comm as comm
+from pimm.observability import structured_logger as sl
 from pimm.utils.comm import is_main_process
 
 from .builder import HOOKS
@@ -59,15 +60,18 @@ class GarbageHandler(HookBase):
 
     def after_step(self):
         if self.iter % self.interval == 0:
-            gc.collect()
-            if self.empty_cache:
-                torch.cuda.empty_cache()
+            sl.add_step_tag("garbage_collection")
+            with sl.log_trace_span("garbage_collection"):
+                gc.collect()
+                if self.empty_cache:
+                    torch.cuda.empty_cache()
             self.trainer.logger.info("Garbage collected")
         self.iter += 1
 
     def after_train(self):
-        gc.collect()
-        torch.cuda.empty_cache()
+        with sl.log_trace_span("garbage_collection"):
+            gc.collect()
+            torch.cuda.empty_cache()
 
 @HOOKS.register_module()
 class ResourceUtilizationLogger(HookBase):

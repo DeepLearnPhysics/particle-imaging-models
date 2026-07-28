@@ -4,6 +4,10 @@ pimm writes `train.log` and one experiment writer on rank 0. Set
 `use_wandb=True` for Weights & Biases; otherwise the same writer calls go to a
 TensorBoard event file in the experiment directory.
 
+For per-rank phase timing and distributed failure debugging, enable the
+separate {doc}`structured logger <structured_logging>`. It complements the
+rank-0 metric writer and is disabled by default.
+
 ## Enable W&B
 
 ```bash

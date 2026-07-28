@@ -26,6 +26,7 @@ from pimm.engines._train_utils import (
     capture_rng_state,
     restore_distributed_rng_state,
 )
+from pimm.observability import structured_logger as sl
 from pimm.utils.comm import is_main_process, synchronize
 from pimm.utils.path import (
     checkpoint_success_file as _dcp_success_file,
@@ -845,8 +846,10 @@ class CheckpointManager:
                     filename, os.path.join(model_dir, f"iter_{step_count}.pth")
                 )
 
+    @sl.log_trace_span("checkpoint_save")
     def save_epoch_checkpoint(self, *, is_best=False, step_count=0, save_freq=None):
         """Save an epoch/metric-oriented checkpoint. Must run on all ranks."""
+        sl.add_step_tag("checkpoint")
         fmt = self._checkpoint_format()
         payload = build_checkpoint_payload(
             self.trainer,
@@ -862,6 +865,7 @@ class CheckpointManager:
             save_iter_checkpoints=bool(save_freq),
         )
 
+    @sl.log_trace_span("checkpoint_save")
     def save_iteration_checkpoint(
         self,
         *,
@@ -872,6 +876,7 @@ class CheckpointManager:
         save_iter_checkpoints=False,
     ):
         """Save an iteration-oriented checkpoint. Must run on all ranks."""
+        sl.add_step_tag("checkpoint")
         fmt = self._checkpoint_format(backend)
         payload = build_checkpoint_payload(
             self.trainer,
@@ -887,7 +892,10 @@ class CheckpointManager:
             save_iter_checkpoints=save_iter_checkpoints,
         )
 
-    def load_weight_and_resume(self, *, keywords="", replacement=None, rules=None, strict=False):
+    @sl.log_trace_span("checkpoint_load")
+    def load_weight_and_resume(
+        self, *, keywords="", replacement=None, rules=None, strict=False
+    ):
         """Load configured weights and restore training state when cfg.resume is true.
 
         Pass ``rules`` (a list of ``(keywords, replacement)`` pairs) to apply several

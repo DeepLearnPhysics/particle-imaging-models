@@ -26,6 +26,16 @@ mix_prob = 0
 param_dicts = None  # example: param_dicts = [dict(keyword="block", lr_scale=0.1)]
 deterministic = False
 
+# Per-rank structured phase tracing for distributed diagnosis.
+# Disabled by default because it writes a synchronous JSONL event stream.
+structured_logging = dict(
+    enabled=False,
+    trace_hooks=False,
+    batch_stats_every=1,
+    max_file_size_mb=128,
+    backup_count=3,
+)
+
 # hook
 hooks = [
     dict(type="CheckpointLoader"),
