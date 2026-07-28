@@ -207,41 +207,87 @@ class CrossAttentionLayer(nn.Module):
         q = self.q_proj(q)
         k = self.k_proj(k)
         v = self.v_proj(v)
+        q_dtype = q.dtype
 
         # reshape to (batch*seq, heads, head_dim)
         q = q.reshape(-1, H, C // H)
         k = k.reshape(-1, H, C // H)
         v = v.reshape(-1, H, C // H)
 
-        if self.upcast_attention:
-            q = q.float()
-            k = k.float()
-            v = v.float()
+        if (
+            self.enable_flash
+            and q.is_cuda
+            and attn_mask is None
+            and flash_attn_varlen_func is not None
+        ):
+            feat = flash_attn_varlen_func(
+                q.to(torch.bfloat16),
+                k.to(torch.bfloat16),
+                v.to(torch.bfloat16),
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_kv,
+                max_seqlen_q=int(max_seqlen_q),
+                max_seqlen_k=int(max_seqlen_kv),
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+                softmax_scale=self.scale,
+            )
+            feat = feat.reshape(-1, C).to(q_dtype)
+        else:
+            if self.upcast_attention:
+                q = q.float()
+                k = k.float()
+                v = v.float()
 
-        # prepare attention mask for SDPA
-        sdpa_mask = None
-        if attn_mask is not None:
-            # attn_mask is (N_q, N_kv) additive mask
-            sdpa_mask = attn_mask.unsqueeze(0).unsqueeze(0).to(q.dtype)
+            if attn_mask is None:
+                # Portable packed fallback: attend within each event independently.
+                feat_chunks = []
+                for b in range(len(cu_seqlens_q) - 1):
+                    start_q = cu_seqlens_q[b].item()
+                    end_q = cu_seqlens_q[b + 1].item()
+                    start_kv = cu_seqlens_kv[b].item()
+                    end_kv = cu_seqlens_kv[b + 1].item()
 
-        # torch SDPA with 3D inputs (batch*seq, heads, head_dim)
-        q_sdpa = q.transpose(0, 1).unsqueeze(0).contiguous()  # (1, H, N_q, head_dim)
-        k_sdpa = k.transpose(0, 1).unsqueeze(0).contiguous()  # (1, H, N_kv, head_dim)
-        v_sdpa = v.transpose(0, 1).unsqueeze(0).contiguous()  # (1, H, N_kv, head_dim)
+                    q_sdpa = q[start_q:end_q].transpose(0, 1).unsqueeze(0).contiguous()
+                    k_sdpa = (
+                        k[start_kv:end_kv].transpose(0, 1).unsqueeze(0).contiguous()
+                    )
+                    v_sdpa = (
+                        v[start_kv:end_kv].transpose(0, 1).unsqueeze(0).contiguous()
+                    )
+                    feat_chunks.append(
+                        F.scaled_dot_product_attention(
+                            q_sdpa,
+                            k_sdpa,
+                            v_sdpa,
+                            dropout_p=self.attn_drop.p if self.training else 0.0,
+                            scale=self.scale,
+                        )
+                        .squeeze(0)
+                        .transpose(0, 1)
+                    )
+                feat = (
+                    torch.cat(feat_chunks, dim=0)
+                    if feat_chunks
+                    else q.new_empty((0, H, C // H))
+                ).reshape(-1, C)
+            else:
+                # The Panda dynamic mask already includes cross-event isolation.
+                sdpa_mask = attn_mask.unsqueeze(0).unsqueeze(0).to(q.dtype)
+                q_sdpa = q.transpose(0, 1).unsqueeze(0).contiguous()
+                k_sdpa = k.transpose(0, 1).unsqueeze(0).contiguous()
+                v_sdpa = v.transpose(0, 1).unsqueeze(0).contiguous()
+                feat = F.scaled_dot_product_attention(
+                    q_sdpa,
+                    k_sdpa,
+                    v_sdpa,
+                    attn_mask=sdpa_mask,
+                    dropout_p=self.attn_drop.p if self.training else 0.0,
+                    scale=self.scale,
+                )
+                feat = feat.squeeze(0).transpose(0, 1).reshape(-1, C)
 
-        feat = F.scaled_dot_product_attention(
-            q_sdpa,
-            k_sdpa,
-            v_sdpa,
-            attn_mask=sdpa_mask,
-            dropout_p=self.attn_drop.p if self.training else 0.0,
-            scale=self.scale,
-        )
-
-        # feat: (1, H, N_q, head_dim) -> (N_q, H, head_dim) -> (N_q, C)
-        feat = feat.squeeze(0).transpose(0, 1).reshape(-1, C)
-        if self.upcast_attention:
-            feat = feat.to(self.q_proj.weight.dtype)
+            if self.upcast_attention:
+                feat = feat.to(self.q_proj.weight.dtype)
 
         feat = self.proj(feat)
         feat = self.proj_drop(feat)
