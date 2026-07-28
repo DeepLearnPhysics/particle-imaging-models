@@ -237,6 +237,29 @@ def load_config(
     return cfg
 
 
+def wandb_api_key_from_dotenv(root: Path = ROOT) -> str | None:
+    """Read only WANDB_API_KEY from the repo `.env`, ignoring all other vars.
+
+    Batch launches kept failing when the shell's $WANDB_API_KEY was empty and
+    got dropped/misparsed on the command line. Reading the single key straight
+    from `.env` here makes a real key the default without exposing any other
+    secrets from that file to the remote job.
+    """
+    env_path = root / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() != "WANDB_API_KEY":
+            continue
+        value = value.strip().strip("'").strip('"').strip()
+        return value or None
+    return None
+
+
 def finalize_config(
     cfg: dict[str, Any],
     *,
@@ -252,8 +275,17 @@ def finalize_config(
     run_cfg = cfg.setdefault("run", {})
     if run_cfg.get("wandb_project"):
         train_cfg.setdefault("options", {})["wandb_project"] = run_cfg["wandb_project"]
-    if run_cfg.get("wandb_api_key"):
-        cfg.setdefault("env", {})["WANDB_API_KEY"] = run_cfg["wandb_api_key"]
+    # Precedence: explicit --run.wandb-api-key, then an already-set env value,
+    # then the single WANDB_API_KEY from the repo `.env`. Only this one var is
+    # ever taken from `.env` — no other secrets leak into the job env. This is
+    # what lets a gcloud submit authenticate to W&B either by passing
+    # --run.wandb-api-key or by keeping WANDB_API_KEY=... in the repo `.env`
+    # (the `.env` file itself is never staged to the VM).
+    wandb_key = run_cfg.get("wandb_api_key") or cfg.get("env", {}).get("WANDB_API_KEY")
+    if not str(wandb_key or "").strip():
+        wandb_key = wandb_api_key_from_dotenv()
+    if str(wandb_key or "").strip():
+        cfg.setdefault("env", {})["WANDB_API_KEY"] = wandb_key
 
     rdzv_cfg = cfg.get("rdzv") or {}
     env = cfg.setdefault("env", {})

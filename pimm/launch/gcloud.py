@@ -251,9 +251,10 @@ def build_batch_job(
         "maxRetryCount": 0,
     }
 
-    # W&B key: the key (--run.wandb-api-key, moved into env by finalize_config)
-    # is rendered as an env export in the script. It must be a non-empty value:
-    # the gcloud VM does not see the local .env, so a missing key means the run
+    # W&B key: the key (from --run.wandb-api-key or the repo `.env`, moved into
+    # env by finalize_config) is rendered as an env export in the script. It must
+    # be a non-empty value: the gcloud VM does not see the local .env, so a
+    # missing key means the run
     # cannot authenticate to W&B. Fail loudly at build time rather than letting
     # the job start and die. build_batch_job is the single chokepoint every
     # submit (and --dry-run render) goes through, so this guards them all.

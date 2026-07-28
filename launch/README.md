@@ -87,13 +87,13 @@ Edit `launch/sites/gcloud.yaml` for your project (project, location, machine
 type, `gs://` exp_root, and data paths), then submit:
 
 ```bash
-export WANDB_API_KEY=...   # the Batch VM does not see the local .env
-
+# WANDB_API_KEY is read automatically from a `WANDB_API_KEY=...` line in the
+# repo `.env`, so with that in place the flag below can be omitted.
 pimm submit \
   --site gcloud \
   --resources.time 04:00:00 \
   --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
-  --run.wandb-api-key "$WANDB_API_KEY"
+  --run.wandb-api-key "$WANDB_API_KEY"   # optional; overrides the `.env` value
 ```
 
 Notes:
@@ -107,8 +107,11 @@ Notes:
 - `resources.scheduler_options.stage_code: true` rsyncs the local checkout to the
   bucket at submit time so code edits take effect without rebuilding the image;
   the image then supplies only the environment.
-- `WANDB_API_KEY` is required and must be passed at submit time (the VM cannot
-  read the local `.env`); submission fails fast if it is unset.
+- `WANDB_API_KEY` is required; submission fails fast if it is unset. Provide it
+  EITHER via a `WANDB_API_KEY=...` line in the repo `.env` (read automatically at
+  submit time) OR via `--run.wandb-api-key` (which overrides `.env`). The submit
+  host injects the key into the rendered Batch job — the `.env` file itself is
+  never staged to the VM.
 - Use `--dry-run` to print the rendered Batch job JSON and `--output PATH` to
   write it.
 
