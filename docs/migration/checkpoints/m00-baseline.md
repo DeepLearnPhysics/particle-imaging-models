@@ -1,6 +1,6 @@
 # Milestone 00 baseline evidence
 
-Status: evidence pending
+Status: public gate passed; private compatibility pending
 
 ## Source state
 
@@ -19,8 +19,39 @@ The public test environment is created from the checked-in lock:
 uv sync --frozen --group dev
 ```
 
-Exact runtime and test results are recorded in the Milestone 00 boundary
-commit after the focused and full unit suites complete.
+Resolved environment:
+
+```text
+Python 3.10.20
+PyTorch 2.10.0+cu126
+CUDA runtime 12.6
+1 x NVIDIA A100-SXM4-40GB
+```
+
+Public focused test:
+
+```text
+uv run --frozen pytest -q tests/unit/migration/test_baseline_contracts.py
+4 passed in 23.79s
+```
+
+Public full unit suite:
+
+```text
+uv run --frozen pytest -q tests/unit
+103 passed, 19 warnings in 71.93s
+```
+
+The warnings are 18 upstream `torch.jit.script` deprecation warnings and one
+PyTorch Geometric notice that `torch-cluster` is no longer necessary.
+
+After the evidence files were updated, the focused boundary validation passed
+again: `4 passed in 6.42s`.
+
+The tested implementation commit is
+`f26d2c42247cbabd13239d8fc19a1b914f4fcab7`. The boundary commit containing
+this evidence is identified as `SELF` in `docs/migration/status.yaml`; its exact
+SHA is the Git commit containing this file.
 
 ## Scope guard
 

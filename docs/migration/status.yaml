@@ -29,11 +29,21 @@ ancestry:
 milestones:
   - id: "00"
     name: baseline manifests and contract fixtures
-    state: IN_PROGRESS
+    state: PUBLIC_COMPLETE_PRIVATE_PENDING
     public:
-      implementation_commit: null
-      boundary_commit: null
-      tests: []
+      implementation_commit: f26d2c42247cbabd13239d8fc19a1b914f4fcab7
+      boundary_commit: SELF
+      tests:
+        - command: uv run --frozen pytest -q tests/unit/migration/test_baseline_contracts.py
+          result: 4 passed
+          duration_seconds: 23.79
+        - command: uv run --frozen pytest -q tests/unit
+          result: 103 passed, 19 warnings
+          duration_seconds: 71.93
+        - command: uv run --frozen pytest -q tests/unit/migration/test_baseline_contracts.py
+          result: 4 passed
+          duration_seconds: 6.42
+          purpose: boundary-record validation
     private:
       synchronization_commit: null
       boundary_commit: null
@@ -45,5 +55,5 @@ milestones:
     state: BLOCKED_BY_PREVIOUS_MILESTONE
 
 notes:
-  - Milestone SHAs and test evidence are filled at the boundary commit.
   - A boundary_commit value of SELF identifies the commit containing the completed record; the exact immutable SHA is reported in Git and the milestone handoff.
+  - Private synchronization and compatibility evidence are completed only on the private migration branch.
