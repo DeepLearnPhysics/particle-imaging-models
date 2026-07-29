@@ -1,0 +1,49 @@
+schema_version: 1
+logical_branch: migration/warpconvnet
+updated_at: "2026-07-28"
+
+repositories:
+  public:
+    repository: DeepLearnPhysics/particle-imaging-models
+    main_at_start: 9491b0bf4b89bbee52a6383225a19f9c6a628a3c
+    baseline_tag: pre-wcn-public-2026-07-28
+    migration_branch_created: true
+  private:
+    repository: DeepLearnPhysics/pimm-private
+    main_at_start: 62239122c7a3112640743c8900cdc4336c33e59c
+    baseline_tag: pre-wcn-private-2026-07-28
+    migration_branch_created: true
+  warpconvnet:
+    upstream_repository: NVlabs/WarpConvNet
+    integration_repository: DeepLearnPhysics/WarpConvNet
+    pinned_baseline: cb22e75d1b102796585bcded5f4b02a492fb7fdd
+    baseline_tag: pimm-wcn-upstream-base-2026-07-28
+    migration_branch_created: true
+
+ancestry:
+  public_main_is_ancestor_of_private_main: true
+  merge_base: 9491b0bf4b89bbee52a6383225a19f9c6a628a3c
+  private_ahead: 110
+  private_behind: 0
+
+milestones:
+  - id: "00"
+    name: baseline manifests and contract fixtures
+    state: IN_PROGRESS
+    public:
+      implementation_commit: null
+      boundary_commit: null
+      tests: []
+    private:
+      synchronization_commit: null
+      boundary_commit: null
+      tests: []
+    deletion_gate_open: false
+    wcn_dependency_introduced: false
+  - id: "01"
+    name: registry and explicit model contract
+    state: BLOCKED_BY_PREVIOUS_MILESTONE
+
+notes:
+  - Milestone SHAs and test evidence are filled at the boundary commit.
+  - A boundary_commit value of SELF identifies the commit containing the completed record; the exact immutable SHA is reported in Git and the milestone handoff.

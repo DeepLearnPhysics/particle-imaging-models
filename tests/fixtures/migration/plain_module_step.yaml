@@ -1,0 +1,14 @@
+schema_version: 1
+registry_name: SyntheticPlainModule
+model:
+  in_features: 2
+  initial_weight: [1.0, 1.0]
+batch:
+  features:
+    - [1.0, 2.0]
+    - [3.0, 4.0]
+  targets: [2.0, 8.0]
+expected:
+  predictions: [3.0, 7.0]
+  loss: 1.0
+  weight_gradient: [-2.0, -2.0]

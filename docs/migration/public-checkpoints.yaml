@@ -1,0 +1,133 @@
+schema_version: 1
+captured_at: "2026-07-28"
+baseline_commit: 9491b0bf4b89bbee52a6383225a19f9c6a628a3c
+
+status_definitions:
+  ACTIVE: Referenced by current public documentation or a checked-in recipe.
+  CONVERT: A converter and migrated configuration are required before deletion.
+  LEGACY_RELEASE: Execution remains on a documented immutable legacy release.
+  PENDING: The planned migration has not passed its acceptance gate.
+
+checkpoints:
+  - id: panda-base
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/Panda-Base
+      revision: 5ab7e6c86d0f41f0917e18e1a46f634e2f025a83
+    config: configs/panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask.py
+    current_model_type: PT-v3m2
+    target_model:
+      type: PTv3
+      preset: m2
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: panda-semantic
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/Panda-Semantic
+      revision: c1cdee0262a08b2e0f0c60a6b33128e0d3622554
+    config: configs/panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft.py
+    current_model_type: DefaultSegmentorV2
+    target_model:
+      type: semantic task wrapper
+      backbone: PTv3
+      preset: m2
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: panda-particle
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/Panda-Particle
+      revision: bd90792dfe83cd05b437b719564b311f0a0b785a
+    config: configs/panda/panseg/detector-v5-pt-v3m2-ft-pid-fft-detector.py
+    current_model_type: detector-v5
+    target_model:
+      type: canonical Panda
+      behavior: detector-v5m2
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: panda-interaction
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/Panda-Interaction
+      revision: fa8bd4c1937c39a48e02bde5bf27e188d0be4ac4
+    config: configs/panda/panseg/detector-v5-pt-v3m2-ft-vtx-fft-detector.py
+    current_model_type: detector-v5
+    target_model:
+      type: canonical Panda
+      behavior: detector-v5m2
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: polarmae-pretrain-export
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/PoLAr-MAE-Pretrain
+      revision: a85559dfcb0ee041e43cbb7ab09d0c46243b611a
+    config: configs/polarmae/pretrain-polarmae-pilarnet.py
+    current_model_type: PoLAr-MAE
+    target_model:
+      type: PoLAr-MAE
+      backend: WarpConvNet operators where behavior is preserved
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: polarmae-semantic-export
+    activity: ACTIVE
+    source:
+      kind: huggingface
+      repository: DeepLearnPhysics/PoLAr-MAE-Semantic
+      revision: 450d8adf8a007623de071db84463faf72aa0cb75
+    config: configs/polarmae/semseg/semseg-polarmae-pilarnet-fft-reproduce.py
+    current_model_type: PoLArMAE-SemSeg
+    target_model:
+      type: PoLAr-MAE semantic task
+      backend: WarpConvNet operators where behavior is preserved
+    migration_disposition: CONVERT
+    validation_status: PENDING
+
+  - id: polarmae-pretrain-legacy-asset
+    activity: ACTIVE
+    source:
+      kind: github_release_asset
+      repository: DeepLearnPhysics/PoLAr-MAE
+      release_tag: weights
+      asset_id: 226770806
+      filename: polarmae_pretrain.ckpt
+      size_bytes: 356044228
+      digest: null
+    configs:
+      - configs/polarmae/semseg/semseg-polarmae-pilarnet-fft.py
+      - configs/polarmae/semseg/semseg-polarmae-pilarnet-peft.py
+    current_model_type: PoLAr-MAE
+    migration_disposition: CONVERT
+    validation_status: PENDING
+    blocker: The GitHub release API does not publish a digest for this asset.
+
+  - id: polarmae-semantic-legacy-asset
+    activity: ACTIVE
+    source:
+      kind: github_release_asset
+      repository: DeepLearnPhysics/PoLAr-MAE
+      release_tag: weights
+      asset_id: 226771255
+      filename: polarmae_fft_segsem.ckpt
+      size_bytes: 274559274
+      digest: null
+    config: configs/polarmae/semseg/semseg-polarmae-pilarnet-fft-reproduce.py
+    current_model_type: PoLArMAE-SemSeg
+    migration_disposition: CONVERT
+    validation_status: PENDING
+    blocker: The GitHub release API does not publish a digest for this asset.
+
+deletion_gate:
+  open: false
+  reason: No listed converter or migrated checkpoint has passed its model and scientific acceptance gate.

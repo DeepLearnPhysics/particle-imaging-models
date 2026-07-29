@@ -1,0 +1,45 @@
+schema_version: 1
+samples:
+  - coord:
+      - [0.0, 1.0, 2.0]
+      - [3.0, 4.0, 5.0]
+    feat:
+      - [0.5, 1.5]
+      - [2.5, 3.5]
+    offset: [2]
+    segment: [1, 0]
+    category: [4]
+    name: event-a
+    _worker_note: omitted-a
+  - coord:
+      - [10.0, 11.0, 12.0]
+      - [13.0, 14.0, 15.0]
+      - [16.0, 17.0, 18.0]
+    feat:
+      - [4.5, 5.5]
+      - [6.5, 7.5]
+      - [8.5, 9.5]
+    offset: [3]
+    segment: [2, 2, 1]
+    category: [7]
+    name: event-b
+    _worker_note: omitted-b
+
+expected:
+  coord:
+    - [0.0, 1.0, 2.0]
+    - [3.0, 4.0, 5.0]
+    - [10.0, 11.0, 12.0]
+    - [13.0, 14.0, 15.0]
+    - [16.0, 17.0, 18.0]
+  feat:
+    - [0.5, 1.5]
+    - [2.5, 3.5]
+    - [4.5, 5.5]
+    - [6.5, 7.5]
+    - [8.5, 9.5]
+  offset: [2, 5]
+  segment: [1, 0, 2, 2, 1]
+  category: [4, 7]
+  name: [event-a, event-b]
+  omitted_keys: [_worker_note]
