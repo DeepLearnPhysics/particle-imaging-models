@@ -50,18 +50,18 @@ def run_process() -> Callable[..., ProcessResult]:
 
 
 PILARNET_MINI_REPO = "DeepLearnPhysics/PILArNet-M-mini"
-PILARNET_MINI_REVISION = "c218be4a76948bb44c3dcd7964f4b22c6c0052f4"
+PILARNET_MINI_REVISION = "d7a0d1e3e5d6640808db71dcda34bc31991d9b3b"  # v3 layout
 PILARNET_MINI_FILES = {
     "train/generic_v2_80_v2.h5": (
-        "c8056fa915efb50bff1e06e746240ed0cce166b41693502b361b208fe3296f1f",
+        "ca736e0c9f644a2f497341de8323a508bc3124ef472aa95ea00514f3c203ca2c",
         80,
     ),
     "val/generic_v2_20_v2.h5": (
-        "4881c1651e4bcfbd91e39c7a18de907aa2fd2d8389de0ace8b96c1a22926ae64",
+        "4bc72b3386a4cfd0110368a6292024c03f8890521fa73efcc1610c5c6a3b5171",
         20,
     ),
     "test/generic_v2_20_v2.h5": (
-        "8c092b797736f64130826a63c28fa2493a00e5efbe1c38d62326b676b00cf8a5",
+        "a80f210e5b9c065f0d2869e1b10c9a9301930ceaec8fef51d02b6dac7bc1043b",
         20,
     ),
 }

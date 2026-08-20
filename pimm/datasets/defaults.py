@@ -268,8 +268,8 @@ class ConcatDataset(Dataset):
 
             >>> from pimm.datasets.builder import build_dataset
             >>> ds = build_dataset(dict(type="ConcatDataset", datasets=[
-            ...     dict(type="PILArNetH5Dataset", revision="v2", split="train", transform=[]),
-            ...     dict(type="PILArNetH5Dataset", revision="v2", split="val", transform=[]),
+            ...     dict(type="PILArNetH5Dataset", revision="v3", split="train", transform=[]),
+            ...     dict(type="PILArNetH5Dataset", revision="v3", split="val", transform=[]),
             ... ]))
             >>> len(ds)                   # sum of child lengths (x loop)  # doctest: +SKIP
             1234567

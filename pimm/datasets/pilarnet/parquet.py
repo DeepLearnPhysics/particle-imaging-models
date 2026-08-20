@@ -11,7 +11,8 @@ from pimm.utils.logger import get_root_logger
 
 from ..builder import DATASETS
 from ..transform import Compose
-from .decode import decode_event
+from .decode import decode_event, resolve_revision
+from .default import default_transform
 from .overlay import PILArNetOverlayMixin
 
 # Splits are named "train"/"validation"/"test" in the HF parquet export; accept
@@ -51,6 +52,21 @@ def resolve_parquet_data_files(
         )
     if repo_id is None:
         raise ValueError("Provide either data_root or repo_id for parquet loading")
+    # `refs/convert/parquet` is mutable, and `datasets` keys its cache on this
+    # spec string -- so a re-converted repo would keep reading the stale local
+    # arrow. Pin the ref to its current commit instead.
+    if parquet_revision.startswith("refs/"):
+        try:
+            from huggingface_hub import HfApi
+
+            parquet_revision = HfApi().repo_info(
+                repo_id, repo_type="dataset", revision=parquet_revision
+            ).sha
+        except Exception as exc:  # offline, private, or no such ref
+            get_root_logger().warning(
+                f"Could not pin {repo_id}@{parquet_revision} to a commit ({exc}); "
+                "a stale `datasets` cache will not be detected."
+            )
     return (
         f"hf://datasets/{repo_id}@{parquet_revision}/"
         f"{config_name}/{hf_split}/*.parquet"
@@ -64,8 +80,16 @@ def _event_dict_from_row(row, revision, *, energy_threshold,
     data_dict = decode_event(
         point=np.asarray(row["point"]),
         cluster=np.asarray(row["cluster"]),
-        cluster_extra=(
-            np.asarray(row["cluster_extra"]) if revision != "v1" else None
+        cluster_extra=np.asarray(row["cluster_extra"]),
+        cluster_extra_2=(
+            np.asarray(row["cluster_extra_2"])
+            if row.get("cluster_extra_2") is not None
+            else None
+        ),
+        interaction_extra=(
+            np.asarray(row["interaction_extra"])
+            if row.get("interaction_extra") is not None
+            else None
         ),
         revision=revision,
         energy_threshold=energy_threshold,
@@ -106,9 +130,12 @@ class PILArNetParquetDataset(PILArNetOverlayMixin, Dataset):
             ``PILARNET_PARQUET_ROOT_<REV>`` env var). Defaults to ``None``.
         split (str): Split name; ``"val"`` is accepted as an alias for
             ``"validation"``. Defaults to ``"train"``.
-        transform (list[dict]): Transform configs (NOT a prebuilt ``Compose``).
-        revision ({"v1","v2","v3"}): Cluster/extra column layout. Defaults to
-            ``"v2"``.
+        transform (list[dict] | None): Transform configs (NOT a prebuilt
+            ``Compose``). ``None`` uses
+            :func:`~pimm.datasets.pilarnet.default_transform`; ``[]`` means no
+            preprocessing.
+        revision ({"v2", "v3", "v3_extra"}): v3-family schema. ``"v2"`` is
+            served as v3 with a warning. Defaults to ``"v3"``.
         parquet_revision (str): Git ref carrying the parquet export. Defaults to
             ``"refs/convert/parquet"``.
         config_name (str): Parquet builder config subdir. Defaults to
@@ -125,12 +152,12 @@ class PILArNetParquetDataset(PILArNetOverlayMixin, Dataset):
         data_root: str | None = None,
         split="train",
         transform=None,
-        revision: Literal["v1", "v2", "v3"] = "v2",
+        revision: Literal["v2", "v3", "v3_extra"] = "v3",
         parquet_revision: str = "refs/convert/parquet",
         config_name: str = "default",
         loop=1,
         ignore_index=-1,
-        energy_threshold=0.0,
+        energy_threshold=0.13,
         min_points=1024,
         max_len=-1,
         remove_low_energy_scatters=False,
@@ -150,10 +177,13 @@ class PILArNetParquetDataset(PILArNetOverlayMixin, Dataset):
             )
         from datasets import load_dataset
 
+        revision = resolve_revision(revision)
         self.repo_id = repo_id
         self.data_root = data_root
         self.split = split
-        self.transform = Compose(transform)
+        self.transform = Compose(
+            default_transform() if transform is None else transform
+        )
         self.revision = revision
         self.loop = loop
         self.ignore_index = ignore_index
@@ -280,7 +310,7 @@ class PILArNetParquetIterableDataset(IterableDataset):
         data_root: str | None = None,
         split="train",
         transform=None,
-        revision: Literal["v1", "v2", "v3"] = "v2",
+        revision: Literal["v2", "v3", "v3_extra"] = "v3",
         parquet_revision: str = "refs/convert/parquet",
         config_name: str = "default",
         energy_threshold=0.0,
@@ -303,10 +333,13 @@ class PILArNetParquetIterableDataset(IterableDataset):
                 "PILArNetParquetIterableDataset does not support test_mode; use "
                 "PILArNetH5Dataset for the voxelized/augmented test path."
             )
+        revision = resolve_revision(revision)
         self.repo_id = repo_id
         self.data_root = data_root
         self.split = split
-        self.transform = Compose(transform)
+        self.transform = Compose(
+            default_transform() if transform is None else transform
+        )
         self.revision = revision
         self.energy_threshold = energy_threshold
         self.min_points = min_points

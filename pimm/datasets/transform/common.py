@@ -71,16 +71,52 @@ def _apply_to_aux_directions(data_dict, transform):
     """Apply a LINEAR (norm-preserving) transform to opt-in DIRECTION keys.
 
     Keys listed in ``data_dict['aux_direction_keys']`` are unit vectors
-    (e.g. ``primary_direction``): only rotation/flip are applied (NOT
-    translation or scale), and the result is re-normalized to guard against
-    float drift. Callers must pass the linear part only (no centering).
+    (e.g. ``primary_direction`` or PILArNet ``momentum_vec``): only
+    rotation/flip are applied (NOT translation or scale), and the result is
+    re-normalized to guard against float drift. All-``-1`` sentinel rows are
+    preserved. Callers must pass the linear part only (no centering).
     """
     for key in data_dict.get("aux_direction_keys", ()) or ():
         v = data_dict.get(key)
-        if v is not None:
-            v = transform(np.asarray(v))
-            nrm = np.linalg.norm(v, axis=-1, keepdims=True)
-            data_dict[key] = (v / np.clip(nrm, 1e-9, None)).astype(np.float32, copy=False)
+        if v is None:
+            continue
+        v = np.asarray(v)
+        if v.ndim == 2 and v.shape[1] == 3:
+            valid = ~(v == -1).all(axis=1)
+            out = v.copy()
+            if valid.any():
+                direction = transform(v[valid])
+                norm = np.linalg.norm(direction, axis=-1, keepdims=True)
+                out[valid] = direction / np.clip(norm, 1e-9, None)
+            data_dict[key] = out.astype(np.float32, copy=False)
+            continue
+        v = transform(v)
+        norm = np.linalg.norm(v, axis=-1, keepdims=True)
+        data_dict[key] = (v / np.clip(norm, 1e-9, None)).astype(
+            np.float32, copy=False
+        )
+
+
+def _apply_to_aux_vectors(data_dict, transform):
+    """Apply a linear rotation/flip to magnitude-bearing vector keys.
+
+    Keys listed in ``aux_vector_keys`` (for example PILArNet
+    ``momentum_vector`` in GeV) transform like directions but are not
+    re-normalized. All-``-1`` sentinel rows are preserved.
+    """
+    for key in data_dict.get("aux_vector_keys", ()) or ():
+        value = data_dict.get(key)
+        if value is None:
+            continue
+        value = np.asarray(value)
+        if value.ndim == 2 and value.shape[1] == 3:
+            valid = ~(value == -1).all(axis=1)
+            out = value.copy()
+            if valid.any():
+                out[valid] = transform(value[valid])
+            data_dict[key] = out.astype(np.float32, copy=False)
+        else:
+            data_dict[key] = transform(value)
 
 
 def _translate_axis(points, dim, value):
@@ -116,7 +152,18 @@ def index_operator(data_dict, index, duplicate=False):
             "instance_particle",
             "instance_interaction",
             "momentum",
+            "mass",
+            "px",
+            "py",
+            "pz",
+            "momentum_vector",
+            "momentum_vec",
+            "true_energy",
+            "parent_pdg",
+            "parent_track_id",
             "vertex",
+            "interaction_vertex",
+            "is_primary_4cls",
             # JAXTPCDataset keys (JAXTPC)
             "track_ids",
             "group_ids",
@@ -133,10 +180,10 @@ def index_operator(data_dict, index, duplicate=False):
             "phi",
             "segment_interaction",
         ]
-    if data_dict.get("revision") == "v3":
+    if data_dict.get("revision") in ("v3", "v3_extra"):
         if not isinstance(data_dict["index_valid_keys"], list):
             data_dict["index_valid_keys"] = list(data_dict["index_valid_keys"])
-        for key in ("is_primary",):
+        for key in ("is_primary", "is_primary_4cls"):
             if key not in data_dict["index_valid_keys"]:
                 data_dict["index_valid_keys"].append(key)
     if not duplicate:
@@ -171,6 +218,7 @@ __all__ = [
     "_apply_to_v3_vertex",
     "_apply_to_aux_positions",
     "_apply_to_aux_directions",
+    "_apply_to_aux_vectors",
     "_translate_axis",
     "compute_anchors",
     "ANCHOR_DEFAULT_CFG",

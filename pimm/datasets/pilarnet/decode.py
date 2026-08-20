@@ -1,180 +1,318 @@
-"""Shared PILArNet event decoding.
+"""Shared PILArNet v3/v3_extra event decoding.
 
-``decode_event`` turns one event's raw ``point``/``cluster``/``cluster_extra``
-arrays (exactly as stored on disk, from either HDF5 or a parquet row) into the
-flat per-point ``data_dict``. Both :class:`PILArNetH5Dataset` and
-:class:`PILArNetParquetDataset` call it so the two readers cannot drift.
+``decode_event`` turns one event's raw HDF5/parquet arrays into the flat,
+point-aligned dictionary consumed by the pimm dataset and transform pipeline.
+The ``v3_extra`` schema preserves the v3 tables and adds particle momentum,
+lineage, and an explicit per-interaction vertex table.
 """
 
-from typing import Literal
+from __future__ import annotations
 
 import numpy as np
 
-# priority for voxel deduplication: track (1) > shower (0) > michel (2) > delta (3) > led (4)
+from pimm.utils.logger import get_root_logger
+
+# Priority for voxel deduplication: track > shower > Michel > delta > LED.
 DEFAULT_LABEL_PRIORITY = {1: 0, 0: 1, 2: 2, 3: 3, 4: 4}
+
+CLUSTER_WIDTH = 6
+CLUSTER_EXTRA_WIDTH = 6
+CLUSTER_EXTRA_2_WIDTH = 5
+INTERACTION_EXTRA_WIDTH = 4
+INVALID = -1.0
+
+# Extra point-aligned truth emitted by the extended decoder. Configs can pass
+# these to ``default_transform(extra_keys=...)`` when the model needs them.
+V3_EXTRA_KEYS = (
+    "mass",
+    "px",
+    "py",
+    "pz",
+    "momentum_vector",
+    "momentum_vec",
+    "true_energy",
+    "parent_pdg",
+    "parent_track_id",
+    "interaction_vertex",
+    "is_primary_4cls",
+)
+
+
+def resolve_revision(revision: str) -> str:
+    """Normalize a configured revision to a supported v3-family layout."""
+    if revision in ("v3", "v3_extra"):
+        return revision
+    if revision == "v2":
+        get_root_logger().warning(
+            "PILArNet revision='v2' requested; reading v3 instead."
+        )
+        return "v3"
+    raise ValueError(
+        f"PILArNet revision={revision!r} is not supported; "
+        "choose 'v3' or 'v3_extra'."
+    )
+
+
+def _leading_cluster_index(cluster_id, group_id, cluster_size):
+    """Return each particle group's leading-cluster row for every cluster.
+
+    EM showers can contain several clusters under one particle ``group_id``.
+    Per-particle truth must come from the group's primary cluster
+    (``cluster_id == group_id``), not whichever shower fragment happens to be
+    selected after point aggregation. If that cluster is absent, use the
+    group's largest cluster.
+    """
+    cluster_id = np.asarray(cluster_id, dtype=np.int64)
+    group_id = np.asarray(group_id, dtype=np.int64)
+    cluster_size = np.asarray(cluster_size, dtype=np.int64)
+    lead_row: dict[int, int] = {}
+    for i, group in enumerate(group_id):
+        group = int(group)
+        current = lead_row.get(group)
+        if current is None:
+            lead_row[group] = i
+            continue
+        is_primary = cluster_id[i] == group
+        current_is_primary = cluster_id[current] == group
+        if is_primary and not current_is_primary:
+            lead_row[group] = i
+        elif is_primary == current_is_primary and cluster_size[i] > cluster_size[current]:
+            lead_row[group] = i
+    return np.asarray([lead_row[int(group)] for group in group_id], dtype=np.int64)
+
+
+def _true_energy(momentum, mass):
+    """Compute ``sqrt(|p|^2 + m^2)`` in GeV, preserving invalid sentinels."""
+    momentum = np.asarray(momentum, dtype=np.float64)
+    mass = np.asarray(mass, dtype=np.float64)
+    valid = (momentum >= 0) & (mass >= 0)
+    energy = np.sqrt(np.clip(momentum * momentum + mass * mass, 0.0, None))
+    return np.where(valid, energy, INVALID).astype(np.float32)
+
+
+def _interaction_vertices(interaction_id, interaction_extra, fallback):
+    """Broadcast an explicit ``[id, x, y, z]`` table to cluster rows."""
+    if interaction_extra is None:
+        return np.asarray(fallback, dtype=np.float32)
+    raw = np.asarray(interaction_extra)
+    if raw.size == 0:
+        return np.full((len(interaction_id), 3), INVALID, dtype=np.float32)
+    table = raw.reshape(-1, INTERACTION_EXTRA_WIDTH)
+    lookup = {int(row[0]): row[1:4] for row in table if row[0] >= 0}
+    return np.asarray(
+        [lookup.get(int(value), (INVALID, INVALID, INVALID)) for value in interaction_id],
+        dtype=np.float32,
+    )
 
 
 def decode_event(
     point,
     cluster,
     cluster_extra,
-    revision: Literal["v1", "v2", "v3"] = "v2",
     *,
+    revision: str = "v3",
+    cluster_extra_2=None,
+    interaction_extra=None,
     energy_threshold: float = 0.0,
     remove_low_energy_scatters: bool = False,
     old_pid_mapping: bool = False,
 ) -> dict:
-    """Decode one PILArNet event's raw arrays into a flat ``data_dict``.
+    """Decode one PILArNet v3-family event into point-aligned arrays.
 
-    Shared by :class:`PILArNetH5Dataset` (arrays from h5py) and
-    :class:`PILArNetParquetDataset` (arrays from a parquet row) so the two
-    readers cannot drift. The three inputs are the flat (or already reshaped)
-    ``point``/``cluster``/``cluster_extra`` arrays for a single event, exactly as
-    stored on disk. ``cluster_extra`` is ignored for ``revision == "v1"`` (pass
-    ``None``).
+    The base v3 layout uses ``cluster_extra`` width 6:
+    ``[mass_MeV, |p|_GeV, vtx_x, vtx_y, vtx_z, is_primary]``.
+    ``v3_extra`` additionally stores a row-aligned ``cluster_extra_2`` width 5
+    table ``[px, py, pz, parent_pdg, parent_track_id]`` and an
+    ``interaction_extra`` width 4 table ``[interaction_id, x, y, z]``. Packed
+    width-9/11 ``cluster_extra`` variants are accepted for compatibility.
 
-    Returns the per-point ``dict`` (``coord``, ``energy``, ``momentum``,
-    ``vertex``, ``segment_motif``, ``segment_pid``, ``instance_particle``,
-    ``instance_interaction``, ``segment_interaction``, plus ``is_primary`` for
-    v3). Source metadata (``name``/``split``/``revision``) is added by the caller.
+    Missing optional extended columns in base v3 produce ``-1`` sentinels, so
+    callers can use one stable output schema across both revisions.
     """
-    # (x, y, z, e) per point
+    revision = resolve_revision(revision)
     data = np.asarray(point).reshape(-1, 8)[:, [0, 1, 2, 3]]
 
-    if revision == "v1":
-        # v1: cluster dataset is (-1, 5) without PID, no cluster_extra dataset
-        cluster_size, group_id, interaction_id, semantic_id = (
-            np.asarray(cluster).reshape(-1, 5)[:, [0, 2, -2, -1]].T
+    cluster_arr = np.asarray(cluster).reshape(-1, CLUSTER_WIDTH)
+    cluster_size, cluster_id, group_id, interaction_id, semantic_id, pid = (
+        cluster_arr[:, [0, 1, 2, 3, 4, 5]].T
+    )
+    cluster_size = np.asarray(cluster_size, dtype=np.int64)
+    n_clusters = cluster_arr.shape[0]
+
+    raw_extra = np.asarray(cluster_extra) if cluster_extra is not None else None
+    if raw_extra is None:
+        raise ValueError("PILArNet v3 requires a `cluster_extra` table; got None.")
+    extra = (
+        raw_extra.reshape(n_clusters, -1)
+        if n_clusters > 0
+        else np.empty((0, CLUSTER_EXTRA_WIDTH), dtype=np.float32)
+    )
+    if extra.shape[1] not in (6, 9, 11):
+        raise ValueError(
+            "Expected cluster_extra width 6, 9, or 11 for a v3-family shard; "
+            f"got {extra.shape[1]}."
         )
-        # v1 doesn't have interaction_id or pid, set defaults
-        pid = np.full_like(semantic_id, -1)  # -1
-        # v1 doesn't have cluster_extra, set defaults for momentum and vertex
-        mom = np.zeros_like(semantic_id, dtype=np.float32)
-        vtx_x = np.zeros_like(semantic_id, dtype=np.float32)
-        vtx_y = np.zeros_like(semantic_id, dtype=np.float32)
-        vtx_z = np.zeros_like(semantic_id, dtype=np.float32)
-    elif revision == "v2":
-        cluster_size, group_id, interaction_id, semantic_id, pid = (
-            np.asarray(cluster).reshape(-1, 6)[:, [0, 2, -3, -2, -1]].T
-        )
-        mom, vtx_x, vtx_y, vtx_z = (
-            np.asarray(cluster_extra).reshape(-1, 5)[:, [1, 2, 3, 4]].T
-        )
-        pid[pid == -1] = (
-            5 if not old_pid_mapping else 6
-        )  # -1 (LED) --> 5 (where Kaon is) or 6 (new ID)
-    elif revision == "v3":
-        cluster_size, group_id, interaction_id, semantic_id, pid = (
-            np.asarray(cluster).reshape(-1, 6)[:, [0, 2, -3, -2, -1]].T
-        )
-        n_clusters = cluster_size.shape[0]
-        raw_extra = np.asarray(cluster_extra)
-        cluster_extra_arr = (
-            raw_extra.reshape(n_clusters, -1)
+    mass, momentum, vtx_x, vtx_y, vtx_z, is_primary = extra[:, :6].T
+
+    px = np.full(n_clusters, INVALID, dtype=np.float32)
+    py = np.full(n_clusters, INVALID, dtype=np.float32)
+    pz = np.full(n_clusters, INVALID, dtype=np.float32)
+    parent_pdg = np.full(n_clusters, INVALID, dtype=np.float32)
+    parent_track_id = np.full(n_clusters, INVALID, dtype=np.float32)
+
+    if cluster_extra_2 is not None:
+        extra_2 = (
+            np.asarray(cluster_extra_2).reshape(n_clusters, -1)
             if n_clusters > 0
-            else np.empty((0, 6), dtype=np.float32)
+            else np.empty((0, CLUSTER_EXTRA_2_WIDTH), dtype=np.float32)
         )
-        if cluster_extra_arr.shape[1] != 6:
+        if extra_2.shape[1] != CLUSTER_EXTRA_2_WIDTH:
             raise ValueError(
-                f"Expected v3 cluster_extra width 6, got {cluster_extra_arr.shape[1]}"
+                f"Expected cluster_extra_2 width {CLUSTER_EXTRA_2_WIDTH}, "
+                f"got {extra_2.shape[1]}."
             )
-        mom, vtx_x, vtx_y, vtx_z, is_primary = cluster_extra_arr[:, [1, 2, 3, 4, 5]].T
-        pid[pid == -1] = (
-            5 if not old_pid_mapping else 6
-        )  # -1 (LED) --> 5 (where Kaon is) or 6 (new ID)
-    else:
-        raise ValueError(f"Unsupported PILArNet revision: {revision}")
+        px, py, pz, parent_pdg, parent_track_id = extra_2.T
+    elif extra.shape[1] >= 9:
+        px, py, pz = extra[:, 6:9].T
+        if extra.shape[1] == 11:
+            parent_pdg, parent_track_id = extra[:, 9:11].T
+    elif revision == "v3_extra":
+        raise ValueError(
+            "revision='v3_extra' requires cluster_extra_2 (split layout) or "
+            "packed cluster_extra width 9/11."
+        )
 
-    # np.repeat needs integer counts; parquet may hand back non-int dtypes
-    cluster_size = np.asarray(cluster_size).astype(np.int64)
+    if revision == "v3_extra" and interaction_extra is None:
+        raise ValueError("revision='v3_extra' requires an `interaction_extra` table.")
 
-    # Remove low energy scatters if configured
-    if remove_low_energy_scatters:
+    # Rest mass is stored in MeV; all momentum quantities are GeV.
+    mass = np.where(mass == INVALID, INVALID, mass / 1.0e3).astype(np.float32)
+    pid = pid.copy()
+    pid[pid == -1] = 6 if old_pid_mapping else 5
+
+    # Use one consistent particle-level truth row across fragmented EM groups.
+    if n_clusters:
+        leading = _leading_cluster_index(cluster_id, group_id, cluster_size)
+        momentum = momentum[leading]
+        mass = mass[leading]
+        px, py, pz = px[leading], py[leading], pz[leading]
+        parent_pdg = parent_pdg[leading]
+        parent_track_id = parent_track_id[leading]
+
+    true_energy = _true_energy(momentum, mass)
+    cluster_vertex = np.stack([vtx_x, vtx_y, vtx_z], axis=1).astype(np.float32)
+    interaction_vertex = _interaction_vertices(
+        interaction_id, interaction_extra, fallback=cluster_vertex
+    )
+
+    if remove_low_energy_scatters and n_clusters:
         data = data[cluster_size[0] :]
-        semantic_id, group_id, interaction_id, pid, cluster_size = (
+        cluster_size = cluster_size[1:]
+        semantic_id, group_id, interaction_id, pid = (
             semantic_id[1:],
             group_id[1:],
             interaction_id[1:],
             pid[1:],
-            cluster_size[1:],
         )
-        mom, vtx_x, vtx_y, vtx_z = mom[1:], vtx_x[1:], vtx_y[1:], vtx_z[1:]
-        if revision == "v3":
-            is_primary = is_primary[1:]
+        momentum, mass, px, py, pz, true_energy = (
+            momentum[1:],
+            mass[1:],
+            px[1:],
+            py[1:],
+            pz[1:],
+            true_energy[1:],
+        )
+        parent_pdg, parent_track_id = parent_pdg[1:], parent_track_id[1:]
+        cluster_vertex = cluster_vertex[1:]
+        interaction_vertex = interaction_vertex[1:]
+        is_primary = is_primary[1:]
 
-    # Compute semantic ids for each point
-    data_semantic_id = np.repeat(semantic_id, cluster_size)
-    data_group_id = np.repeat(group_id, cluster_size)
-    data_interaction_id = np.repeat(interaction_id, cluster_size)
-    data_pid = np.repeat(pid, cluster_size)
-    data_mom = np.repeat(mom, cluster_size)
-    data_vtx_x = np.repeat(vtx_x, cluster_size)
-    data_vtx_y = np.repeat(vtx_y, cluster_size)
-    data_vtx_z = np.repeat(vtx_z, cluster_size)
-    if revision == "v3":
-        data_is_primary = np.repeat(is_primary, cluster_size)
+    def repeat(values):
+        return np.repeat(values, cluster_size, axis=0)
 
-    # Apply energy threshold if needed
+    data_semantic_id = repeat(semantic_id)
+    data_group_id = repeat(group_id)
+    data_interaction_id = repeat(interaction_id)
+    data_pid = repeat(pid)
+    data_momentum = repeat(momentum)
+    data_mass = repeat(mass)
+    data_px, data_py, data_pz = repeat(px), repeat(py), repeat(pz)
+    data_true_energy = repeat(true_energy)
+    data_parent_pdg = repeat(parent_pdg)
+    data_parent_track_id = repeat(parent_track_id)
+    data_vertex = repeat(cluster_vertex)
+    data_interaction_vertex = repeat(interaction_vertex)
+    data_is_primary = repeat(is_primary)
+
+    if len(data) != len(data_semantic_id):
+        raise ValueError(
+            "PILArNet cluster sizes do not match the point table: "
+            f"sum(cluster_size)={len(data_semantic_id)}, points={len(data)}."
+        )
+
     if energy_threshold > 0:
-        threshold_mask = data[:, 3] > energy_threshold
-        data = data[threshold_mask]
-        data_semantic_id = data_semantic_id[threshold_mask]
-        data_group_id = data_group_id[threshold_mask]
-        data_interaction_id = data_interaction_id[threshold_mask]
-        data_pid = data_pid[threshold_mask]
-        data_mom = data_mom[threshold_mask]
-        data_vtx_x = data_vtx_x[threshold_mask]
-        data_vtx_y = data_vtx_y[threshold_mask]
-        data_vtx_z = data_vtx_z[threshold_mask]
-        if revision == "v3":
-            data_is_primary = data_is_primary[threshold_mask]
+        keep = data[:, 3] > energy_threshold
+        data = data[keep]
+        data_semantic_id = data_semantic_id[keep]
+        data_group_id = data_group_id[keep]
+        data_interaction_id = data_interaction_id[keep]
+        data_pid = data_pid[keep]
+        data_momentum = data_momentum[keep]
+        data_mass = data_mass[keep]
+        data_px, data_py, data_pz = data_px[keep], data_py[keep], data_pz[keep]
+        data_true_energy = data_true_energy[keep]
+        data_parent_pdg = data_parent_pdg[keep]
+        data_parent_track_id = data_parent_track_id[keep]
+        data_vertex = data_vertex[keep]
+        data_interaction_vertex = data_interaction_vertex[keep]
+        data_is_primary = data_is_primary[keep]
 
-    # Prepare return dictionary
-    data_dict = {}
+    momentum_vector = np.stack([data_px, data_py, data_pz], axis=1).astype(np.float32)
+    momentum_vec = momentum_vector.copy()
+    valid_direction = ~(momentum_vec == INVALID).all(axis=1)
+    if valid_direction.any():
+        norm = np.linalg.norm(momentum_vec[valid_direction], axis=1, keepdims=True)
+        momentum_vec[valid_direction] /= np.clip(norm, 1.0e-9, None)
 
-    # Get coordinates
-    data_dict["coord"] = data[:, :3].astype(np.float32)
+    # 0 primary, 1 Michel, 2 delta, 3 other secondary.
+    is_primary_4cls = np.where(data_is_primary == 1, 0, 3).astype(np.int32)
+    is_primary_4cls[data_semantic_id == 2] = 1
+    is_primary_4cls[data_semantic_id == 3] = 2
 
-    # Process energy (raw)
-    energy = data[:, 3].astype(np.float32)
-    data_dict["energy"] = energy[:, None]
-
-    # Momentum and vertex labels (v2/v3 only)
-    data_dict["momentum"] = data_mom.astype(np.float32)[:, None]
-    data_dict["vertex"] = np.stack(
-        [data_vtx_x, data_vtx_y, data_vtx_z], axis=1
-    ).astype(np.float32)
-    if revision == "v3":
-        data_dict["is_primary"] = data_is_primary.astype(np.int32)[:, None]
-
-    # Get semantic labels
-    data_dict["segment_motif"] = data_semantic_id.astype(np.int32)[:, None]
-    data_dict["segment_pid"] = data_pid.astype(np.int32)[:, None]
-    # compute both particle- and interaction-level instances
     particle_ids = data_group_id.astype(np.int32)
     interaction_ids = data_interaction_id.astype(np.int32)
-
-    data_dict["instance_particle"] = map_instance_ids(particle_ids)
-    data_dict["instance_interaction"] = map_instance_ids(interaction_ids)
-    data_dict["segment_interaction"] = (interaction_ids[:, None] != -1).astype(
-        np.int32
-    )  # 1 if not background, 0 if background
-
-    return data_dict
+    return {
+        "coord": data[:, :3].astype(np.float32),
+        "energy": data[:, 3].astype(np.float32)[:, None],
+        "momentum": data_momentum.astype(np.float32)[:, None],
+        "mass": data_mass.astype(np.float32)[:, None],
+        "px": data_px.astype(np.float32)[:, None],
+        "py": data_py.astype(np.float32)[:, None],
+        "pz": data_pz.astype(np.float32)[:, None],
+        "momentum_vector": momentum_vector,
+        "momentum_vec": momentum_vec,
+        "true_energy": data_true_energy.astype(np.float32)[:, None],
+        "parent_pdg": data_parent_pdg.astype(np.int32)[:, None],
+        "parent_track_id": data_parent_track_id.astype(np.int32)[:, None],
+        "vertex": data_vertex.astype(np.float32),
+        "interaction_vertex": data_interaction_vertex.astype(np.float32),
+        "is_primary": data_is_primary.astype(np.int32)[:, None],
+        "is_primary_4cls": is_primary_4cls[:, None],
+        "segment_motif": data_semantic_id.astype(np.int32)[:, None],
+        "segment_pid": data_pid.astype(np.int32)[:, None],
+        "instance_particle": map_instance_ids(particle_ids),
+        "instance_interaction": map_instance_ids(interaction_ids),
+        "segment_interaction": (interaction_ids[:, None] != -1).astype(np.int32),
+    }
 
 
 def map_instance_ids(instance_ids_array):
-    """Map instance ids to new ids.
-
-    i.e. instead of having instance ids like [0, 1, 23, 47, 52, 53, 54, 55, 56, 57],
-            we want to have instance ids like [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    """
-    unique_ids_local = np.unique(instance_ids_array)
-    id_mapping_local = {
+    """Compact non-negative instance ids to ``0..K-1`` and preserve ``-1``."""
+    unique_ids = np.unique(instance_ids_array)
+    mapping = {
         old_id: new_id
-        for new_id, old_id in enumerate(unique_ids_local[unique_ids_local >= 0])
+        for new_id, old_id in enumerate(unique_ids[unique_ids >= 0])
     }
-    return np.array(
-        [id_mapping_local.get(id_val, -1) for id_val in instance_ids_array],
-        dtype=np.int32,
+    return np.asarray(
+        [mapping.get(value, -1) for value in instance_ids_array], dtype=np.int32
     )[:, None]

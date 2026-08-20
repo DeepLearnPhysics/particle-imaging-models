@@ -17,7 +17,7 @@ import random
 
 import numpy as np
 
-from .decode import DEFAULT_LABEL_PRIORITY
+from .decode import DEFAULT_LABEL_PRIORITY, V3_EXTRA_KEYS
 
 
 class PILArNetOverlayMixin:
@@ -135,8 +135,10 @@ class PILArNetOverlayMixin:
             "instance_particle", "instance_interaction",
             "momentum", "vertex", "segment_interaction",
         ]
-        if self.revision == "v3":
-            concat_keys.append("is_primary")
+        if self.revision in ("v3", "v3_extra"):
+            concat_keys.extend(("is_primary", *V3_EXTRA_KEYS))
+        # Keep order stable while removing duplicates.
+        concat_keys = list(dict.fromkeys(concat_keys))
         instance_keys = ("instance_particle", "instance_interaction")
 
         # Sample from the distinct-event pool (pre-loop) so overlay indices stay
@@ -185,13 +187,29 @@ class PILArNetOverlayMixin:
                 extra["coord"] = self._apply_random_90_rotation(
                     extra["coord"], center=detector_center, rotations=rotations
                 )
-                if self.revision in ("v2", "v3") and "vertex" in extra:
-                    valid_vertex = ~(extra["vertex"] == -1).all(axis=1)
-                    extra["vertex"][valid_vertex] = self._apply_random_90_rotation(
-                        extra["vertex"][valid_vertex],
-                        center=detector_center,
-                        rotations=rotations,
-                    )
+                if self.revision in ("v3", "v3_extra"):
+                    for position_key in ("vertex", "interaction_vertex"):
+                        if position_key not in extra:
+                            continue
+                        valid = ~(extra[position_key] == -1).all(axis=1)
+                        extra[position_key][valid] = self._apply_random_90_rotation(
+                            extra[position_key][valid],
+                            center=detector_center,
+                            rotations=rotations,
+                        )
+                    for vector_key in ("momentum_vector", "momentum_vec"):
+                        if vector_key not in extra:
+                            continue
+                        valid = ~(extra[vector_key] == -1).all(axis=1)
+                        extra[vector_key][valid] = self._apply_random_90_rotation(
+                            extra[vector_key][valid],
+                            center=np.zeros(3, dtype=np.float32),
+                            rotations=rotations,
+                        )
+                    if "momentum_vector" in extra:
+                        extra["px"] = extra["momentum_vector"][:, 0:1]
+                        extra["py"] = extra["momentum_vector"][:, 1:2]
+                        extra["pz"] = extra["momentum_vector"][:, 2:3]
 
             # concatenate arrays
             for key in concat_keys:

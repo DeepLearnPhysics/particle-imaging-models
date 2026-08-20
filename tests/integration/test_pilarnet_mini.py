@@ -24,7 +24,7 @@ def test_pilarnet_mini_event_counts_and_truth(pilarnet_mini_root):
                 data["cluster_extra"],
             ):
                 cluster = np.asarray(raw_cluster).reshape(-1, 6)
-                cluster_extra = np.asarray(raw_extra).reshape(-1, 5)
+                cluster_extra = np.asarray(raw_extra).reshape(-1, 6)
                 assert cluster.shape[0] == cluster_extra.shape[0]
                 assert cluster.shape[0] > 0
                 semantic_ids.update(cluster[:, -2].astype(int))
@@ -44,7 +44,7 @@ def test_pilarnet_mini_dataset_splits(
 
     dataset = PILArNetH5Dataset(
         data_root=str(pilarnet_mini_root),
-        revision="v2",
+        revision="v3",
         split=split,
         transform=[],
         min_points=0,
@@ -59,6 +59,7 @@ def test_pilarnet_mini_dataset_splits(
         "segment_pid",
         "instance_particle",
         "instance_interaction",
+        "is_primary",
     }
     assert required <= set(sample)
     assert sample["coord"].shape[0] == sample["segment_motif"].shape[0]
