@@ -169,16 +169,25 @@ def prime_cache():
 
     for filename, info in dataset["files"].items():
         path = Path(DATA_ROOT, filename)
-        if not path.is_file():
+        expected_sha256 = info["sha256"]
+        digest = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            if path.is_file()
+            else None
+        )
+        if digest != expected_sha256:
+            if digest is not None:
+                print(f"Refreshing stale dataset fixture: {filename}")
             hf_hub_download(
                 repo_id=dataset["repo_id"],
                 repo_type=dataset["repo_type"],
                 revision=dataset["revision"],
                 filename=filename,
                 local_dir=DATA_ROOT,
+                force_download=True,
             )
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != info["sha256"]:
+        if digest != expected_sha256:
             raise SystemExit(f"sha256 mismatch for {filename}: {digest}")
 
     for baseline in manifest["baselines"].values():
