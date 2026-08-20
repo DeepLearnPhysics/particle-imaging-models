@@ -842,7 +842,17 @@ class PointTransformerV3(PointModule):
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, upcast=False):
+        """Encode a point cloud.
+
+        Args:
+            data_dict (dict): Batch with ``coord``/``feat``/``grid_coord``/``offset``.
+            upcast (bool): In encoder-only mode, replay the pooling chain back to
+                input resolution (:meth:`Point.upcast`). Defaults to ``False``.
+
+        Returns:
+            Point: Pooled point in encoder-only mode, else one row per input point.
+        """
         point = Point(data_dict)
         point = self.embedding(point)
 
@@ -852,4 +862,6 @@ class PointTransformerV3(PointModule):
         point = self.enc(point)
         if not self.enc_mode:
             point = self.dec(point)
+        elif upcast:
+            point = point.upcast()
         return point

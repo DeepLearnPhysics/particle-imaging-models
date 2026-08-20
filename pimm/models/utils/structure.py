@@ -156,6 +156,25 @@ class Point(Dict):
         self["sparse_shape"] = sparse_shape
         self["sparse_conv_feat"] = sparse_conv_feat
 
+    def upcast(self):
+        """Replay the pooling chain to recover input-resolution features.
+
+        Walks ``pooling_parent``/``pooling_inverse`` back up, concatenating each
+        stage's features, giving one row per input point (``sum(enc_channels)``
+        wide). Consumes the chain, so a second call is a no-op.
+
+        Returns:
+            Point: The input-resolution point, or ``self`` if there is no chain.
+        """
+        point = self
+        while "pooling_parent" in point:
+            assert "pooling_inverse" in point
+            parent = point.pop("pooling_parent")
+            inverse = point.pop("pooling_inverse")
+            parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
+            point = parent
+        return point
+
     def __getitem__(self, key):
         """Return a field by name or a sliced ``Point`` for tensor-like keys."""
         if isinstance(key, str):

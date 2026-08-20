@@ -14,8 +14,9 @@ from pimm.utils.logger import get_root_logger
 
 from ..builder import DATASETS
 from ..transform import TRANSFORMS, Compose
-from .decode import decode_event
+from .decode import decode_event, resolve_revision
 from .overlay import PILArNetOverlayMixin
+from .default import default_transform
 
 
 @DATASETS.register_module()
@@ -24,11 +25,13 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
 
     Loads events straight from ``point``/``cluster``/``cluster_extra`` HDF5
     arrays (no per-event preprocessing), expands per-cluster truth to per-point
-    arrays, and emits a flat ``dict``. Standard keys per item: ``coord`` (N, 3),
+    arrays, and emits a flat ``dict``. ``v3_extra`` also consumes
+    ``cluster_extra_2`` and ``interaction_extra``. Standard keys per item:
+    ``coord`` (N, 3),
     ``energy`` (N, 1, raw), ``segment_motif`` (N, 1, semantic class),
-    ``segment_pid`` (N, 1, PID; v2/v3), ``momentum`` (N, 1; v2/v3),
-    ``vertex`` (N, 3; v2/v3, interaction vertex in v3), ``is_primary`` (N, 1;
-    v3 only), ``instance_particle`` and ``instance_interaction`` (N, 1, remapped
+    ``segment_pid`` (N, 1, PID), ``momentum`` (N, 1),
+    ``vertex`` (N, 3, interaction vertex), ``is_primary`` (N, 1),
+    ``instance_particle`` and ``instance_interaction`` (N, 1, remapped
     contiguous ids), ``segment_interaction`` (N, 1, background flag), plus
     ``name``/``split``/``revision``. After collation a batch adds ``offset``.
     Registered as ``PILArNetH5Dataset`` -- use as ``type`` under
@@ -40,13 +43,16 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
 
     Args:
         data_root (str | None): Root directory of the revision's HDF5 shards.
-            When ``None``, falls back to ``$PILARNET_DATA_ROOT_V1/_V2/_V3`` (by
-            ``revision``) then to ``~/.cache/pimm/pilarnet/<revision>``; raises if
-            none exist. Defaults to ``None``.
+            When ``None``, falls back to the revision-specific
+            ``$PILARNET_DATA_ROOT_V3``/``_V3_EXTRA`` variable, then to
+            ``~/.cache/pimm/pilarnet/<revision>``; raises if none exist.
+            Defaults to ``None``.
         split (str | Sequence[str]): Split name(s) used to glob ``*<split>/*.h5``
             under ``data_root``. Defaults to ``"train"``.
-        transform (list[dict]): List of transform configs (NOT a prebuilt
-            ``Compose``). Defaults to ``None``.
+        transform (list[dict] | None): List of transform configs (NOT a prebuilt
+            ``Compose``). ``None`` (the default) uses
+            :func:`~pimm.datasets.pilarnet.default_transform`; ``[]`` means no
+            preprocessing. Defaults to ``None``.
         test_mode (bool): Emit voxelized/augmented test fragments and force
             ``loop = 1``. Defaults to ``False``.
         test_cfg (object): Test config (``voxelize``, ``crop``, ``post_transform``,
@@ -63,10 +69,9 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             and its points. Defaults to ``False``.
         old_pid_mapping (bool): Map LED PID to ``6`` instead of ``5``. Defaults
             to ``False``.
-        revision ({"v1", "v2", "v3"}): Dataset revision. v1 is the original
-            PILArNet (no PID/momentum/vertex); v2 adds PID, momentum and particle
-            vertices; v3 adds interaction-level vertices and primary-particle
-            labels. Defaults to ``"v2"``.
+        revision ({"v2", "v3", "v3_extra"}): v3-family schema. ``"v2"`` is
+            served as v3 with a warning. ``v3_extra`` additionally requires
+            momentum/lineage and interaction-vertex tables. Defaults to ``"v3"``.
         overlay_n_events (int | tuple[int, int]): Number (or inclusive range) of
             events to overlay into one point cloud; ``> 1`` enables overlay.
             Defaults to ``1``.
@@ -78,8 +83,8 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
     Note:
         Loader settings (``batch_size``, ``num_worker``) live at the top level of
         the config, not on the dataset constructor. Split membership differs
-        between v1 and v2/v3, so a v1-trained model evaluated on v2/v3 (or vice
-        versa) is not seeing a comparable split. Event overlay deduplicates
+        between v1 and v3, so numbers from a v1-era run are not comparable to a
+        v3 run on the same split name. Event overlay deduplicates
         colliding voxels by semantic priority (track > shower > Michel > delta >
         LED) and rotates overlaid events by random 90-degree increments.
 
@@ -87,7 +92,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         .. code-block:: python
 
             >>> from pimm.datasets.builder import build_dataset
-            >>> ds = build_dataset(dict(type="PILArNetH5Dataset", revision="v2",
+            >>> ds = build_dataset(dict(type="PILArNetH5Dataset", revision="v3",
             ...                         split="train", transform=[], min_points=1024))
             >>> sample = ds[0]
             >>> sorted(sample)[:6]
@@ -98,7 +103,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             (7366, 1)
             >>> # in a config:
             >>> # data = dict(train=dict(type="PILArNetH5Dataset", split="train",
-            >>> #             revision="v2", min_points=1024, transform=transform))
+            >>> #             revision="v3", min_points=1024, transform=transform))
     """
 
     def __init__(
@@ -110,22 +115,23 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         test_cfg=None,
         loop=1,
         ignore_index=-1,
-        energy_threshold=0.0,
+        energy_threshold=0.13,
         min_points=1024,
         max_len=-1,
         remove_low_energy_scatters=False,
         old_pid_mapping=False,
-        revision: Literal["v1", "v2", "v3"] = "v2",
+        revision: Literal["v2", "v3", "v3_extra"] = "v3",
         # event overlay parameters
         overlay_n_events=1,
         overlay_prob=1.0,
         overlay_allow_repeats=True,
     ):
         super().__init__()
+        revision = resolve_revision(revision)
         self.data_root = data_root
         if self.data_root is None:
             env_var = f"PILARNET_DATA_ROOT_{revision.upper()}"
-            # Revision-specific env vars keep v1/v2/v3 roots independent.
+            # Revision-specific env vars keep each data root independent.
             self.data_root = os.environ.get(env_var)
         if self.data_root is None:
             # Fall back to the default download location
@@ -136,14 +142,17 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
                 raise RuntimeError(
                     f"\nPILArNet data root not found for revision '{revision}'.\n\n"
                     f"Option 1 - Download the dataset (saves to ~/.cache/pimm/pilarnet/{revision}):\n"
-                    f"    python scripts/pilarnet/download.py --version {revision}\n\n"
+                    f"    python scripts/pilarnet/download.py --revision {revision} "
+                    "--split test\n\n"
                     f"Option 2 - Set the environment variable:\n"
                     f'    export {env_var}="/path/to/pilarnet/{revision}/data"\n\n'
                     f"Option 3 - Pass data_root directly in your config:\n"
                     f'    --options data.train.data_root="/path/to/data"\n'
                 )
         self.split = split
-        self.transform = Compose(transform)
+        self.transform = Compose(
+            default_transform() if transform is None else transform
+        )
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
         self.loop = loop if not test_mode else 1
@@ -286,8 +295,16 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         data_dict = decode_event(
             point=h5_file["point"][file_idx],
             cluster=h5_file["cluster"][file_idx],
-            cluster_extra=(
-                h5_file["cluster_extra"][file_idx] if self.revision != "v1" else None
+            cluster_extra=h5_file["cluster_extra"][file_idx],
+            cluster_extra_2=(
+                h5_file["cluster_extra_2"][file_idx]
+                if "cluster_extra_2" in h5_file
+                else None
+            ),
+            interaction_extra=(
+                h5_file["interaction_extra"][file_idx]
+                if "interaction_extra" in h5_file
+                else None
             ),
             revision=self.revision,
             energy_threshold=self.energy_threshold,

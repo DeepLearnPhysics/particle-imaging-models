@@ -695,7 +695,17 @@ class PointTransformerV3(PointModule):
                     )
                 self.dec.add(module=dec, name=f"dec{s}")
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, upcast=False):
+        """Encode a point cloud.
+
+        Args:
+            data_dict (dict): Batch with ``coord``/``feat``/``grid_coord``/``offset``.
+            upcast (bool): In encoder-only mode, replay the pooling chain back to
+                input resolution (:meth:`Point.upcast`). Defaults to ``False``.
+
+        Returns:
+            Point: Pooled point in encoder-only mode, else one row per input point.
+        """
         point = Point(data_dict)
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
@@ -704,6 +714,8 @@ class PointTransformerV3(PointModule):
         point = self.enc(point)
         if not self.cls_mode:
             point = self.dec(point)
+        elif upcast:
+            point = point.upcast()
         # else:
         #     point.feat = torch_scatter.segment_csr(
         #         src=point.feat,

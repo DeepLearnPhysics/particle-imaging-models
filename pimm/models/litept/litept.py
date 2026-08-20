@@ -662,7 +662,17 @@ class LitePT(PointModule):
             for p in self.enc.parameters():
                 p.requires_grad = False
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, upcast=False):
+        """Encode a point cloud.
+
+        Args:
+            data_dict (dict): Batch with ``coord``/``feat``/``grid_coord``/``offset``.
+            upcast (bool): In encoder-only mode, replay the pooling chain back to
+                input resolution (:meth:`Point.upcast`). Defaults to ``False``.
+
+        Returns:
+            Point: Pooled point in encoder-only mode, else one row per input point.
+        """
         point = Point(data_dict)
         if self.enc_attn[0]:
             point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
@@ -671,4 +681,6 @@ class LitePT(PointModule):
         point = self.enc(point)
         if not self.enc_mode:
             point = self.dec(point)
+        elif upcast:
+            point = point.upcast()
         return point

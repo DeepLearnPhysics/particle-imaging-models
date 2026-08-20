@@ -514,6 +514,7 @@ class RandomRotate(object):
             )
             # directions rotate about the origin (linear part only, no centering)
             _apply_to_aux_directions(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
+            _apply_to_aux_vectors(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
         if "normal" in data_dict.keys():
             data_dict["normal"] = np.dot(data_dict["normal"], np.transpose(rot_t))
         return data_dict
@@ -601,6 +602,7 @@ class RandomRotateTargetAngle(object):
                 data_dict, lambda p: np.dot(p - center, np.transpose(rot_t)) + center
             )
             _apply_to_aux_directions(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
+            _apply_to_aux_vectors(data_dict, lambda d: np.dot(d, np.transpose(rot_t)))
         if "normal" in data_dict.keys():
             data_dict["normal"] = np.dot(data_dict["normal"], np.transpose(rot_t))
         return data_dict
@@ -712,6 +714,9 @@ class RandomFlip(object):
                 _apply_to_aux_directions(
                     data_dict, lambda d: d * np.array([-1.0, 1.0, 1.0])
                 )
+                _apply_to_aux_vectors(
+                    data_dict, lambda d: d * np.array([-1.0, 1.0, 1.0])
+                )
                 if "normal" in data_dict.keys():
                     data_dict["normal"][:, 0] = -data_dict["normal"][:, 0]
             elif axis == "y" and random.random() < self.p:
@@ -728,6 +733,9 @@ class RandomFlip(object):
                 _apply_to_aux_directions(
                     data_dict, lambda d: d * np.array([1.0, -1.0, 1.0])
                 )
+                _apply_to_aux_vectors(
+                    data_dict, lambda d: d * np.array([1.0, -1.0, 1.0])
+                )
                 if "normal" in data_dict.keys():
                     data_dict["normal"][:, 1] = -data_dict["normal"][:, 1]
             elif axis == "z" and random.random() < self.p:
@@ -742,6 +750,9 @@ class RandomFlip(object):
                     data_dict, lambda p: p * np.array([1.0, 1.0, -1.0])
                 )
                 _apply_to_aux_directions(
+                    data_dict, lambda d: d * np.array([1.0, 1.0, -1.0])
+                )
+                _apply_to_aux_vectors(
                     data_dict, lambda d: d * np.array([1.0, 1.0, -1.0])
                 )
                 if "normal" in data_dict.keys():
