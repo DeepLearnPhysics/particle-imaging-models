@@ -784,6 +784,36 @@ def _summarize_keys(keys, *, depth=3, examples=2, max_groups=12):
     return "\n".join(lines)
 
 
+def publish_full_state_snapshot(source, destination):
+    """Retain an atomically published checkpoint without rewriting its data.
+
+    Published files are replaced, never modified in place, so hard links keep
+    their contents alive. Fall back to copying across filesystems. Stage the
+    complete tree before publishing so a partial copy cannot look resumable.
+    """
+    tmp = str(destination) + ".tmp"
+    if os.path.isdir(tmp):
+        shutil.rmtree(tmp)
+    elif os.path.exists(tmp):
+        os.remove(tmp)
+    if os.path.isdir(source):
+        try:
+            shutil.copytree(source, tmp, copy_function=os.link)
+        except OSError:
+            if os.path.isdir(tmp):
+                shutil.rmtree(tmp)
+            shutil.copytree(source, tmp)
+    else:
+        try:
+            os.link(source, tmp)
+        except OSError:
+            shutil.copyfile(source, tmp)
+    if os.path.isdir(destination):
+        shutil.rmtree(destination)
+    os.replace(tmp, destination)
+    return destination
+
+
 class CheckpointManager:
     """Own checkpoint format, save/load backends, and trainer resume semantics."""
 

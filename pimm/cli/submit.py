@@ -47,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg.setdefault("env", {}).setdefault(
         "PIMM_LAUNCH_COMMAND", "pimm submit " + shlex.join(redact_cli_argv(raw_argv))
     )
+    from pimm.launch import _exex
+
+    if _exex.enabled():
+        if command.no_remote:
+            cfg.setdefault("submit", {})["host"] = None
+        return _exex.run(cfg, dry_run=command.dry_run, output=command.output)
     return run_submit(
         cfg,
         launch_timestamp=launch_timestamp,

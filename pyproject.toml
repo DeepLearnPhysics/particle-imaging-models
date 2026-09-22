@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "pimm"
 version = "0.5.2"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10.12,<3.11"
 dependencies = [
+    "exex @ git+https://github.com/youngsm/exex@0329bc357f4649acd6406ad56e70996aa6f3a3cf",
     "PyYAML",
     "submitit",
     "tyro",
@@ -78,6 +79,9 @@ pimm = "pimm.cli.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["pimm"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.uv]
 required-version = ">=0.11.1"
 exclude-newer = "7 days"
@@ -104,11 +108,7 @@ torch-scatter = false
 torch-sparse = false
 torch-cluster = false
 
-[tool.uv.dependency-groups]
-train = { requires-python = ">=3.10.12,<3.11" }
-
 [tool.uv.sources]
-exex = { git = "https://github.com/youngsm/exex", rev = "0329bc357f4649acd6406ad56e70996aa6f3a3cf" }
 torch = { index = "pytorch-cu126" }
 torchvision = { index = "pytorch-cu126" }
 pointrope = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }

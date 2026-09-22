@@ -101,7 +101,6 @@ done
 
 # shift past processed options to get extra args (e.g., --options key=val)
 shift $((OPTIND-1))
-EXTRA_ARGS="$@"
 
 # ─── Normalize config reference ─────────────────────────────────
 normalize_config_ref() {
@@ -287,42 +286,18 @@ sleep 0.5
 echo " =========> RUN TASK <========="
 ulimit -n 65536
 
-COMMON_ARGS="--config-file $CONFIG_DIR --options save_path=$EXP_DIR"
-
-if [ -n "$WANDB_NAME" ]; then
-  COMMON_ARGS="$COMMON_ARGS wandb_run_name=$WANDB_NAME"
-fi
-
-if [ "${WEIGHT}" != "None" ]; then
-  COMMON_ARGS="$COMMON_ARGS resume=$RESUME weight=$WEIGHT"
-fi
-
 run_python() {
-  # Direct single-node runs use torchrun --standalone; multi-node runs use the
-  # rendezvous variables prepared by pimm launch/submit or the user's Slurm job.
-  NODE_RANK=${PIMM_NODE_RANK:-${SLURM_PROCID:-${SLURM_NODEID:-0}}}
-  if [ "${NUM_MACHINE}" = "1" ] && [ -z "${MASTER_ADDR:-}" ]; then
-    exec $PYTHON -m torch.distributed.run --standalone --nproc-per-node="$NUM_GPU" \
-      "$CODE_DIR"/pimm/$TRAIN_CODE $COMMON_ARGS $EXTRA_ARGS
+  # Preserve each override as one argument, including strings and lists with spaces.
+  if [ "${WEIGHT}" != "None" ]; then
+    set -- "resume=$RESUME" "weight=$WEIGHT" "$@"
   fi
-  RDZV_ID=${PIMM_RDZV_ID:-${SLURM_JOB_ID:-pimm}}
-  RDZV_BACKEND=${PIMM_RDZV_BACKEND:-c10d}
-  # Force MASTER_ADDR to a routable IPv4: a bare node hostname can resolve to a
-  # non-routable IPv6 link-local (fe80::...) on-node, which breaks cross-node
-  # rendezvous. getent ahostsv4 forces IPv4; an IP passes through unchanged.
-  if [ -n "${MASTER_ADDR:-}" ]; then
-    MASTER_IPV4=$(getent ahostsv4 "$MASTER_ADDR" 2>/dev/null | awk 'NR==1{print $1}')
-    [ -n "$MASTER_IPV4" ] && MASTER_ADDR="$MASTER_IPV4"
+  if [ -n "$WANDB_NAME" ]; then
+    set -- "wandb_run_name=$WANDB_NAME" "$@"
   fi
-  RDZV_ENDPOINT=${MASTER_ADDR:-127.0.0.1}:${MASTER_PORT:-29500}
-  exec $PYTHON -m torch.distributed.run \
-    --nnodes="$NUM_MACHINE" \
-    --nproc-per-node="$NUM_GPU" \
-    --node-rank="$NODE_RANK" \
-    --rdzv-backend="$RDZV_BACKEND" \
-    --rdzv-endpoint="$RDZV_ENDPOINT" \
-    --rdzv-id="$RDZV_ID" \
-    "$CODE_DIR"/pimm/$TRAIN_CODE $COMMON_ARGS $EXTRA_ARGS
+  set -- --config-file "$CONFIG_DIR" --options "save_path=$EXP_DIR" "$@"
+
+  exec sh "$ROOT_DIR/pimm/launch/torchrun.sh" "$PYTHON" "$NUM_MACHINE" "$NUM_GPU" \
+    "$CODE_DIR/pimm/$TRAIN_CODE" "$@"
 }
 
-run_python
+run_python "$@"

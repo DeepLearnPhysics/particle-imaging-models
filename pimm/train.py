@@ -28,6 +28,7 @@ from pimm.engines.defaults import (
     default_setup,
 )
 from pimm.engines.train import TRAINERS
+from pimm.engines._train_utils import _save_config_artifacts
 from pimm.observability import structured_logger as sl
 from pimm.utils import comm
 
@@ -46,7 +47,11 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     args = default_argument_parser().parse_args()
-    cfg = default_config_parser(args.config_file, args.options)
+    cfg = default_config_parser(args.config_file, args.options, save_artifacts=False)
+
+    from pimm.engines._execution import configure_training
+
+    managed = configure_training(cfg)
 
     sl.init_structured_logger(
         source="training",
@@ -60,17 +65,19 @@ def main():
     try:
         with sl.log_trace_span("distributed_setup"):
             comm.setup_distributed()
+        cfg.seed = comm.all_gather(cfg.seed)[0]
+        if comm.is_main_process() and (managed or not cfg.resume):
+            _save_config_artifacts(cfg, args.config_file, args.options)
         with sl.log_trace_span("trainer_lifecycle"):
             main_worker(cfg)
+        # On failure, let torchrun terminate peers instead of entering a barrier.
+        with sl.log_trace_span("distributed_cleanup"):
+            comm.cleanup_distributed()
     finally:
         try:
-            with sl.log_trace_span("distributed_cleanup"):
-                comm.cleanup_distributed()
+            sl.log_trace_instant("process_end")
         finally:
-            try:
-                sl.log_trace_instant("process_end")
-            finally:
-                sl.shutdown_structured_logger()
+            sl.shutdown_structured_logger()
 
 
 if __name__ == "__main__":
