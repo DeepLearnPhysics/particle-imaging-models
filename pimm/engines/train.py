@@ -55,6 +55,7 @@ from pimm.utils.registry import Registry
 from pimm.utils.scheduler import build_scheduler
 
 from ._train_utils import worker_init_fn
+from .defaults import resolve_wandb_history
 from .hooks import HookBase, build_hooks
 from ._train_utils import TrainState
 
@@ -582,7 +583,9 @@ class Trainer(TrainerBase):
     def build_writer(self):
         """Create a main-rank summary writer for TensorBoard or W&B."""
         if self.cfg.get("use_wandb", False):
+            self.cfg["wandb_history_resolved"] = resolve_wandb_history(self.cfg)
             wandb_kwargs = dict(
+                history=self.cfg["wandb_history_resolved"],
                 project=self.cfg.get("wandb_project", "pimm"),
                 name=self.cfg.get(
                     "wandb_run_name", os.path.basename(self.cfg.save_path)
@@ -591,10 +594,14 @@ class Trainer(TrainerBase):
                 step_offset=self.cfg.get("log_step_offset", 0),
             )
             for cfg_key, wandb_key in (
+                ("wandb_entity", "entity"),
                 ("wandb_group", "group"),
                 ("wandb_job_type", "job_type"),
+                ("wandb_tags", "tags"),
                 ("wandb_run_id", "id"),
                 ("wandb_resume", "resume"),
+                ("wandb_resume_from", "resume_from"),
+                ("wandb_fork_from", "fork_from"),
             ):
                 value = self.cfg.get(cfg_key, None)
                 if value is not None:

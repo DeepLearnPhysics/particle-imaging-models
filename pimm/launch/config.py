@@ -258,6 +258,8 @@ def finalize_config(
 
     rdzv_cfg = cfg.get("rdzv") or {}
     env = cfg.setdefault("env", {})
+    if "PIMM_WANDB_HISTORY" in os.environ:
+        env.setdefault("PIMM_WANDB_HISTORY", os.environ["PIMM_WANDB_HISTORY"])
     endpoint = rdzv_cfg.get("endpoint")
     if endpoint:
         host_part, sep, port_part = str(endpoint).partition(":")

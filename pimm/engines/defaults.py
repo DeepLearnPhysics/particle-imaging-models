@@ -79,6 +79,34 @@ def default_argument_parser(epilog=None):
 
 
 
+def resolve_wandb_history(cfg):
+    """Resolve config, environment, then legacy continuation settings."""
+    history = cfg.get("wandb_history")
+    if history is None:
+        history = os.environ.get("PIMM_WANDB_HISTORY")
+    if history is None:
+        fresh = cfg.get("wandb_fresh_run_on_resume", False)
+        fork = cfg.get("wandb_fork_run_on_resume", False)
+        if fresh and fork:
+            raise ValueError("Conflicting legacy W&B fresh/fork flags")
+        if cfg.get("wandb_resume_from") or (
+            cfg.get("resume", False)
+            and "wandb_fresh_run_on_resume" in cfg
+            and "wandb_fork_run_on_resume" in cfg
+            and not fresh
+            and not fork
+        ):
+            raise ValueError(
+                "W&B rewind is unsupported; choose wandb_history or PIMM_WANDB_HISTORY"
+            )
+        history = "fork" if fork and cfg.get("resume", False) else "new"
+    if history not in {"new", "append", "fork"}:
+        raise ValueError(
+            "wandb_history / PIMM_WANDB_HISTORY must be new, append, or fork"
+        )
+    return history
+
+
 def default_config_parser(file_path, options, *, save_artifacts=True):
     """Load a config, apply CLI/hook overrides, and prepare save paths."""
     # config name protocol: dataset_name/model_name-exp_name
@@ -109,6 +137,9 @@ def default_config_parser(file_path, options, *, save_artifacts=True):
             set(options.keys()),
         )
         _apply_hook_overrides(cfg, hook_options)
+
+    if cfg.get("use_wandb", False):
+        cfg.wandb_history_resolved = resolve_wandb_history(cfg)
 
     if cfg.seed is None:
         cfg.seed = get_random_seed()
