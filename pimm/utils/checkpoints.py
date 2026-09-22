@@ -356,31 +356,23 @@ def build_logger_state(
     """Build checkpointable logging state, using the active W&B run when present."""
     use_wandb = bool(_cfg_get(trainer.cfg, "use_wandb", False))
     wandb_state = {
+        "entity": None,
+        "project": None,
         "group": _cfg_get(trainer.cfg, "wandb_group", None),
         "run_name": _cfg_get(trainer.cfg, "wandb_run_name", None),
-        "run_id": _cfg_get(trainer.cfg, "wandb_run_id", None),
+        "run_id": None,
         "job_type": _cfg_get(trainer.cfg, "wandb_job_type", None),
-        "resume": _cfg_get(trainer.cfg, "wandb_resume", None),
-        "resume_step": None,
+        "history": _cfg_get(trainer.cfg, "wandb_history_resolved", "new"),
+        "next_step": None,
         "step_metric": "train/global_step",
         "step_offset": _cfg_get(trainer.cfg, "log_step_offset", 0),
         "checkpoint_global_step": checkpoint_global_step,
     }
     if use_wandb and initialize_wandb:
-        writer = getattr(trainer, "writer", None)
-        local_state = None
-        if is_main_process() and writer is not None:
-            checkpoint_state = getattr(writer, "checkpoint_state", None)
-            if checkpoint_state is not None:
-                local_state = checkpoint_state()
+        local_state = trainer.writer.checkpoint_state() if is_main_process() else None
         gathered = comm.all_gather(local_state)
         active_state = next((state for state in gathered if state is not None), None)
-        if active_state is None:
-            raise RuntimeError(
-                "W&B checkpointing requires the main process writer to expose "
-                "checkpoint_state()."
-            )
-        wandb_state.update(active_state)
+        wandb_state = {**wandb_state, **active_state} if active_state else None
     return {
         "backend": "wandb" if use_wandb else "tensorboard",
         "wandb": wandb_state,
@@ -388,41 +380,35 @@ def build_logger_state(
 
 
 def configure_logger_from_checkpoint(trainer, checkpoint):
-    """Configure the lazy W&B writer to rewind to checkpoint history state."""
+    """Configure the lazy W&B writer from checkpointed history state."""
     if not _cfg_get(trainer.cfg, "use_wandb", False):
         return
-    if _cfg_get(trainer.cfg, "wandb_fresh_run_on_resume", False):
-        trainer.logger.info(
-            "Starting a fresh W&B run for this checkpoint continuation; "
-            "model and trainer state still resume exactly."
-        )
-        return
     writer = getattr(trainer, "writer", None)
-    configure_resume = getattr(writer, "resume_from_checkpoint", None)
-    if configure_resume is None:
+    if writer is None:
         return
-
-    logger_state = checkpoint.get("logger", {})
-    wandb_state = logger_state.get("wandb", {}) if isinstance(logger_state, dict) else {}
-    if not isinstance(wandb_state, dict):
-        wandb_state = {}
-    run_id = wandb_state.get("run_id", checkpoint.get("wandb_run_id"))
-    resume_step = wandb_state.get(
-        "resume_step",
-        checkpoint.get("wandb_resume_step"),
-    )
-    if run_id and resume_step is not None:
-        configure_resume({"run_id": run_id, "resume_step": resume_step})
-        return
-    if resume_step is not None:
-        raise ValueError(
-            "Checkpoint contains a W&B resume_step without a W&B run_id."
-        )
-    trainer.logger.warning(
-        "Checkpoint has no W&B rewind state; falling back to configured W&B "
-        "resume behavior. Optimizer steps replayed after rollback may appear "
-        "more than once."
-    )
+    state = dict(checkpoint.get("logger", {}).get("wandb") or {})
+    run_id = state.get("run_id") or checkpoint.get("wandb_run_id")
+    if run_id:
+        # Old pimm checkpoints lack the destination and call next_step resume_step.
+        state["run_id"] = run_id
+        if state.get("next_step") is None:
+            state["next_step"] = state.get(
+                "resume_step", checkpoint.get("wandb_resume_step")
+            )
+        for key in ("entity", "project"):
+            state[key] = (
+                state.get(key)
+                or _cfg_get(trainer.cfg, f"wandb_{key}", None)
+                or os.environ.get(f"WANDB_{key.upper()}")
+            )
+        if writer.history != "new" and not all(
+            state.get(key) for key in ("entity", "project")
+        ):
+            raise ValueError(
+                "Legacy W&B state needs explicit wandb_entity/wandb_project "
+                "or WANDB_ENTITY/WANDB_PROJECT"
+            )
+    writer.configure_from_checkpoint(state if run_id else None)
 
 
 def build_checkpoint_payload(
@@ -523,6 +509,8 @@ def build_checkpoint_payload(
 def empty_checkpoint_payload(trainer):
     """Build an empty typed payload for DCP load to fill in place."""
     payload = build_checkpoint_payload(trainer, distributed_rng=True)
+    # DCP only restores requested leaves. Read old cursors without writing them.
+    payload["logger"]["wandb"]["resume_step"] = None
     payload["trainer"]["best_metric_value"] = -float("inf")
     payload["trainer"].update(
         {"epoch": 0, "iter_in_epoch": 0, "global_step": 0, "samples_seen": 0}

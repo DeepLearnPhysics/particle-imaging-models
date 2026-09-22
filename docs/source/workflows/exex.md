@@ -60,9 +60,20 @@ supplies the next attempt's input; training writes
 to the new output directory. An initial `--train.resume` requires `--train.weight`
 pointing to a complete checkpoint visible to the worker.
 
-Execution continuation does not select W&B history. Configure tracking
-separately. Keep credentials in runtime credential files or the worker
-environment, not recorded arguments or launch `env` dictionaries.
+Execution continuation does not select W&B history. Set `PIMM_WANDB_HISTORY`
+independently of `PIMM_USE_EXEX`:
+
+- `new` (default): create a new tracking run, even when training resumes.
+- `append`: continue the checkpoint's tracking run without deleting history.
+- `fork`: create a child inheriting history through the checkpoint; requires
+  W&B permission. Permission failures are not silently downgraded.
+
+`append` and `fork` require checkpointed tracking identity and online mode.
+Rewind is unsupported. Explicit training config `wandb_history` takes precedence
+over the environment variable. Exex owns tracking identity/history and links;
+pimm keeps metric buffering and the semantic `train/global_step` axis.
+Keep credentials in runtime credential files or the worker environment, not
+recorded arguments or launch `env` dictionaries.
 
 ## Storage and remote submission
 

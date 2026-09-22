@@ -50,7 +50,7 @@ def _define_wandb_metrics(run):
 def _wandb_log(run, data, train_step):
     """Append one chronological W&B row carrying its semantic training step."""
     train_step = int(train_step)
-    if int(run.step) < train_step:
+    if max(run.step, run.starting_step) < train_step:
         # Fresh runs historically used the one-based optimizer iteration as
         # W&B's internal step. Add one metric-free anchor so new runs retain
         # that axis without coupling subsequent history writes to it.
@@ -787,6 +787,7 @@ class WandbSummaryWriter:
         flush_secs=120,
         filename_suffix="",
         step_offset=0,
+        history=None,
         **kwargs
     ):
         """
@@ -802,6 +803,7 @@ class WandbSummaryWriter:
             step_offset: Value added to every logged step. This only affects
                 logging; trainer state, schedules, checkpoints, and eval cadence
                 remain local to the current run.
+            history: new, append, or fork; defaults to PIMM_WANDB_HISTORY or new.
             **kwargs: Additional arguments passed to wandb.init
         """
         if wandb is None:
@@ -810,6 +812,13 @@ class WandbSummaryWriter:
                 "run `uv sync --all-extras --locked`"
             )
 
+        from exex.contrib import wandb as tracking
+
+        self._tracking = tracking
+        self.history = (
+            history if history is not None else os.environ.get("PIMM_WANDB_HISTORY", "new")
+        )
+        self._wandb_state = None
         self.run = None
         self.step_offset = int(step_offset or 0)
         if log_dir:
@@ -827,44 +836,27 @@ class WandbSummaryWriter:
         """Initialize only after checkpoint loading has selected the resume mode."""
         if self.run is not None:
             return self.run
-        if wandb.run is not None:
-            if "resume_from" in self._wandb_kwargs:
-                raise RuntimeError(
-                    "Cannot rewind a W&B run after another run is already active. "
-                    "CheckpointLoader must run before any W&B logging."
-                )
-            self.run = wandb.run
-        else:
-            self.run = wandb.init(**self._wandb_kwargs)
+        self.run = self._tracking.init(
+            state=self._wandb_state, history=self.history, **self._wandb_kwargs
+        )
         _define_wandb_metrics(self.run)
         return self.run
 
-    def resume_from_checkpoint(self, state):
-        """Configure W&B to rewind to the next history row saved in a checkpoint."""
+    def initialize(self):
+        """Initialize the configured run without writing a history row."""
+        return self._ensure_initialized()
+
+    def configure_from_checkpoint(self, state):
+        """Supply restored tracking state before the first metric is logged."""
         if self.run is not None:
-            raise RuntimeError(
-                "Cannot configure W&B checkpoint resume after logging has started."
-            )
-        run_id = state.get("run_id")
-        resume_step = state.get("resume_step")
-        if not run_id or resume_step is None:
-            raise ValueError(
-                "W&B checkpoint state requires both run_id and resume_step."
-            )
-        for incompatible in ("id", "resume", "fork_from"):
-            self._wandb_kwargs.pop(incompatible, None)
-        self._wandb_kwargs["resume_from"] = (
-            f"{run_id}?_step={int(resume_step)}"
-        )
+            raise RuntimeError("Restore W&B state before initializing the writer")
+        self._wandb_state = state
 
     def checkpoint_state(self):
         """Return the run ID and next internal W&B history step."""
         self.flush()
         run = self._ensure_initialized()
-        return {
-            "run_id": run.id,
-            "resume_step": int(run.step),
-        }
+        return self._tracking.checkpoint_state(run)
 
     def _train_step(self, global_step=None):
         """Return the semantic optimizer step after applying any configured offset."""
@@ -1089,7 +1081,7 @@ class WandbSummaryWriter:
         """Finish logging (optional, wandb handles this automatically)"""
         if self.run:
             self.flush()
-            wandb.finish()
+            self.run.finish()
             self.run = None
             
     def __enter__(self):
