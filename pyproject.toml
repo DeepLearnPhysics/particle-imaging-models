@@ -18,6 +18,7 @@ dependencies = [
 
 [dependency-groups ]
 train = [
+    "exex[wandb]; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "h5py; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tensorboardx; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "wandb>=0.17.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -103,7 +104,11 @@ torch-scatter = false
 torch-sparse = false
 torch-cluster = false
 
+[tool.uv.dependency-groups]
+train = { requires-python = ">=3.10.12,<3.11" }
+
 [tool.uv.sources]
+exex = { git = "https://github.com/youngsm/exex", rev = "0329bc357f4649acd6406ad56e70996aa6f3a3cf" }
 torch = { index = "pytorch-cu126" }
 torchvision = { index = "pytorch-cu126" }
 pointrope = { url = "https://github.com/DeepLearnPhysics/particle-imaging-models/releases/download/pimm-wheels-cu126-torch2.10-cp310/pointrope-0.1.0%2Bcu126torch2.10-cp310-cp310-linux_x86_64.whl" }

@@ -14,6 +14,7 @@ on:
     tags:
       - 'v*'
     paths:
+      - '.dockerignore'
       - '.github/docker/**'
       - '.python-version'
       - 'pyproject.toml'
@@ -98,6 +99,8 @@ jobs:
     needs: lock
     if: needs.lock.outputs.build == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -117,6 +120,7 @@ jobs:
             youngsm/pimm
             ghcr.io/deeplearnphysics/pimm
           tags: |
+            type=sha,format=long
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
@@ -179,9 +183,9 @@ jobs:
     if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.digest.outputs.digest }}
+      digest: youngsm/pimm@${{ needs.build-standard.outputs.digest }}
     env:
-      IMAGE: youngsm/pimm:pytorch2.10.0-cuda12.6
+      IMAGE: youngsm/pimm@${{ needs.build-standard.outputs.digest }}
       TORCH_VERSION: 2.10.0
       TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
@@ -199,8 +203,14 @@ jobs:
           import importlib
           import importlib.metadata
           import os
+          from pathlib import Path
+          import tomlkit
 
           modules = [
+              "exex",
+              "exex.xm_cluster",
+              "exex.execution",
+              "exex.contrib.wandb",
               "cnms",
               "pointgroup_ops",
               "pointops",
@@ -217,6 +227,9 @@ jobs:
           ]
           for module in modules:
               importlib.import_module(module)
+          lock = tomlkit.parse(Path("uv.lock").read_text())
+          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex")
+          assert importlib.metadata.version("exex") == expected_exex
           import torch
           from torch.nn.attention.varlen import varlen_attn  # noqa: F401
           expected = os.environ["TORCH_VERSION"]
@@ -246,11 +259,6 @@ jobs:
             echo "pimm unexpectedly worked without a checkout" >&2
             exit 1
           fi
-      # the GPU job must test this exact build: tags are mutable rolling
-      # aliases and Modal caches registry pulls by reference
-      - name: Capture image digest
-        id: digest
-        run: echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")" >> "$GITHUB_OUTPUT"
 
   test-standard-gpu:
     needs: test-standard
@@ -279,6 +287,8 @@ jobs:
     needs: lock
     if: needs.lock.outputs.build == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -297,6 +307,7 @@ jobs:
             youngsm/pimm-nersc
             ghcr.io/deeplearnphysics/pimm-nersc
           tags: |
+            type=sha,format=long
             type=ref,event=branch
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
@@ -345,7 +356,7 @@ jobs:
     if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
     runs-on: ubuntu-latest
     env:
-      IMAGE: youngsm/pimm-nersc:pytorch2.10.0-cuda12.6
+      IMAGE: youngsm/pimm-nersc@${{ needs.build-nersc.outputs.digest }}
       TORCH_VERSION: 2.10.0
       TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
@@ -363,8 +374,14 @@ jobs:
           import importlib
           import importlib.metadata
           import os
+          from pathlib import Path
+          import tomlkit
 
           modules = [
+              "exex",
+              "exex.xm_cluster",
+              "exex.execution",
+              "exex.contrib.wandb",
               "cnms",
               "pointgroup_ops",
               "pointops",
@@ -382,6 +399,9 @@ jobs:
           ]
           for module in modules:
               importlib.import_module(module)
+          lock = tomlkit.parse(Path("uv.lock").read_text())
+          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex")
+          assert importlib.metadata.version("exex") == expected_exex
           import h5py
           if not h5py.get_config().mpi:
               raise SystemExit("h5py was built without MPI support")

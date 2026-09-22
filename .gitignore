@@ -11,6 +11,8 @@ log
 wandb
 slurm_logs
 outputs/
+/.exex/
+/.exex-*/
 .vscode
 .idea
 .env
