@@ -198,6 +198,9 @@ def build_container_command(cfg: dict[str, Any], train_cmd: str) -> str:
     container = cfg.get("container", {})
     runtime = container.get("runtime")
     setup = list(cfg.get("setup") or [])
+    history = (cfg.get("env") or {}).get("PIMM_WANDB_HISTORY")
+    if history is not None:
+        setup.append(f"export PIMM_WANDB_HISTORY={shlex.quote(str(history))}")
     setup.append(
         "export MASTER_ADDR MASTER_PORT "
         f"OMP_NUM_THREADS={resources(cfg)['cpus_per_proc']}"

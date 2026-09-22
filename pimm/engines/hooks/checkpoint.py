@@ -140,7 +140,7 @@ class CheckpointSaver(HookBase):
         )
         if _is_last_epoch_step(self.trainer):
             # Let after-epoch loggers add their metrics to the same W&B row
-            # before checkpoint_state() commits it and records the rewind cursor.
+            # before checkpoint_state() commits it and records the history cursor.
             self._pending_epoch_save = save_kwargs
             return
         # Called on ALL ranks: a standard-format save is a collective op.
