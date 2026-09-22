@@ -98,6 +98,7 @@ class TrainerBase:
         self.max_iter = 0
         self.global_step = 0
         self.samples_seen = 0
+        self.pause_requested = False
         self.best_metric_value = -torch.inf
         self.train_state = TrainState()
         self.comm_info = dict()
@@ -147,7 +148,13 @@ class TrainerBase:
                     self.before_step()
                     self.run_step()
                     self.after_step()
+                    if self.pause_requested:
+                        self._finish_pause()
+                        return
                 self.after_epoch()
+                if self.pause_requested:
+                    self._finish_pause()
+                    return
             self.after_train()
 
     def before_train(self):
@@ -201,6 +208,21 @@ class TrainerBase:
         with sl.log_trace_span("hooks.after_train"):
             self._call_hooks("after_train")
         self._close_writer()
+
+    def request_pause(self):
+        """Pause at the next step/epoch boundary; all ranks must request together.
+
+        The requesting hook owns checkpointing. A pause closes the writer without
+        running epoch-end or final-training hooks that have not already run.
+        """
+        self.pause_requested = True
+
+    def _finish_pause(self):
+        """Finish logging without treating a pause as completion."""
+        with sl.log_trace_span("training_synchronize"):
+            comm.synchronize()
+        self._close_writer()
+        sl.log_trace_instant("training_paused")
 
     def _training_already_complete(self):
         """Return whether restored progress is already at the run horizon."""
@@ -363,7 +385,13 @@ class Trainer(TrainerBase):
                     self.logger.info(
                         f"Resuming epoch {self.epoch} from dataloader position {start_iter}"
                     )
-                self.data_iterator = iter(self.train_loader)
+                # Rebuilding a restored iterator must not consume another worker seed.
+                rng_context = (
+                    torch.random.fork_rng(devices=[])
+                    if resume_mid_epoch else contextlib.nullcontext()
+                )
+                with rng_context:
+                    self.data_iterator = iter(self.train_loader)
 
                 # Epoch-boundary hooks belong to the first intended step of
                 # this epoch, not the final step context left by the previous
@@ -401,12 +429,19 @@ class Trainer(TrainerBase):
                         self._record_step_state()
                         self.after_step()
 
+                    if self.pause_requested:
+                        self._finish_pause()
+                        return
+
                     # Iterable streams have no natural length. The bounded range
                     # above keeps every rank at the configured epoch length.
                     if self._train_is_iterable and iteration + 1 >= iter_per_epoch:
                         break
                 self.start_iter = 0
                 self.after_epoch()
+                if self.pause_requested:
+                    self._finish_pause()
+                    return
             self.after_train()
             sl.log_trace_instant("training_end")
 

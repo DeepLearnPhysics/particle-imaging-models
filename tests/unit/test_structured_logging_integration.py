@@ -6,7 +6,7 @@ import pytest
 
 from pimm import train as train_entrypoint
 from pimm.engines import train as train_module
-from pimm.engines.train import Trainer
+from pimm.engines.train import Trainer, TrainerBase
 
 
 class _Config(dict):
@@ -56,6 +56,9 @@ def _patch_trainer_build(monkeypatch):
 
 
 def _patch_entrypoint_config(monkeypatch, cfg):
+    cfg.setdefault("seed", 17)
+    cfg.setdefault("resume", False)
+    monkeypatch.setattr(train_entrypoint, "_save_config_artifacts", lambda *args: None)
     parser = SimpleNamespace(
         parse_args=lambda: SimpleNamespace(
             config_file="test.py",
@@ -66,7 +69,7 @@ def _patch_entrypoint_config(monkeypatch, cfg):
     monkeypatch.setattr(
         train_entrypoint,
         "default_config_parser",
-        lambda config_file, options: cfg,
+        lambda config_file, options, **kwargs: cfg,
     )
 
 
@@ -230,6 +233,7 @@ def test_resumed_loop_fetches_only_remaining_batches(monkeypatch):
     batches = [{"batch": "second"}, {"batch": "third"}]
 
     trainer = Trainer.__new__(Trainer)
+    TrainerBase.__init__(trainer)
     trainer.cfg = SimpleNamespace(detect_anomaly=False)
     trainer.logger = SimpleNamespace(
         info=lambda message: lifecycle.append(("log", message))
@@ -301,6 +305,7 @@ def test_before_epoch_uses_upcoming_step_context(monkeypatch):
     before_epoch_contexts = []
 
     trainer = Trainer.__new__(Trainer)
+    TrainerBase.__init__(trainer)
     trainer.cfg = SimpleNamespace(detect_anomaly=False)
     trainer.logger = SimpleNamespace(info=lambda message: None)
     trainer.model = SimpleNamespace(train=lambda: None)
@@ -359,6 +364,7 @@ def test_completed_resume_marker_uses_restored_step_context(monkeypatch):
     step_contexts = []
 
     trainer = Trainer.__new__(Trainer)
+    TrainerBase.__init__(trainer)
     trainer.cfg = SimpleNamespace(detect_anomaly=False)
     trainer.logger = SimpleNamespace(info=lambda message: None)
     trainer.start_epoch = 2

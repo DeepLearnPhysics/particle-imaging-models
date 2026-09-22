@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Any
 
@@ -275,7 +276,8 @@ def finalize_config(
     cfg = normalize_train_config(cfg)
     cfg = resolve_all(cfg, launch_timestamp)
     cfg = normalize_train_config(cfg)
-    cfg = apply_checkpoint_backend_defaults(cfg)
+    if os.environ.get("PIMM_USE_EXEX") != "1":
+        cfg = apply_checkpoint_backend_defaults(cfg)
 
     if require_config and not cfg.get("train", {}).get("config"):
         raise SystemExit("Need --train.config")

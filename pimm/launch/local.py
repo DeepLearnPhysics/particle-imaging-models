@@ -249,11 +249,16 @@ def build_container_command(cfg: dict[str, Any], train_cmd: str) -> str:
     raise SystemExit(f"Unsupported container.runtime: {runtime}")
 
 
-def rendezvous_setup_lines(cfg: dict[str, Any], run_name: str | None = None) -> list[str]:
-    """Return outer-shell rendezvous setup before entering any container."""
+def rendezvous_setup_lines(
+    cfg: dict[str, Any], run_name: str | None = None, *, slurm_master: str | None = None
+) -> list[str]:
+    """Return shared rendezvous setup, optionally using a worker-visible address."""
     if scheduler(cfg) == "slurm":
+        master = slurm_master or (
+            '$(scontrol show hostnames "${SLURM_JOB_NODELIST:-${SLURM_NODELIST:?missing Slurm nodelist}}" | head -n 1)'
+        )
         return [
-            'MASTER_ADDR=${MASTER_ADDR:-$(scontrol show hostnames "${SLURM_JOB_NODELIST:-${SLURM_NODELIST:?missing Slurm nodelist}}" | head -n 1)}',
+            f"MASTER_ADDR=${{MASTER_ADDR:-{master}}}",
             "MASTER_PORT=${MASTER_PORT:-$((20000 + ${SLURM_JOB_ID:-0} % 10000))}",
             "export MASTER_ADDR MASTER_PORT",
         ]

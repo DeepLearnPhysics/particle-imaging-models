@@ -36,6 +36,12 @@ Move from one to many GPUs while preserving global-batch semantics.
 Define a portable site profile, dry-run it, submit, monitor, and resume.
 :::
 
+:::{grid-item-card} Experimental exex execution
+:link: exex
+:link-type: doc
+Use the existing CLI with frozen source, retained checkpoints and continuation.
+:::
+
 ::::
 
 ```{toctree}
@@ -46,4 +52,5 @@ fine_tune
 evaluate
 distributed
 slurm
+exex
 ```

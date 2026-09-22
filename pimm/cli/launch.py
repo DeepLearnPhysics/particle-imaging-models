@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg.setdefault("env", {}).setdefault(
         "PIMM_LAUNCH_COMMAND", "pimm launch " + shlex.join(redact_cli_argv(raw_argv))
     )
+    from pimm.launch import _exex
+
+    if _exex.enabled():
+        return _exex.run(cfg, dry_run=command.dry_run, output=command.output)
     return launch(
         cfg,
         launch_timestamp=launch_timestamp,
