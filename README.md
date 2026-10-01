@@ -7,9 +7,9 @@
 Foundation-model research for particle-imaging detectors.
 
 [Documentation](https://deeplearnphysics.org/particle-imaging-models/stable/) ·
-[Quickstart](https://deeplearnphysics.org/particle-imaging-models/stable/getting_started/quickstart.html) ·
+[Quickstart](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html) ·
 [Models](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html) ·
-[Python API](https://deeplearnphysics.org/particle-imaging-models/stable/api/index.html)
+[Python API](https://deeplearnphysics.org/particle-imaging-models/stable/reference/api.html)
 
 </div>
 
@@ -42,13 +42,13 @@ uv run pimm launch \
   --dry-run
 ```
 
-See the [installation guide](https://deeplearnphysics.org/particle-imaging-models/stable/getting_started/installation.html)
+See the [installation guide](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html)
 for the manual install, containers, launcher-only hosts, environment variables,
 and the GPU compatibility table.
 
 ## Run a released model
 
-[`pimm.from_pretrained`](https://deeplearnphysics.org/particle-imaging-models/stable/api/generated/pimm.from_pretrained.html)
+[`pimm.from_pretrained`](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
 supports local exports and Hugging Face repositories. Inference can run on CPU
 when the selected architecture and operators support it; PoLAr-MAE does.
 
@@ -75,13 +75,13 @@ labels = output["seg_logits"].argmax(-1)  # (N,)
 ```
 
 Preprocessing is part of a model's scientific contract. Follow the
-[pretrained-model guide](https://deeplearnphysics.org/particle-imaging-models/stable/models/pretrained.html)
+[pretrained-model guide](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
 for complete Panda and PoLAr-MAE transforms, packed batching, output schemas,
 fine-tuning, and CPU/GPU constraints.
 
 ## Start an experiment
 
-The [first experiment](https://deeplearnphysics.org/particle-imaging-models/stable/getting_started/quickstart.html)
+The [first experiment](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html)
 downloads the small public
 [PILArNet-M-mini](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M-mini)
 dataset and trains a tiny semantic-segmentation model. A normal local run uses
@@ -119,10 +119,7 @@ For Slurm, use `pimm submit`; for portable weights and Hub publication, use
 
 Released checkpoints and their exact output contracts are listed in the
 [model guide](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html).
-The interactive [Explore Panda](https://deeplearnphysics.org/particle-imaging-models/stable/tutorials/explore_panda.html)
-and [Explore PoLAr-MAE](https://deeplearnphysics.org/particle-imaging-models/stable/tutorials/explore_polarmae.html)
-tutorials use real PILArNet-M-mini events and provide runnable Python notebook
-sources for regenerating their figures.
+The [Panda](https://deeplearnphysics.org/particle-imaging-models/stable/models/panda.html) and [PoLAr-MAE](https://deeplearnphysics.org/particle-imaging-models/stable/models/polarmae.html) pages list each model's inputs, outputs and recipes.
 
 ## Hardware
 
@@ -134,28 +131,28 @@ The prebuilt CUDA stack targets NVIDIA compute capabilities 7.0–9.0:
 
 Panda's released PTv3 models currently require CUDA because they use `spconv`.
 Released PoLAr-MAE inference also runs on CPU, although CUDA is faster. Consult
-the [compatibility table](https://deeplearnphysics.org/particle-imaging-models/stable/getting_started/installation.html#supported-gpus)
+the [compatibility table](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html#gpus)
 before starting a long run.
 
 ## Documentation
 
 | Question | Start here |
 |---|---|
-| How are events represented? | [Data conventions](https://deeplearnphysics.org/particle-imaging-models/stable/data/conventions.html) |
-| How do configs and overrides work? | [Configuration](https://deeplearnphysics.org/particle-imaging-models/stable/operations/configuration.html) |
-| How do I train or fine-tune? | [Training](https://deeplearnphysics.org/particle-imaging-models/stable/workflows/train.html) · [Fine-tuning](https://deeplearnphysics.org/particle-imaging-models/stable/workflows/fine_tune.html) |
-| What exactly is saved? | [Checkpoints and resume](https://deeplearnphysics.org/particle-imaging-models/stable/operations/checkpoints.html) |
-| How do I use multiple GPUs or Slurm? | [Distributed training](https://deeplearnphysics.org/particle-imaging-models/stable/workflows/distributed.html) · [Slurm](https://deeplearnphysics.org/particle-imaging-models/stable/workflows/slurm.html) |
-| How do I add a model, loss, dataset, transform, or hook? | [Extending pimm](https://deeplearnphysics.org/particle-imaging-models/stable/extend/index.html) |
-| Something failed—what should I inspect? | [Troubleshooting](https://deeplearnphysics.org/particle-imaging-models/stable/operations/troubleshooting.html) |
+| How are events represented? | [Data conventions](https://deeplearnphysics.org/particle-imaging-models/stable/data/event-format.html) |
+| How do configs and overrides work? | [Configuration](https://deeplearnphysics.org/particle-imaging-models/stable/training/configs.html) |
+| How do I train or fine-tune? | [Training](https://deeplearnphysics.org/particle-imaging-models/stable/training/train.html) · [Fine-tuning](https://deeplearnphysics.org/particle-imaging-models/stable/models/fine-tune.html) |
+| What exactly is saved? | [Checkpoints and resume](https://deeplearnphysics.org/particle-imaging-models/stable/training/checkpoints.html) |
+| How do I use multiple GPUs or Slurm? | [Distributed training](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html) · [Slurm](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html#run-on-slurm) |
+| How do I add a model, loss, dataset, transform, or hook? | [Extending pimm](https://deeplearnphysics.org/particle-imaging-models/stable/develop/index.html) |
+| Something failed—what should I inspect? | [Troubleshooting](https://deeplearnphysics.org/particle-imaging-models/stable/training/troubleshooting.html) |
 
 ## Contributing and citation
 
-Start with the [contributor guide](https://deeplearnphysics.org/particle-imaging-models/stable/extend/contributing.html)
+Start with the [contributor guide](https://deeplearnphysics.org/particle-imaging-models/stable/develop/contributing.html)
 and open an issue before a large architectural change. Scientific results should
 record the full pimm commit, resolved config, data revision and transforms,
 checkpoint revision, and evaluation protocol. The
-[citation guide](https://deeplearnphysics.org/particle-imaging-models/stable/project/citation.html)
+[citation guide](https://deeplearnphysics.org/particle-imaging-models/stable/reference/cite.html)
 lists the software, model, backbone, and dataset records to preserve.
 
 pimm builds on [Pointcept](https://github.com/Pointcept/Pointcept),

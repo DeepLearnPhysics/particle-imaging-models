@@ -7,6 +7,7 @@ __pycache__
 exp
 weights
 data
+!docs/source/data/
 log
 wandb
 slurm_logs
