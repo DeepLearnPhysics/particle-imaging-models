@@ -16,9 +16,9 @@ Pick a recipe, check it on a few events, then start the full run.
 | PoLAr-MAE semantic segmentation | `polarmae/semseg/semseg-polarmae-pilarnet-fft` |
 | JAXTPC semantic segmentation | `detector/semseg/semseg-pt-v3m2-jaxtpc-5cls` |
 
-Recipes that fine-tune take their starting weights from `--train.weight`; see [Fine-tune](../models/fine-tune.md).
+To fine-tune with a recipe, pass the starting weights with `--train.weight`; see [Fine-tune](../models/fine-tune.md).
 
-Each recipe names a PILArNet-M revision. The reader accepts `v3` and `v3_extra`; recipes that name `v1` run on v3 data with one override per split, such as `data.train.revision=v3 data.val.revision=v3`.
+Each recipe names a PILArNet-M revision. The reader accepts `v3` and `v3_extra`; to run a recipe that names `v1`, point each split at v3 with an override, such as `data.train.revision=v3 data.val.revision=v3`.
 
 ## Check it on a few events
 

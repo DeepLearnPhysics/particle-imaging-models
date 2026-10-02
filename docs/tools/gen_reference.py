@@ -348,7 +348,7 @@ def gen_recipes(repo: Path) -> tuple[str, list[str]]:
     out.append(
         f"pimm ships {count} recipes. A recipe is a config under `configs/`; pass its name to "
         "`--train.config`. `uv run pimm ls` prints the same names. Batch size counts events per "
-        "step across all GPUs. A blank warm start means the recipe starts from random weights "
+        "step across all GPUs. A blank warm start means the run starts from random weights "
         "unless you pass `--train.weight`.\n"
     )
     for group in sorted(groups):

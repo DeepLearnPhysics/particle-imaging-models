@@ -11,7 +11,7 @@ A pimm run is a Python config executed by a launcher. This page follows one batc
 | Holds | data, transforms, model, loss, optimizer, schedule, hooks, epochs, batch sizes | site, nodes, GPUs, CPUs, Slurm, containers, paths, run name |
 | Change it with | `key=value` after `--`, or a child config | `--group.field value` flags, or a site profile |
 
-The same experiment config runs on one workstation GPU or across Slurm nodes; only the launch config changes. [Configs and overrides](../training/configs.md) has the details.
+You can run the same experiment config on one workstation GPU or across Slurm nodes; only the launch config changes. [Configs and overrides](../training/configs.md) has the details.
 
 ## Components are named by registry
 
@@ -88,4 +88,4 @@ exp/<config group>/<run name>/
 └── model/                 checkpoints
 ```
 
-Checkpoints in `model/` continue training. An export made with `pimm export` loads in one call for inference or fine-tuning. See [Checkpoints and resume](../training/checkpoints.md) and [Export and publish](../models/export.md).
+You resume training from the checkpoints in `model/`. An export made with `pimm export` loads in one call, for inference or fine-tuning. See [Checkpoints and resume](../training/checkpoints.md) and [Export and publish](../models/export.md).

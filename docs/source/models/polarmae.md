@@ -1,6 +1,6 @@
 # PoLAr-MAE
 
-PoLAr-MAE pretrains a transformer on LArTPC point clouds by masked point modeling: it hides groups of points and learns to reconstruct their positions and energies. Paper: [arXiv:2502.02558](https://arxiv.org/abs/2502.02558).
+PoLAr-MAE is a transformer pretrained on LArTPC point clouds by masked point modeling: groups of points are hidden, and the model learns to reconstruct their positions and energies. Paper: [arXiv:2502.02558](https://arxiv.org/abs/2502.02558).
 
 ## Released checkpoints
 
@@ -29,7 +29,7 @@ The pretraining recipe normalizes coordinates before the model, with `NormalizeC
 
 ## Recipes
 
-| Recipe | Trains |
+| Recipe | Trained |
 |---|---|
 | `polarmae/pretrain-polarmae-pilarnet` | PoLAr-MAE, from scratch, with masked point modeling |
 | `polarmae/semseg/semseg-polarmae-pilarnet-fft` | the whole semantic model |

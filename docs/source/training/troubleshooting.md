@@ -52,7 +52,7 @@ Loss is NaN
 No model parameters loaded
 : The checkpoint's keys don't match the model. Check the weight path, prefix and key mapping in the startup report.
 
-The wrong parameters train
+The wrong parameters are trained
 : Add `ParameterCounter` and print the names with `requires_grad=True` before the first step.
 
 ## Checkpoints and evaluation

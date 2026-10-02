@@ -17,7 +17,7 @@ The overrides point this recipe, which names PILArNet-M revision `v1`, at `v3`, 
 
 At startup the `CheckpointLoader` hook reports how many parameters loaded and lists missing and unexpected keys. Panda Base has no decoder or head, so those keys show up as missing. A mapping that loads zero parameters stops the run.
 
-| Suffix | Trains |
+| Suffix | Trained |
 |---|---|
 | `-lin` | the head, with the encoder frozen |
 | `-dec` | the decoder and head, with the encoder frozen |
@@ -80,9 +80,9 @@ model = dict(
 
 The adapters' `B` matrices start at zero, so the wrapped model initially computes the same output as the base model. `trainable_keywords` unfreezes base parameters whose names contain those strings. The wrapper raises an error if no layer matches `target_modules`. Wrapping adds a `model.` level to parameter names, so a checkpoint mapping that targeted `backbone` must target `model.backbone`.
 
-`polarmae/semseg/semseg-polarmae-pilarnet-peft` takes another route: it sets `freeze_encoder=True` and trains only the segmentation head.
+`polarmae/semseg/semseg-polarmae-pilarnet-peft` takes another route: it sets `freeze_encoder=True`, so only the segmentation head is trained.
 
-## Check what trains
+## Check which parameters are trained
 
 ```python
 trainable = [(n, p.numel()) for n, p in model.named_parameters() if p.requires_grad]
