@@ -38,23 +38,36 @@ support Flash Attention and BF16.
 ```python
 import pimm
 
-model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")
+model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")  # Hugging Face
+model = pimm.from_pretrained("artifacts/my-model", device="cuda")               # local export
+model = pimm.from_pretrained("exp/panda/semseg/my-run/model/last", device="cuda")  # run checkpoint
 ```
 
-`pimm.from_pretrained` downloads the export from Hugging Face, rebuilds the model and returns it in
-eval mode. A model expects the same transforms as the recipe that trained it;
+`pimm.from_pretrained` rebuilds the model, loads its weights and returns it in eval mode. It takes a
+Hugging Face repository, a directory written by `pimm export`, or a checkpoint from one of your
+runs, whose architecture it reads from the run's config. A model expects the same transforms as the
+recipe that trained it;
 [Run a released model](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
 labels a full event, and [Models](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html)
 lists the six releases. Panda needs CUDA; PoLAr-MAE also runs on CPU.
 
 ## Train on PILArNet-M
 
-Download the 120-event mini dataset and train a tiny semantic-segmentation model on one GPU:
+Download PILArNet-M-mini, 120 events from the PILArNet-M dataset, from Hugging Face:
 
 ```bash
-uv run python -c "from huggingface_hub import snapshot_download; snapshot_download('DeepLearnPhysics/PILArNet-M-mini', repo_type='dataset', local_dir='data/PILArNet-M-mini')"
+uv run hf download DeepLearnPhysics/PILArNet-M-mini \
+  --repo-type dataset \
+  --local-dir data/PILArNet-M-mini
+```
 
-uv run pimm launch --resources.nproc-per-node 1 --train.config tests/tiny_semseg -- \
+Train a tiny semantic-segmentation model on one GPU of this machine:
+
+```bash
+uv run pimm launch \
+  --train.config tests/tiny_semseg \
+  --resources.nproc-per-node 1 \
+  -- \
   data.train.data_root="$PWD/data/PILArNet-M-mini" \
   data.val.data_root="$PWD/data/PILArNet-M-mini"
 ```
@@ -62,9 +75,29 @@ uv run pimm launch --resources.nproc-per-node 1 --train.config tests/tiny_semseg
 Flags before the bare `--` configure the launcher; `key=value` pairs after it override the training
 config. The run writes its config, log and checkpoints under `exp/tests/`.
 [First run](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html)
-walks through what it saves, `uv run pimm ls` lists every recipe, and
-[Scale up](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html) runs the
-same recipe on more GPUs or on Slurm with `pimm submit`.
+walks through what it saves, and `uv run pimm ls` lists every recipe.
+
+To run the same job on a Slurm cluster, use `pimm submit` with the same flags plus your account and
+partition. `--dry-run` prints the job script without submitting it:
+
+```bash
+uv run pimm submit \
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
+  --resources.nproc-per-node 1 \
+  --resources.time 00:30:00 \
+  --train.config tests/tiny_semseg \
+  --dry-run \
+  -- \
+  data.train.data_root="$PWD/data/PILArNet-M-mini" \
+  data.val.data_root="$PWD/data/PILArNet-M-mini"
+```
+
+Remove `--dry-run` to submit. The command returns once the job is queued, and the training log goes
+to the same run directory. Without `--site`, `pimm submit` uses SLAC's S3DF settings.
+[Scale up](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html) shows how
+to write a site profile for your cluster and how to run on several GPUs or nodes.
 
 To train on another detector, write its events as `.npy` files or add a reader; see
 [Bring your own data](https://deeplearnphysics.org/particle-imaging-models/stable/data/your-data.html).
