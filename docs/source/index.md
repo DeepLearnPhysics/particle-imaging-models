@@ -2,7 +2,7 @@
 
 # pimm
 
-pimm (particle imaging models) trains, fine-tunes and runs foundation models on point clouds from particle-imaging detectors. It contains the Panda and PoLAr-MAE models, readers for liquid argon TPC and water Cherenkov simulations, and one launcher for a workstation or a Slurm cluster.
+pimm (particle imaging models) is a library for training, fine-tuning and running foundation models on point clouds from particle-imaging detectors. It contains the Panda and PoLAr-MAE models, readers for liquid argon TPC and water Cherenkov simulations, and one launcher for a workstation or a Slurm cluster.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-models/main/install.sh | bash
