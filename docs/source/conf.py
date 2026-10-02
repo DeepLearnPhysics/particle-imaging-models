@@ -50,6 +50,16 @@ html_css_files = ["custom.css"]
 html_js_files = [
     ("custom-icons.js", {"defer": "defer"}),
     ("pimm.js", {"defer": "defer"}),
+    # Cronitor RUM
+    ("https://rum.cronitor.io/script.js", {"async": "async"}),
+    (
+        None,
+        {
+            "body": "window.cronitor = window.cronitor || function() { "
+            "(window.cronitor.q = window.cronitor.q || []).push(arguments); };\n"
+            "cronitor('config', { clientKey: '7d1e937942c91525bb5b9db25632aa4c' });"
+        },
+    ),
 ]
 html_logo = "_static/logo-light.svg"
 html_favicon = "_static/logo-light.svg"
