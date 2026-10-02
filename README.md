@@ -2,160 +2,104 @@
 
 <img src="assets/logo.svg" alt="pimm logo" height="72">
 
-# particle imaging models (pimm)
-
-Foundation-model research for particle-imaging detectors.
+# pimm
 
 [Documentation](https://deeplearnphysics.org/particle-imaging-models/stable/) ·
-[Quickstart](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html) ·
+[First run](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html) ·
 [Models](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html) ·
-[Python API](https://deeplearnphysics.org/particle-imaging-models/stable/reference/api.html)
+[Recipe catalog](https://deeplearnphysics.org/particle-imaging-models/stable/reference/recipes.html)
 
 </div>
 
-pimm is a PyTorch research toolkit for variable-length, three-dimensional point
-clouds from particle-imaging detectors. It brings model families, datasets,
-training and evaluation loops, distributed launchers, and portable pretrained
-exports into one reproducible experiment system.
-
-It is designed for both researchers running large distributed studies and new
-students exploring released models on a single machine. The current scope is
-3D sparse point clouds; 2D detector images and waveforms are planned.
+pimm (particle imaging models) trains, fine-tunes and runs foundation models on point clouds from
+particle-imaging detectors. It contains the Panda and PoLAr-MAE models, readers for liquid argon TPC
+and water Cherenkov simulations, and one launcher for a workstation or a Slurm cluster.
 
 ## Install
 
-Linux x86-64 users can install the locked training environment in one command:
+On Linux x86-64 with an NVIDIA GPU:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-models/main/install.sh | bash
 cd particle-imaging-models
+uv run pimm --help
 ```
 
-The installer sets up `uv`, clones the repository, installs the lockfile, and
-checks the native operators. No environment activation is needed; run project
-commands through `uv run`.
-
-```bash
-uv run pimm launch \
-  --train.config tests/tiny_semseg \
-  --resources.nproc-per-node 1 \
-  --dry-run
-```
-
-See the [installation guide](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html)
-for the manual install, containers, launcher-only hosts, environment variables,
-and the GPU compatibility table.
+The script installs [uv](https://docs.astral.sh/uv/) if it's missing, clones this repository and
+installs the locked environment: Python 3.10, PyTorch 2.10.0, CUDA 12.6 and prebuilt native
+operators, so you don't need a CUDA toolkit or a compiler. Run pimm through `uv run`; there's no
+environment to activate. [Install](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html)
+covers installing by hand, containers, launcher-only hosts and which
+[GPUs](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html#gpus)
+support Flash Attention and BF16.
 
 ## Run a released model
 
-[`pimm.from_pretrained`](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
-supports local exports and Hugging Face repositories. Inference can run on CPU
-when the selected architecture and operators support it; PoLAr-MAE does.
-
 ```python
-import torch
 import pimm
 
-device = "cpu"  # use "cuda" when available
-model = pimm.from_pretrained(
-    "DeepLearnPhysics/PoLAr-MAE-Semantic",
-    device=device,
-)  # weights use the Hugging Face cache, configurable with HF_HUB_CACHE
-
-input_dict = {
-    "coord": coord.to(device),    # (N, 3), transformed coordinates
-    "feat": feat.to(device),      # (N, C), transformed point features
-    "offset": offset.to(device),  # (B,), cumulative points per event
-}
-
-with torch.inference_mode():
-    output = model(input_dict)
-
-labels = output["seg_logits"].argmax(-1)  # (N,)
+model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")
 ```
 
-Preprocessing is part of a model's scientific contract. Follow the
-[pretrained-model guide](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
-for complete Panda and PoLAr-MAE transforms, packed batching, output schemas,
-fine-tuning, and CPU/GPU constraints.
+`pimm.from_pretrained` downloads the export from Hugging Face, rebuilds the model and returns it in
+eval mode. A model expects the same transforms as the recipe that trained it;
+[Run a released model](https://deeplearnphysics.org/particle-imaging-models/stable/models/run.html)
+labels a full event, and [Models](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html)
+lists the six releases. Panda needs CUDA; PoLAr-MAE also runs on CPU.
 
-## Start an experiment
+## Train on PILArNet-M
 
-The [first experiment](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html)
-downloads the small public
-[PILArNet-M-mini](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M-mini)
-dataset and trains a tiny semantic-segmentation model. A normal local run uses
-the same launcher with a research config:
+Download the 120-event mini dataset and train a tiny semantic-segmentation model on one GPU:
 
 ```bash
-uv run pimm launch \
-  --train.config panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft \
-  --resources.nproc-per-node 1
+uv run python -c "from huggingface_hub import snapshot_download; snapshot_download('DeepLearnPhysics/PILArNet-M-mini', repo_type='dataset', local_dir='data/PILArNet-M-mini')"
+
+uv run pimm launch --resources.nproc-per-node 1 --train.config tests/tiny_semseg -- \
+  data.train.data_root="$PWD/data/PILArNet-M-mini" \
+  data.val.data_root="$PWD/data/PILArNet-M-mini"
 ```
 
-Everything after a bare `--` overrides the Python training config:
+Flags before the bare `--` configure the launcher; `key=value` pairs after it override the training
+config. The run writes its config, log and checkpoints under `exp/tests/`.
+[First run](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html)
+walks through what it saves, `uv run pimm ls` lists every recipe, and
+[Scale up](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html) runs the
+same recipe on more GPUs or on Slurm with `pimm submit`.
 
-```bash
-uv run pimm launch \
-  --train.config tests/tiny_semseg \
-  --resources.nproc-per-node 1 \
-  -- epoch=2 batch_size=4 use_wandb=False
-```
+To train on another detector, write its events as `.npy` files or add a reader; see
+[Bring your own data](https://deeplearnphysics.org/particle-imaging-models/stable/data/your-data.html).
 
-For Slurm, use `pimm submit`; for portable weights and Hub publication, use
-`pimm export`. Each command has a complete reference in the
-[CLI guide](https://deeplearnphysics.org/particle-imaging-models/stable/reference/cli.html).
+## What's in pimm
 
-## Included research
-
-| Area | Implementations |
+| Area | Contents |
 |---|---|
-| Sparse backbones | Point Transformer v1/v2/v3, SparseUNet, LitePT, Volt |
-| Representation learning | Panda/Sonata, PoLAr-MAE |
-| Downstream tasks | semantic segmentation, PointGroup, Panda Detector |
-| Data | PILArNet-M v1/v2 and custom packed point-cloud datasets |
-| Scale | local `torchrun`, DDP, experimental FSDP2, Slurm via Submitit |
-| Portability | structured resume checkpoints, plain weights, Hugging Face exports |
+| Models | Panda (self-distillation) and PoLAr-MAE (masked point modeling) pretraining; semantic segmentation, the Panda detector and PointGroup task models; Point Transformer v1–v3, SparseUNet, LitePT and Volt backbones |
+| Data | PILArNet-M (HDF5 and Parquet), JAXTPC, LUCiD water Cherenkov, and a generic `.npy` reader |
+| Training | `torchrun` with DDP, an experimental FSDP2 path, Slurm through Submitit, and an experimental exex execution path |
+| Models out | Portable exports that `pimm.from_pretrained` loads from disk or Hugging Face |
 
-Released checkpoints and their exact output contracts are listed in the
-[model guide](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html).
-The [Panda](https://deeplearnphysics.org/particle-imaging-models/stable/models/panda.html) and [PoLAr-MAE](https://deeplearnphysics.org/particle-imaging-models/stable/models/polarmae.html) pages list each model's inputs, outputs and recipes.
-
-## Hardware
-
-The prebuilt CUDA stack targets NVIDIA compute capabilities 7.0–9.0:
-
-- V100 and RTX 20xx: disable Flash Attention and use FP16 or full precision;
-- A100, RTX 30xx/40xx, and H100/H200: Flash Attention and BF16 are supported;
-- L40S: disable Flash Attention; BF16 is supported.
-
-Panda's released PTv3 models currently require CUDA because they use `spconv`.
-Released PoLAr-MAE inference also runs on CPU, although CUDA is faster. Consult
-the [compatibility table](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/install.html#gpus)
-before starting a long run.
+pimm is research software; its APIs and recipes change between versions.
 
 ## Documentation
 
-| Question | Start here |
+| To | Read |
 |---|---|
-| How are events represented? | [Data conventions](https://deeplearnphysics.org/particle-imaging-models/stable/data/event-format.html) |
-| How do configs and overrides work? | [Configuration](https://deeplearnphysics.org/particle-imaging-models/stable/training/configs.html) |
-| How do I train or fine-tune? | [Training](https://deeplearnphysics.org/particle-imaging-models/stable/training/train.html) · [Fine-tuning](https://deeplearnphysics.org/particle-imaging-models/stable/models/fine-tune.html) |
-| What exactly is saved? | [Checkpoints and resume](https://deeplearnphysics.org/particle-imaging-models/stable/training/checkpoints.html) |
-| How do I use multiple GPUs or Slurm? | [Distributed training](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html) · [Slurm](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html#run-on-slurm) |
-| How do I add a model, loss, dataset, transform, or hook? | [Extending pimm](https://deeplearnphysics.org/particle-imaging-models/stable/develop/index.html) |
-| Something failed—what should I inspect? | [Troubleshooting](https://deeplearnphysics.org/particle-imaging-models/stable/training/troubleshooting.html) |
+| see how a config becomes a training run | [How pimm works](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/how-pimm-works.html) |
+| change a recipe or override it on the command line | [Configs and overrides](https://deeplearnphysics.org/particle-imaging-models/stable/training/configs.html) |
+| fine-tune a released model | [Fine-tune](https://deeplearnphysics.org/particle-imaging-models/stable/models/fine-tune.html) |
+| resume a run or find its checkpoints | [Checkpoints and resume](https://deeplearnphysics.org/particle-imaging-models/stable/training/checkpoints.html) |
+| export weights or publish them on Hugging Face | [Export and publish](https://deeplearnphysics.org/particle-imaging-models/stable/models/export.html) |
+| add a model, dataset, transform, loss or hook | [Add a component](https://deeplearnphysics.org/particle-imaging-models/stable/develop/add-component.html) |
+| fix a failed run | [Troubleshooting](https://deeplearnphysics.org/particle-imaging-models/stable/training/troubleshooting.html) |
+| look up a command, recipe, registered name or environment variable | [Reference](https://deeplearnphysics.org/particle-imaging-models/stable/reference/index.html) |
 
-## Contributing and citation
+## Contributing and citing
 
-Start with the [contributor guide](https://deeplearnphysics.org/particle-imaging-models/stable/develop/contributing.html)
-and open an issue before a large architectural change. Scientific results should
-record the full pimm commit, resolved config, data revision and transforms,
-checkpoint revision, and evaluation protocol. The
-[citation guide](https://deeplearnphysics.org/particle-imaging-models/stable/reference/cite.html)
-lists the software, model, backbone, and dataset records to preserve.
+See [Contributing](https://deeplearnphysics.org/particle-imaging-models/stable/develop/contributing.html).
+To cite pimm, cite the repository, the version you used and the papers behind the models and data;
+[Citing pimm](https://deeplearnphysics.org/particle-imaging-models/stable/reference/cite.html) has
+the BibTeX entries.
 
 pimm builds on [Pointcept](https://github.com/Pointcept/Pointcept),
-[torchtitan](https://github.com/pytorch/torchtitan), and
-[TorchRL](https://github.com/pytorch/rl). It is distributed under the
-[MIT License](LICENSE).
+[torchtitan](https://github.com/pytorch/torchtitan) and [TorchRL](https://github.com/pytorch/rl). It
+is distributed under the [MIT License](LICENSE).
