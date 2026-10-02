@@ -38,7 +38,7 @@ panda_transform = Compose([
 
 ## Recipes
 
-| Recipe | Trains |
+| Recipe | Trained |
 |---|---|
 | `panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask` | the Panda encoder, from scratch, with self-distillation |
 | `panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8` | the same with the `PT-v3m8` backbone |
@@ -50,7 +50,7 @@ panda_transform = Compose([
 | `panda/panseg/detector-v5-pt-v3m2-ft-vtx-{dec,fft,scratch}` | the interaction detector |
 | `panda/panseg/detector-v5-pt-v3m2-ft-{pid,vtx}-fft-detector` | the whole detector, starting from the released Particle or Interaction weights pinned in the recipe |
 
-The semantic and detector recipes start from `Panda-Base` when you pass `--train.weight hf://DeepLearnPhysics/Panda-Base`; see [Fine-tune](fine-tune.md). The detector recipes build `detector-v5`. The repository also registers `detector-v3m2`, `detector-v4` and `detector-v5m2`.
+To fine-tune the semantic and detector recipes from `Panda-Base`, pass `--train.weight hf://DeepLearnPhysics/Panda-Base`; see [Fine-tune](fine-tune.md). The detector recipes build `detector-v5`. The repository also registers `detector-v3m2`, `detector-v4` and `detector-v5m2`.
 
 ## Cite
 

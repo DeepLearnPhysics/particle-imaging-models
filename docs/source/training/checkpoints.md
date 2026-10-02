@@ -1,6 +1,6 @@
 # Checkpoints and resume
 
-pimm saves a checkpoint that continues training; `pimm export` makes a separate copy for inference and fine-tuning.
+During training, pimm saves checkpoints you can resume from; `pimm export` makes a separate copy for inference and fine-tuning.
 
 ## What's saved
 
@@ -59,6 +59,6 @@ When the position is dropped, the log warns that batches from the restarted epoc
 
 | Message | Meaning |
 |---|---|
-| `No weight found` | the weight path doesn't exist; pimm stops instead of training from scratch |
+| `No weight found` | the weight path doesn't exist; the run stops rather than start from random weights |
 | `Incomplete checkpoint directory` | the checkpoint lacks weights, trainer state or `.complete`; use an older complete one |
 | resume from `hf://` rejected | exports have no trainer state; warm-start a new run instead |

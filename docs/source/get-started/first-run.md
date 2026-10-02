@@ -56,7 +56,7 @@ exp/tests/tiny-semseg-2026-07-14_14-30-00/
 
 The log notes that revision `v2` is read as `v3`: the recipe names `v2`, and the reader serves it with the v3 layout that the mini files use.
 
-`--train.no-code-copy` trains straight from your checkout. Without it, pimm copies `pimm/` and `configs/` into the run's `code/` directory and trains from that copy.
+With `--train.no-code-copy`, the run imports pimm straight from your checkout. Without it, pimm copies `pimm/` and `configs/` into the run's `code/` directory, and the run imports that copy.
 
 ## 4. Look at what ran
 
