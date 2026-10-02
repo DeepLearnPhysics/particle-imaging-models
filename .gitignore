@@ -56,7 +56,7 @@ WORKFLOW-private-fork.md
 UV_MIGRATION_CLUSTER_HANDOFF.md
 *.scratch
 
-tools/
+/tools/
 scripts/
 !/.github/scripts/
 !/.github/scripts/**
