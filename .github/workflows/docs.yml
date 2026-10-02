@@ -2,29 +2,18 @@
 # pimm documentation — build & publish
 # =============================================================================
 #
-# Publishes the Sphinx docs to
+# Builds the Sphinx docs on every pull request and publishes pushes to main to
 #   https://deeplearnphysics.org/particle-imaging-models/stable/
 #
-# This mirrors how DeepLearnPhysics/doraemon_site deploys: NATIVE GitHub
-# Pages-from-Actions (actions/upload-pages-artifact + actions/deploy-pages) on
-# THIS repo's own `github-pages` environment. Because the org has a verified
-# custom domain (deeplearnphysics.org / www, cert already issued), GitHub serves
-# each project repo's Pages at  deeplearnphysics.org/<repo-name>/  — here that is
-# /particle-imaging-models/.  No deploy keys, no writing into another repo, no
-# CNAME in this workflow (the org owns the domain).
+# Native GitHub Pages from Actions on this repo's `github-pages` environment;
+# the org's verified domain serves each project's Pages at
+# deeplearnphysics.org/<repo-name>/. The site is built into _site/stable/ with a
+# root redirect, so the canonical URL is /particle-imaging-models/stable/
+# (matching conf.py `html_baseurl`).
 #
-# Why a `stable/` subdirectory? Native Pages serves ONE artifact at the repo
-# root (/particle-imaging-models/), and each deploy REPLACES the whole site. We
-# build into  _site/stable/  and drop a root redirect, so the canonical URL is
-# /particle-imaging-models/stable/ (matching conf.py `html_baseurl`). Adding
-# /latest/ + per-version slots later means merging previous content into the
-# single artifact — see docs/DEPLOYMENT.md.
-#
-# Build-environment note: `make -C docs html` runs gen_api.py and sphinx-autodoc,
-# both of which import the full training stack. Prebuilt native wheels let the
-# locked uv environment install and run directly on the CPU runner, so the docs
-# build no longer needs the CUDA image. The workflow is gated to the canonical
-# public repo.
+# `make -C docs html` runs docs/tools/gen_reference.py, which reads the CLI
+# parsers, configs and registries, then Sphinx with -W: any warning fails the
+# build. The workflow is gated to the canonical public repo.
 # =============================================================================
 
 name: Docs
@@ -38,6 +27,19 @@ on:
     paths:
       - 'docs/**'
       - 'pimm/**'
+      - 'configs/**'
+      - 'launch/**'
+      - 'scripts/**'
+      - 'uv.lock'
+      - 'pyproject.toml'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'pimm/**'
+      - 'configs/**'
+      - 'launch/**'
+      - 'scripts/**'
       - 'uv.lock'
       - 'pyproject.toml'
       - '.github/workflows/docs.yml'
@@ -82,6 +84,7 @@ jobs:
       # Assemble the Pages artifact: site under /stable/, plus a root redirect so
       # /particle-imaging-models/ lands on /particle-imaging-models/stable/.
       - name: Assemble Pages site
+        if: github.event_name != 'pull_request'
         run: |
           mkdir -p _site/stable
           cp -r docs/build/html/. _site/stable/
@@ -89,6 +92,7 @@ jobs:
           touch _site/.nojekyll
 
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
@@ -96,7 +100,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.repository == 'DeepLearnPhysics/particle-imaging-models'
+    if: github.repository == 'DeepLearnPhysics/particle-imaging-models' && github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

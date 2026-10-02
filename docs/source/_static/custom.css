@@ -1,569 +1,86 @@
-/* pimm docs: a quiet, scan-first skin on PyData Sphinx Theme. */
-
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("fonts/jetbrains-mono-latin-400.woff2") format("woff2");
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("fonts/jetbrains-mono-latin-700.woff2") format("woff2");
-}
+/* pimm docs: Atkinson Hyperlegible type and the logo's violet lit-pixel palette on the PyData theme. */
+@import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;0,700;1,400&display=swap");
 
 :root {
-  --pimm-blue: #176b87;
-  --pimm-blue-dark: #0c4f67;
-  --pimm-mint: #17a589;
-  --pimm-amber: #e69b2e;
-  --pimm-radius: 10px;
-  --pst-font-size-base: 16px;
+  --pst-font-family-base: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --pst-font-family-heading: var(--pst-font-family-base);
+  --pst-font-family-monospace: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --pst-font-size-base: 16.5px;
 }
 
 html[data-theme="light"] {
-  --pst-color-primary: #176b87;
-  --pst-color-primary-highlight: #0c4f67;
-  --pst-color-secondary: #17a589;
-  --pst-color-accent: #e69b2e;
-  --pst-color-link: #176b87;
-  --pst-color-link-hover: #0c4f67;
-  --pst-color-inline-code: #263849;
-  --pst-color-surface: #f5f8fa;
-  --pst-color-table-row-hover-bg: #edf5f7;
+  --pst-color-primary: #6a3fd6;
+  --pst-color-primary-highlight: #4c2aa8;
+  --pst-color-secondary: #6a3fd6;
+  --pst-color-accent: #6a3fd6;
+  --pst-color-link: #6a3fd6;
+  --pst-color-link-hover: #4c2aa8;
+  --pst-color-background: #fcfcfe;
+  --pst-color-on-background: #fcfcfe;
+  --pst-color-surface: #f4f2f9;
+  --pst-color-on-surface: #1f1b2e;
+  --pst-color-text-base: #1f1b2e;
+  --pst-color-text-muted: #5d5872;
+  --pst-color-border: #e1dded;
+  --pst-color-inline-code: #1f1b2e;
+  --pst-color-inline-code-links: #6a3fd6;
+  --pimm-pix-off: #e7e3f0;
+  --pimm-pix-mid: #b8acd6;
+  --pimm-pix-on: #6a3fd6;
+  --pimm-pix-vtx: #1f1b2e;
+  --pimm-accent-soft: #f0ebfd;
 }
 
 html[data-theme="dark"] {
-  --pst-color-primary: #66c9e4;
-  --pst-color-primary-highlight: #91d9ec;
-  --pst-color-secondary: #5bd6bd;
-  --pst-color-accent: #f2b44f;
-  --pst-color-link: #66c9e4;
-  --pst-color-link-hover: #91d9ec;
-  --pst-color-inline-code: #d4e0e8;
-  --pst-color-table-row-hover-bg: #1e333d;
-}
-
-body {
-  letter-spacing: -0.005em;
-}
-
-.bd-page-width {
-  max-width: 1580px;
-}
-
-.bd-header {
-  border-bottom: 1px solid var(--pst-color-border);
-  box-shadow: none;
-}
-
-.navbar-brand {
-  gap: 0.45rem;
-}
-
-.navbar-brand img {
-  height: 30px;
-  width: auto;
-}
-
-.navbar-brand .logo__title {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 1.08rem;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-}
-
-.navbar-nav > .nav-item > .nav-link {
-  font-size: 0.9rem;
-  font-weight: 550;
-}
-
-.bd-header-announcement {
-  background: #e0c7ff;
-  color: var(--pst-color-text-base);
-  font-size: 0.82rem;
-  border-bottom: 1px solid #c7a6ed;
-}
-
-
-html[data-theme="dark"] .bd-header-announcement {
-  background: #4c365f;
-  border-bottom-color: #6c4e82;
-}
-
-@media (min-width: 960px) {
-  .bd-sidebar-primary {
-    width: 17.5rem;
-    flex-basis: 17.5rem;
-  }
-
-  .bd-main .bd-content .bd-article-container {
-    max-width: 58rem;
-  }
-}
-
-.bd-sidebar-primary,
-.bd-sidebar-secondary {
-  scrollbar-width: thin;
-}
-
-.bd-sidebar-primary .nav-link {
-  font-size: 0.86rem;
-  line-height: 1.35;
-  padding-block: 0.28rem;
-}
-
-.bd-sidebar-primary li.toctree-l1 > a {
-  font-weight: 620;
-}
-
-.bd-article h1 {
-  font-size: clamp(2rem, 4vw, 2.7rem);
-  line-height: 1.08;
-  letter-spacing: -0.04em;
-  margin-bottom: 0.75rem;
-}
-
-.bd-article h2 {
-  font-size: 1.5rem;
-  letter-spacing: -0.025em;
-  margin-top: 2.7rem;
-}
-
-.bd-article h3 {
-  font-size: 1.13rem;
-  margin-top: 2rem;
-}
-
-.bd-article > p,
-.bd-article li {
-  line-height: 1.68;
-}
-
-a.reference code,
-a.reference .pre,
-code.xref,
-code.xref .pre {
-  color: var(--pst-color-link);
-}
-
-div.highlight {
-  border: 1px solid var(--pst-color-border);
-  border-radius: var(--pimm-radius);
-  box-shadow: none;
-}
-
-div.highlight pre {
-  font-size: 0.85rem;
-  line-height: 1.55;
-}
-
-code,
-kbd,
-pre {
-  font-variant-ligatures: none;
-}
-
-table.docutils {
-  font-size: 0.9rem;
-}
-
-table.docutils td,
-table.docutils th {
-  padding: 0.62em 0.78em;
-  vertical-align: top;
-}
-
-.admonition {
-  border-radius: var(--pimm-radius);
-  box-shadow: none;
-}
-
-/* Landing page */
-.pimm-hero {
-  padding: 2.3rem 0 1.35rem;
-  max-width: 52rem;
-}
-
-.pimm-eyebrow {
-  color: var(--pst-color-primary);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  margin-bottom: 0.7rem;
-}
-
-.pimm-hero .rubric {
-  border: 0;
-  color: var(--pst-color-text-base);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: clamp(2.35rem, 6vw, 4.2rem);
-  font-weight: 700;
-  letter-spacing: -0.07em;
-  line-height: 0.98;
-  margin: 0 0 1rem;
-}
-
-.pimm-tagline {
-  color: var(--pst-color-text-muted);
-  display: block;
-  font-size: clamp(1.04rem, 2vw, 1.25rem);
-  line-height: 1.55;
-  max-width: 46rem;
-}
-
-.pimm-hero p:has(.sd-btn) {
-  display: inline-block;
-  margin: 0.75rem 0.5rem 0 0;
-}
-
-.pimm-hero .sd-btn {
-  border-radius: 8px;
-  font-weight: 620;
-}
-
-.pimm-card-grid .sd-card {
-  border: 1px solid var(--pst-color-border);
-  border-radius: var(--pimm-radius);
-  box-shadow: none;
-  height: 100%;
-  transition: border-color 120ms ease, transform 120ms ease;
-}
-
-.pimm-card-grid .sd-card:hover {
-  border-color: var(--pst-color-primary);
-  transform: translateY(-2px);
-}
-
-.pimm-card-grid .sd-card-title {
-  font-size: 1rem;
-  font-weight: 680;
-}
-
-.pimm-card-grid .sd-card-text {
-  color: var(--pst-color-text-muted);
-  font-size: 0.9rem;
-  line-height: 1.55;
-}
-
-.pimm-callout {
-  border-left: 3px solid var(--pst-color-primary);
-  background: color-mix(in srgb, var(--pst-color-primary) 6%, transparent);
-  border-radius: 0 var(--pimm-radius) var(--pimm-radius) 0;
-  margin: 1.5rem 0;
-  padding: 0.9rem 1.1rem;
-}
-
-.pimm-callout p:last-child {
-  margin-bottom: 0;
-}
-
-.pimm-steps {
-  counter-reset: pimm-step;
-  list-style: none;
-  padding-left: 0;
-}
-
-.pimm-steps > li {
-  counter-increment: pimm-step;
-  border-top: 1px solid var(--pst-color-border);
-  padding: 1rem 0 1rem 3rem;
-  position: relative;
-}
-
-.pimm-steps > li::before {
-  content: counter(pimm-step);
-  position: absolute;
-  left: 0;
-  top: 0.95rem;
-  width: 1.85rem;
-  height: 1.85rem;
-  border: 1px solid var(--pst-color-primary);
-  border-radius: 50%;
-  color: var(--pst-color-primary);
-  display: grid;
-  place-items: center;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.pimm-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  border: 1px solid var(--pst-color-border);
-  border-radius: 999px;
-  color: var(--pst-color-text-muted);
-  font-size: 0.76rem;
-  padding: 0.2rem 0.55rem;
-}
-
-.pimm-status::before {
-  background: var(--pimm-mint);
-  border-radius: 50%;
-  content: "";
-  height: 0.42rem;
-  width: 0.42rem;
-}
-
-.hidden-autosummary {
-  display: none !important;
-}
-
-.pimm-pipeline {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.65rem;
-  margin: 1.25rem 0 1.75rem;
-}
-
-.pimm-pipeline span {
-  align-items: center;
-  background: color-mix(in srgb, var(--pst-color-primary) 5%, transparent);
-  border: 1px solid var(--pst-color-border);
-  border-radius: var(--pimm-radius);
-  display: flex;
-  font-size: 0.86rem;
-  font-weight: 640;
-  min-height: 3.2rem;
-  padding: 0.75rem 2rem 0.75rem 0.85rem;
-  position: relative;
-}
-
-.pimm-pipeline span:not(:last-child)::after {
-  color: var(--pst-color-primary);
-  content: "\2192";
-  font-size: 1.2rem;
-  position: absolute;
-  right: 0.65rem;
-}
-
-@media (max-width: 720px) {
-  .pimm-hero {
-    padding-top: 1.2rem;
-  }
-
-  .pimm-hero .rubric {
-    font-size: 2.5rem;
-  }
-
-  .pimm-pipeline {
-    grid-template-columns: 1fr;
-  }
-
-  .pimm-pipeline span:not(:last-child)::after {
-    content: "\2193";
-  }
-}
-
-/* Components introduced by the rewritten documentation. */
-/* Pretty "at a glance" definition pairs. */
-.pimm-kv dt {
-  color: var(--pst-color-primary);
-  font-weight: 700;
-}
-
-/* --- Flow / pipeline diagrams ---------------------------------------------
-   Theme-aware (keys off --pst-* tokens, so it tracks light/dark automatically).
-   Used on the concepts page to replace the ASCII data-flow art. */
-.pimm-flow {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 1.75rem 0;
-}
-.pimm-flow .pimm-node {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.4rem 0.85rem;
-  border: 1px solid var(--pst-color-border);
-  border-radius: 9px;
-  background: var(--pst-color-surface);
-  color: var(--pst-color-text-base);
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.86rem;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.pimm-flow .pimm-node.is-primary {
-  border-color: var(--pst-color-primary);
-  color: var(--pst-color-primary);
-  font-weight: 600;
-}
-.pimm-flow .pimm-node.is-accent {
-  border-color: var(--pst-color-secondary);
-  color: var(--pst-color-secondary);
-  font-weight: 600;
-}
-.pimm-flow .pimm-row,
-.pimm-flow .pimm-pipe {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-}
-.pimm-flow .pimm-arrow {
-  color: var(--pst-color-text-muted);
-  font-size: 1rem;
-  line-height: 1;
-  user-select: none;
-}
-.pimm-flow .pimm-arrow.down {
-  font-size: 1.15rem;
-}
-.pimm-flow .pimm-label {
-  color: var(--pst-color-text-muted);
-  font-size: 0.74rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.pimm-flow .pimm-panel {
-  width: 100%;
-  max-width: 30rem;
-  border: 1px solid var(--pst-color-border);
-  border-radius: 11px;
-  overflow: hidden;
-  background: var(--pst-color-on-background);
-}
-.pimm-flow .pimm-panel-title {
-  padding: 0.45rem 0.9rem;
-  background: var(--pst-color-primary);
-  color: #fff;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.84rem;
-  font-weight: 600;
-}
-.pimm-flow .pimm-panel ol {
-  counter-reset: pimm-step;
-  list-style: none;
-  margin: 0;
-  padding: 0.55rem 0.9rem 0.7rem;
-}
-.pimm-flow .pimm-panel ol li {
-  counter-increment: pimm-step;
-  position: relative;
-  padding: 0.18rem 0 0.18rem 1.8rem;
-  font-size: 0.86rem;
-  color: var(--pst-color-text-base);
-}
-.pimm-flow .pimm-panel ol li::before {
-  content: counter(pimm-step);
-  position: absolute;
-  left: 0;
-  top: 0.18rem;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 50%;
-  background: var(--pst-color-surface);
-  border: 1px solid var(--pst-color-border);
-  color: var(--pst-color-text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-align: center;
-  line-height: 1.25rem;
-}
-.pimm-flow .pimm-panel ol li code {
-  font-size: 0.82rem;
-}
-
-/* Scan-first cards and lifecycle strip used by the task-oriented landing
-   pages. These deliberately inherit the original pimm palette above. */
-.pimm-card-grid .sd-card {
-  border: 1px solid var(--pst-color-border);
-  border-radius: var(--pimm-radius);
-  box-shadow: none;
-  height: 100%;
-  transition: border-color 120ms ease, transform 120ms ease;
-}
-
-.pimm-card-grid .sd-card:hover {
-  border-color: var(--pst-color-primary);
-  transform: translateY(-2px);
-}
-
-.pimm-card-grid .sd-card-title {
-  font-size: 1rem;
-  font-weight: 680;
-}
-
-.pimm-card-grid .sd-card-text {
-  color: var(--pst-color-text-muted);
-  font-size: 0.9rem;
-  line-height: 1.55;
-}
-
-.pimm-pipeline {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.65rem;
-  margin: 1.25rem 0 1.75rem;
-}
-
-.pimm-pipeline span {
-  align-items: center;
-  background: color-mix(in srgb, var(--pst-color-primary) 5%, transparent);
-  border: 1px solid var(--pst-color-border);
-  border-radius: var(--pimm-radius);
-  display: flex;
-  font-size: 0.86rem;
-  font-weight: 640;
-  min-height: 3.2rem;
-  padding: 0.75rem 2rem 0.75rem 0.85rem;
-  position: relative;
-}
-
-.pimm-pipeline span:not(:last-child)::after {
-  color: var(--pst-color-primary);
-  content: "\2192";
-  font-size: 1.2rem;
-  position: absolute;
-  right: 0.65rem;
-}
-
-/* Unresolved documentation work must be unmistakable and searchable. */
-.admonition.pimm-todo {
-  border-color: #c62828;
-  border-left: 4px solid #c62828;
-}
-
-.admonition.pimm-todo > .admonition-title {
-  background: color-mix(in srgb, #c62828 12%, transparent);
-  color: #c62828;
-}
-
-@media (max-width: 720px) {
-  .pimm-pipeline {
-    grid-template-columns: 1fr;
-  }
-
-  .pimm-pipeline span:not(:last-child)::after {
-    content: "\2193";
-  }
-}
-
-/* Interactive tutorial figures retain the later full-width sizing fix. */
-.bd-article .pimm-plotly-frame {
-  border: 0;
-  display: block;
-  height: 580px;
-  margin: 1.25rem 0;
-  max-width: 100%;
-  width: 100%;
-}
-
-.bd-article .pimm-plotly-frame-wide {
-  height: 640px;
-}
-
-@media (max-width: 720px) {
-  .bd-article .pimm-plotly-frame,
-  .bd-article .pimm-plotly-frame-wide {
-    height: 520px !important;
-  }
-}
+  --pst-color-primary: #ab8dff;
+  --pst-color-primary-highlight: #c8b6ff;
+  --pst-color-secondary: #ab8dff;
+  --pst-color-accent: #ab8dff;
+  --pst-color-link: #ab8dff;
+  --pst-color-link-hover: #c8b6ff;
+  --pst-color-background: #131019;
+  --pst-color-on-background: #1b1725;
+  --pst-color-surface: #1b1725;
+  --pst-color-on-surface: #ece9f6;
+  --pst-color-text-base: #ece9f6;
+  --pst-color-text-muted: #a39eb8;
+  --pst-color-border: #2e2942;
+  --pst-color-inline-code: #ece9f6;
+  --pst-color-inline-code-links: #ab8dff;
+  --pimm-pix-off: #29243a;
+  --pimm-pix-mid: #5a4f82;
+  --pimm-pix-on: #ab8dff;
+  --pimm-pix-vtx: #f3efff;
+  --pimm-accent-soft: #241d3b;
+}
+
+.bd-article { max-width: 46rem; }
+.bd-article h1 { letter-spacing: -0.02em; }
+.bd-article h2 { letter-spacing: -0.01em; margin-top: 2.4rem; }
+code.literal { background-color: var(--pst-color-surface); border-color: var(--pst-color-border); }
+
+/* Landing page: the logo's pixels light up once, then stay lit. */
+.hero-mark { width: 124px; height: 124px; margin: 0.5rem 0 1rem; }
+.hero-mark svg { width: 100%; height: 100%; }
+.hero-mark .px-off { fill: var(--pimm-pix-off); }
+.hero-mark .px-mid { fill: var(--pimm-pix-mid); }
+.hero-mark .px-vtx { fill: var(--pimm-pix-vtx); }
+.hero-mark .px-on { fill: var(--pimm-pix-on); animation: pimm-lit 0.5s ease-out both; animation-delay: calc(var(--i, 0) * 45ms + 120ms); }
+@keyframes pimm-lit { from { fill: var(--pimm-pix-off); } to { fill: var(--pimm-pix-on); } }
+@media (prefers-reduced-motion: reduce) { .hero-mark .px-on { animation: none; } }
+.hero-mark + section > h1 { font-size: clamp(2.6rem, 7vw, 3.4rem); margin-top: 0; }
+.hero-mark + section > h1 + p { font-size: 1.15rem; }
+@media (min-width: 900px) {
+  .hero-mark + section dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 1.75rem; }
+  .hero-mark + section dl dt { grid-row: 1; }
+  .hero-mark + section dl dd { grid-row: 2; margin-left: 0; }
+}
+
+/* 3D event viewer (pimm.js). */
+.event-viewer { border: 1px solid var(--pst-color-border); border-radius: 10px; margin: 0 0 0.8rem; overflow: hidden; background: var(--pst-color-surface); }
+.ev-bar { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--pst-color-border); background: var(--pst-color-background); }
+.ev-bar button { border: 1px solid var(--pst-color-border); background: none; border-radius: 6px; padding: 4px 11px; font-size: 0.88rem; cursor: pointer; color: var(--pst-color-text-muted); }
+.ev-bar button[aria-pressed="true"] { background: var(--pimm-accent-soft); color: var(--pst-color-primary); border-color: var(--pst-color-primary); }
+.ev-plot { height: 430px; position: relative; }
+.ev-status { position: absolute; inset: 0; display: grid; place-items: center; color: var(--pst-color-text-muted); margin: 0; padding: 0 16px; text-align: center; }
+@media (max-width: 720px) { .ev-plot { height: 360px; } }
