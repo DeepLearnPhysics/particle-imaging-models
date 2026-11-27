@@ -102,5 +102,4 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="SemSegEvaluator", every_n_steps=1000, write_cls_iou=True),
     dict(type="CheckpointSaver", save_freq=None, evaluator_every_n_steps=1000),
-    dict(type="PreciseEvaluator", test_last=False),
 ]

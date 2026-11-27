@@ -80,6 +80,21 @@ transform = [
     ),
 ]
 
+eval_transform = [
+    transform[0],
+    transform[1],
+    dict(type="Copy", keys_dict={"segment_motif": "origin_segment"}),
+    dict(transform[2], mode="deterministic", return_inverse=True),
+    transform[3],
+    dict(type="ToTensor"),
+    dict(
+        type="Collect",
+        keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+        feat_keys=("coord", "energy"),
+        offset_keys_dict=dict(offset="coord", origin_offset="inverse"),
+    ),
+]
+
 data = dict(
     num_classes=5,
     ignore_index=-1,
@@ -87,7 +102,7 @@ data = dict(
     train=dict(
         type="PILArNetH5Dataset",
         data_root=None,
-        revision="v2",
+        revision="v3",
         split="train",
         transform=transform,
         min_points=0,
@@ -96,9 +111,9 @@ data = dict(
     val=dict(
         type="PILArNetH5Dataset",
         data_root=None,
-        revision="v2",
+        revision="v3",
         split="val",
-        transform=transform,
+        transform=eval_transform,
         min_points=0,
         max_len=20,
     ),

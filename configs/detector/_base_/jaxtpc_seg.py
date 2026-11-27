@@ -44,19 +44,22 @@ test_transform = [
     dict(type="PDGToSemantic", scheme="motif_5cls"),
     dict(type="NormalizeCoord", center=_center, scale=_scale),
     dict(type="LogTransform", min_val=0.01, max_val=20.0),
+    dict(type="Copy", keys_dict={"segment_motif": "origin_segment"}),
     dict(
         type="GridSample",
         grid_size=grid_size,
         hash_type="fnv",
-        mode="train",
+        mode="deterministic",
         return_grid_coord=True,
+        return_inverse=True,
     ),
     dict(type="Copy", keys_dict={"segment_motif": "segment"}),
     dict(type="ToTensor"),
     dict(
         type="Collect",
-        keys=("coord", "grid_coord", "segment"),
+        keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
         feat_keys=("coord", "energy"),
+        offset_keys_dict=dict(offset="coord", origin_offset="inverse"),
     ),
 ]
 
