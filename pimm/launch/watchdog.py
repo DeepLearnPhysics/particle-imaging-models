@@ -6,22 +6,17 @@ driven by a foreground process that ``salloc``s each slot in turn (see
 with the shell / SSH session / login-node reboot, orphaning the whole chain -
 no queued job carries on.
 
-This module hosts that driver as a ``scron`` job on the login-node ``cron``
-partition instead. ``scron`` does not overlap instances and reschedules across
-login-node reboots, so the driver is resurrected (on any login node) within one
-tick and resumes from the last checkpoint. Every slot stays interactive;
+This module hosts that driver as a ``scron`` job. ``scron`` serializes instances
+and reschedules them across login-node reboots, so the driver resumes from the
+last checkpoint within one tick. Every slot stays interactive;
 nothing ever becomes a batch job.
-
-Kept separate from ``submit.py`` on purpose: ``submit.py`` renders/queues a
-single launch, this module owns the cross-restart *supervision* lifecycle
-(wrapper script + scrontab entry + state).
 
 The driver's own re-invocation of ``pimm submit --interactive`` must run the
 foreground chain, not recurse into installing another watchdog; the wrapper
-sets ``PIMM_WATCHDOG_CHILD=1`` and ``run_submit`` honours it (see
+thus sets ``PIMM_WATCHDOG_CHILD=1`` and ``run_submit`` honours it (see
 ``submit.run_submit``).
 
-NOTE: This has only been tested on NERSC, which has a `cron` partition.
+Requires a site configured with scron; the driver uses the configured or default QOS.
 """
 
 from __future__ import annotations
@@ -58,7 +53,7 @@ def _model_dir(cfg: dict[str, Any], run_name: str) -> Path:
 
 def _watchdog_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     wd = dict(cfg.get("watchdog") or {})
-    wd.setdefault("qos", "cron")
+    wd.setdefault("qos", None)
     wd.setdefault("interval_min", 5)
     wd.setdefault("time", "1-00:00:00")
     return wd
@@ -230,15 +225,14 @@ def _build_block(cfg: dict[str, Any], run_name: str, driver_path: Path) -> str:
     account = cfg.get("resources", {}).get("account")
     if not account:
         raise SystemExit(
-            "watchdog: resources.account is required (scron's 'cron' QOS needs -A). "
+            "watchdog: resources.account is required. "
             "Set it via --resources.account or the site config."
         )
-    # scron submits under the `cron` QOS (login nodes); it requires an account and
-    # caps walltime (1 day on NERSC), after which scron re-fires and resumes.
+    # scron restarts the driver after the configured walltime.
     return "\n".join(
         [
             _begin(run_name),
-            f"#SCRON -q {wd['qos']}",
+            *([f"#SCRON -q {wd['qos']}"] if wd["qos"] else []),
             f"#SCRON -A {account}",
             f"#SCRON -t {wd['time']}",
             f"#SCRON -J {job}-watchdog",
@@ -362,7 +356,7 @@ def install_watchdog(
         f"{'=' * 80}\n"
         f"Interactive chain watchdog installed for run: {run_name}\n"
         f"  driver:   {driver_path}\n"
-        f"  scron:    every {wd['interval_min']} min under QOS '{wd['qos']}' "
+        f"  scron:    every {wd['interval_min']} min under QOS '{wd['qos'] or 'default'}' "
         f"(starts within {wd['interval_min']} min)\n"
         f"  log:      {sd / 'driver.log'}\n"
         f"{'=' * 80}\n"

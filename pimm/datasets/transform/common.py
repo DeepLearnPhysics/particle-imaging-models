@@ -25,9 +25,6 @@ from collections.abc import Sequence, Mapping
 
 from pimm.utils.registry import Registry
 from typing import Optional
-# from cnms import cnms
-# from pytorch3d import _C
-# from pytorch3d.ops import ball_query, knn_points
 
 TRANSFORMS = Registry("transforms")
 """Registry for config-built dataset transforms."""

@@ -58,7 +58,7 @@ def test_reviewed_metric_baseline(
         "eval_save_path": str(output_dir),
         "batch_size_test": 1,
         "data.test.data_root": str(pilarnet_mini_root),
-        "data.test.revision": "v2",
+        "data.test.revision": "v3",
         "data.test.split": "test",
         "data.test.max_len": manifest["dataset"]["event_count"],
         "data.test.min_points": 0,

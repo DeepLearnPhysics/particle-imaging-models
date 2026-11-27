@@ -22,7 +22,6 @@ def parse_command(
         argv,
         launch_timestamp=launch_timestamp,
         prog="pimm launch",
-        require_site=False,
     )
 
 

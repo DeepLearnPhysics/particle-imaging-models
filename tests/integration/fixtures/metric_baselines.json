@@ -23,7 +23,7 @@
   },
   "baselines": {
     "semantic": {
-      "config": "configs/panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft.py",
+      "config": "configs/panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft.py",
       "model_uri": "hf://DeepLearnPhysics/panda-semantic@c1cdee0262a08b2e0f0c60a6b33128e0d3622554",
       "model_revision": "c1cdee0262a08b2e0f0c60a6b33128e0d3622554",
       "evaluator": {
@@ -52,7 +52,7 @@
       }
     },
     "particle": {
-      "config": "configs/panda/panseg/detector-v5-pt-v3m2-ft-pid-fft-detector.py",
+      "config": "configs/panda/v1/panseg/pt-v3m2-ft-pid-fft-detector.py",
       "model_uri": "hf://DeepLearnPhysics/panda-particle@bd90792dfe83cd05b437b719564b311f0a0b785a",
       "model_revision": "bd90792dfe83cd05b437b719564b311f0a0b785a",
       "model_overrides": {

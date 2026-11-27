@@ -10,7 +10,7 @@ Minimal NERSC example:
 pimm submit \
   --site nersc \
   --chain.jobs 4 \
-  --run.name e050-tail-chain \
+  --run.name pretrain-chain \
   --resources.time 02:00:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```

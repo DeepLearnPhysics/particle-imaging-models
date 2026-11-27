@@ -96,8 +96,9 @@ class MultiViewGenerator(object):
             of the major view rather than freshly cropped. Defaults to
             ``False``.
         center_sampling (str): Center-selection strategy, ``"random"`` or
-            ``"cnms"`` (coverage non-max suppression). Defaults to ``"random"``.
-        center_sampling_kwargs (dict, optional): Extra kwargs for ``cnms`` when
+            ``"cnms"`` (centrality-based non-maximum suppression). Defaults to ``"random"``.
+        center_sampling_kwargs (dict, optional): ``radius``, ``overlap_factor``
+            and ``K`` for ``pimm.models.polarmae.ops.cnms`` when
             ``center_sampling="cnms"``. Defaults to ``None``.
         view_keys (tuple): Keys cropped into each view; must include ``"coord"``.
             Defaults to ``("coord", "origin_coord", "color", "normal")``.
@@ -192,8 +193,12 @@ class MultiViewGenerator(object):
         else:
             possible_centers = coord[np.where(mask)[0]]
         if self.center_sampling == "cnms":
-            from cnms import cnms
-            possible_centers, _, _ = cnms(possible_centers, **self.center_sampling_kwargs)
+            from pimm.models.polarmae.ops import cnms
+
+            points = torch.from_numpy(possible_centers).float()[None]
+            lengths = torch.tensor([points.shape[1]])
+            centers, count = cnms(points, lengths=lengths, **self.center_sampling_kwargs)
+            possible_centers = centers[0, : int(count)].numpy()
         return possible_centers[np.random.choice(possible_centers.shape[0])]
 
     def _build_global_views(self, point, major_view):

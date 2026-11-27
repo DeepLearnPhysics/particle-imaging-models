@@ -18,7 +18,7 @@ except ImportError:
 
     warnings.warn("Please follow `README.md` to install spconv2.`")
 
-from timm.layers import trunc_normal_
+from torch.nn.init import trunc_normal_
 from pimm.models.builder import MODELS
 
 

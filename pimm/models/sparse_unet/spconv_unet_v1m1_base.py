@@ -12,9 +12,9 @@ import torch
 import torch.nn as nn
 
 import spconv.pytorch as spconv
-from torch_geometric.utils import scatter
+from pimm.models.utils.misc import scatter_mean
 
-from timm.layers import trunc_normal_
+from torch.nn.init import trunc_normal_
 
 from pimm.models.builder import MODELS
 from pimm.models.utils import offset2batch
@@ -275,7 +275,7 @@ class SpUNetBase(nn.Module):
         x = self.final(x)
         if self.cls_mode:
             x = x.replace_feature(
-                scatter(x.features, x.indices[:, 0].long(), reduce="mean", dim=0)
+                scatter_mean(x.features, x.indices[:, 0].long())
             )
         return x.features
 

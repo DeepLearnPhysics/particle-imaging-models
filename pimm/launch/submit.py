@@ -287,7 +287,7 @@ def submit(cfg: dict[str, Any], run_name: str) -> str:
     """Submit one Slurm job through submitit."""
     if scheduler(cfg) != "slurm":
         raise SystemExit(
-            "pimm submit requires resources.scheduler='slurm', e.g. --site s3df"
+            "pimm submit requires resources.scheduler='slurm', e.g. --site slurm"
         )
     repo_root = Path(str(cfg.get("paths", {}).get("repo_root", ROOT)))
     cwd = repo_root if repo_root.exists() else ROOT
@@ -349,8 +349,8 @@ def build_interactive_argv(
     interactive run each attempt passes its own pre-rendered script (the later
     ones carry `-r true`), so the salloc flags below are shared while the inner
     training segment differs per attempt. The Slurm flags mirror the batch
-    parameters. The QOS is ``resources.qos`` -- for NERSC's interactive queue
-    pass ``--resources.qos interactive`` (or ``shared_interactive``).
+    parameters. Set the interactive queue with ``--resources.qos`` according
+    to the cluster's Slurm configuration.
     """
     res = resources(cfg)
     resource_cfg = cfg.get("resources", {})

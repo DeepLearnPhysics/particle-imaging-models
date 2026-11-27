@@ -5,9 +5,9 @@ Find the symptom, run the check, apply the fix.
 ## Installation
 
 `error: Failed to spawn: pimm`
-: `uv run` was called outside the checkout. Run from the repository root or use `uv run --project /path/to/particle-imaging-models`.
+: You ran `uv run` outside the checkout. Run from the repository root or use `uv run --project /path/to/particle-imaging-models`.
 
-`ModuleNotFoundError` for `spconv`, `pointops` or another native package
+`ModuleNotFoundError` for `spconv` or another native package
 : Run `uname -srm` (training needs Linux x86-64), `uv lock --check`, then `uv sync --locked`.
 
 `torch.cuda.is_available()` is `False`
@@ -16,24 +16,24 @@ Find the symptom, run the check, apply the fix.
 ## Data
 
 `PILArNet data root not found`
-: Set `data_root` in the config, export `PILARNET_DATA_ROOT_V3`, or download into `~/.cache/pimm/pilarnet/v3`. On a cluster, put the variable in the site profile's `env:` so compute nodes see it.
+: Set `data_root` in the config, export `PILARNET_DATA_ROOT_V3`, or download into `~/.cache/pimm/pilarnet/v3`. On a cluster, put the variable in the site profile's `env:` so that it is set on compute nodes.
 
 `PILArNet revision='v1' is not supported`
-: The recipe names revision `v1`. Override each split to `v3`, for example `data.train.revision=v3 data.val.revision=v3`.
+: The recipe is set to revision `v1`. Override each split to `v3`, for example `data.train.revision=v3 data.val.revision=v3`.
 
 `Key ... not found` in a transform
-: The reader didn't emit the key, or an earlier transform removed or renamed it. Apply the transforms one at a time and print the keys after each.
+: The key is not in the reader's output, or it was removed or renamed in an earlier transform. Apply the transforms one at a time and print the keys after each.
 
 Point fields have different lengths
-: A per-point key is missing from `index_valid_keys`, so subsampling skipped it. See [Transforms](../data/transforms.md#point-aligned-keys).
+: A per-point key is missing from `index_valid_keys`, so the key was skipped in subsampling. See [Transforms](../data/transforms.md#point-aligned-keys).
 
 ## Launcher and Slurm
 
 A launcher flag is rejected
-: Launcher flags are dotted, such as `--resources.nproc-per-node`. Training values go after `--` as `key=value`. `uv run pimm launch --help` lists the flags.
+: Launcher flags are dotted, such as `--resources.nproc-per-node`. Training values go after `--` as `key=value`. Run `uv run pimm launch --help` to list the flags.
 
-The job asked for the wrong account, partition or GPUs
-: Run the same command with `--dry-run` and read the script. Check the site profile; without `--site`, `pimm submit` uses `s3df`.
+The job has the wrong account, partition or GPUs
+: Run the same command with `--dry-run` and read the script. If you run `pimm submit` without `--site`, you get the generic `slurm` profile. Set your account and partition through `--resources.*` or a site file.
 
 A multi-node job hangs at NCCL initialization
 : Run one GPU on one node with the same image and data first, then check the site's network-interface settings and the rendezvous values in the dry run.
@@ -41,10 +41,10 @@ A multi-node job hangs at NCCL initialization
 ## Training
 
 `batch_size` assertion fails
-: Batch sizes are global and must divide by the number of GPUs.
+: Batch sizes are global and must be divisible by the number of GPUs.
 
-CUDA runs out of memory after many steps
-: Events differ in size, so one large event can overflow a batch. Log the total points per batch and the GPU memory to find it.
+The GPU runs out of memory after many steps
+: Events differ in size, so a batch with one large event can exceed the GPU memory. Log the total points per batch and the GPU memory to find that batch.
 
 Loss is NaN
 : On a few events, log the loss components and gradient norm (`GradientNormLogger`), then rerun with `enable_amp=False`.

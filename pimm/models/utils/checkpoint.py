@@ -5,7 +5,11 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import contextlib
+import weakref
+
 import torch
+import torch.utils.checkpoint
 
 
 class CheckpointFunction(torch.autograd.Function):
@@ -55,3 +59,41 @@ def checkpoint(func, inputs, params, flag):
         return CheckpointFunction.apply(func, len(inputs), *args)
     else:
         return func(*inputs)
+
+
+class _RecomputedTensor:
+    """Saved-tensor hooks that store ``input`` in place of ``tensor = fn(input)`` and recompute it when unpacked."""
+
+    def __init__(self, tensor, fn, input):
+        self.tensor = weakref.ref(tensor)  # weak, so the tensor itself can be freed
+        self.fn = fn
+        self.input = input
+
+    def pack(self, saved):
+        return self if saved is self.tensor() else saved
+
+    def unpack(self, saved):
+        return self.fn(self.input) if saved is self else saved
+
+
+def recompute_activation(act, hidden, *layers):
+    """``layers``, in order, applied to ``act(hidden)`` without keeping ``act(hidden)`` alive until backward.
+
+    For a cheap deterministic ``act`` whose input is saved anyway, such as a GELU, the backward recomputes the
+    activation from ``hidden`` instead; outputs and gradients are unchanged and no layer is recomputed. Eager code
+    swaps the saved activation through saved-tensor hooks; inside compiled regions the activation is checkpointed,
+    so Inductor recomputes it rather than saving it.
+    """
+    context = contextlib.nullcontext()
+    if not torch.is_grad_enabled():
+        x = act(hidden)
+    elif torch.compiler.is_compiling():
+        x = torch.utils.checkpoint.checkpoint(act, hidden, use_reentrant=False)
+    else:
+        x = act(hidden)
+        hooks = _RecomputedTensor(x, act, hidden)
+        context = torch.autograd.graph.saved_tensors_hooks(hooks.pack, hooks.unpack)
+    with context:
+        for layer in layers:
+            x = layer(x)
+    return x

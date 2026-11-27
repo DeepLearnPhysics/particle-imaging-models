@@ -111,7 +111,7 @@ def test_legacy_cli_options_are_rewritten_with_one_warning():
 def test_typed_cli_accepts_legacy_alias_during_transition():
     with pytest.warns(PimmDeprecationWarning, match="pimm 0.6.0"):
         command, overrides = parse_command(
-            ["--site", "s3df", "--slurm.time", "01:00:00"],
+            ["--site", "slurm", "--slurm.time", "01:00:00"],
             "2026-01-02_03-04-05",
         )
 

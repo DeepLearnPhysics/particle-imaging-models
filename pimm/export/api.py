@@ -460,6 +460,7 @@ def from_pretrained(
     keep_unmapped_keys: bool = False,
     filter_fn: Optional[Callable[[Dict[str, Any], torch.nn.Module], Dict[str, Any]]] = None,
     return_metadata: bool = False,
+    attention_backend: Optional[str] = None,
     **model_kwargs: Any,
 ):
     """Load a pimm model from a local export, Hub repo, or raw checkpoint.
@@ -477,7 +478,14 @@ def from_pretrained(
     shape, for example ``key_mapping={"student.backbone.": "backbone."}``.
     By default, ``from_pretrained`` drops keys that do not match ``key_mapping``;
     pass ``keep_unmapped_keys=True`` to preserve them.
+
+    ``attention_backend`` (``"flash"`` or ``"torch"``), when given, sets the process's attention backend with
+    ``pimm.ops.set_attention_backend`` before the model is built; pass ``"torch"`` where FlashAttention can't run.
     """
+    if attention_backend is not None:
+        from pimm.ops.attention import set_attention_backend
+
+        set_attention_backend(attention_backend)
     resolved = _resolve_pretrained_path(
         pretrained_model_name_or_path,
         cache_dir=cache_dir,

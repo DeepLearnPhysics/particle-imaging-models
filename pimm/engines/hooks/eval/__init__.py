@@ -1,4 +1,7 @@
-from .final_tester import FinalEvaluator
-from .pretrain import *
-from .instance_segmentation import *
-from .semantic_segmentation import *
+from .final import FinalEvaluator
+from .semantic import SemSegEvaluator, PointClassificationEvaluator
+from .instance import InstanceSegmentationEvaluator
+from .rings import RingPanopticEvaluator
+from .events import EventClassificationEvaluator
+from .synthetic import SpherePriorEvaluator
+from .probes import *

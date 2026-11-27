@@ -2,11 +2,47 @@
 
 from __future__ import annotations
 
+import torch.distributed as dist
+
 from pimm.utils.checkpoints import CheckpointManager
-from pimm.utils.comm import is_main_process
+from pimm.utils.comm import get_world_size, is_main_process
 
 from .builder import HOOKS
 from .default import HookBase
+
+
+def _sync_best_metric(trainer, is_best):
+    """Keep checkpoint metadata consistent when only rank zero receives metrics."""
+    if get_world_size() > 1:
+        values = [trainer.best_metric_value, is_best]
+        dist.broadcast_object_list(values, src=0)
+        trainer.best_metric_value, is_best = values
+    return is_best
+
+
+def _validate_retention(
+    save_freq,
+    save_full_state_snapshots,
+    snapshot_freq,
+    keep_last_n,
+    snapshot_on_epoch_end=False,
+):
+    """Reject retention settings without a usable snapshot cadence."""
+    if keep_last_n is not None and int(keep_last_n) <= 0:
+        raise ValueError(f"keep_last_n must be a positive int or None, got {keep_last_n!r}")
+    if not save_full_state_snapshots:
+        return
+    if not (snapshot_freq or save_freq or snapshot_on_epoch_end):
+        raise ValueError(
+            "save_full_state_snapshots=True requires a cadence: set save_freq "
+            "(and optionally snapshot_freq), or snapshot_on_epoch_end."
+        )
+    if snapshot_freq and save_freq and int(snapshot_freq) % int(save_freq) != 0:
+        raise ValueError(
+            f"snapshot_freq ({snapshot_freq}) must be a multiple of save_freq "
+            f"({save_freq}); snapshots are published from a save, so a "
+            "non-multiple cadence would never fire."
+        )
 
 
 def _is_last_epoch_step(trainer):
@@ -44,6 +80,13 @@ class CheckpointSaver(HookBase):
             on improvement. Requires ``cfg.evaluate``. ``None`` disables.
             Defaults to ``None``.
 
+        save_full_state_snapshots (bool): Retain resumable step_N snapshots. Defaults to False.
+        snapshot_freq (int | None): Snapshot cadence; None inherits save_freq and 0 disables step snapshots.
+        keep_last_n (int | None): Prune each retained family to its newest N entries; None keeps all.
+        save_iter_checkpoints (bool): Retain weights-only iter_N.pth saves. Defaults to True.
+        snapshot_on_epoch_end (bool): Also retain resumable epoch-end snapshots. Defaults to False.
+        evaluator_every_n_steps=0 consumes an evaluator metric once per epoch.
+
     Note:
         Runs on **all** ranks because a standard-format (DCP) save is a
         collective operation; the save decision is gated only on
@@ -70,11 +113,40 @@ class CheckpointSaver(HookBase):
             #   final checkpoint in after_train
     """
 
-    def __init__(self, save_freq=None, evaluator_every_n_steps=None):
+    def __init__(
+        self,
+        save_freq=None,
+        evaluator_every_n_steps=None,
+        save_iter_checkpoints=True,
+        save_full_state_snapshots=False,
+        snapshot_freq=None,
+        keep_last_n=None,
+        snapshot_on_epoch_end=False,
+    ):
         """Configure periodic saves and optional metric-driven best snapshots."""
+        _validate_retention(
+            save_freq,
+            save_full_state_snapshots,
+            snapshot_freq,
+            keep_last_n,
+            snapshot_on_epoch_end,
+        )
         self.save_freq = save_freq
         self.evaluator_every_n_steps = evaluator_every_n_steps
+        self.save_iter_checkpoints = save_iter_checkpoints
+        self.save_full_state_snapshots = save_full_state_snapshots
+        self.snapshot_freq = snapshot_freq
+        self.keep_last_n = keep_last_n
+        self.snapshot_on_epoch_end = snapshot_on_epoch_end
         self.step_count = 0
+
+    def _retention_kwargs(self):
+        """Return the retention options every save call forwards."""
+        return dict(
+            save_full_state_snapshots=self.save_full_state_snapshots,
+            snapshot_freq=self.snapshot_freq,
+            keep_last_n=self.keep_last_n,
+        )
 
     def before_train(self):
         """Seed internal step count from resumed trainer progress."""
@@ -130,15 +202,26 @@ class CheckpointSaver(HookBase):
             and self.step_count % self.evaluator_every_n_steps == 0
         )
         is_save_step = bool(self.save_freq and self.step_count % self.save_freq == 0)
-        if not is_eval_step and not is_save_step:
+        is_last_epoch_step = _is_last_epoch_step(self.trainer)
+        force_snapshot = bool(
+            self.snapshot_on_epoch_end
+            and self.save_full_state_snapshots
+            and is_last_epoch_step
+        )
+        if not is_eval_step and not is_save_step and not force_snapshot:
             return
         is_best = self._update_best(is_eval_step)
+        if is_eval_step:
+            is_best = _sync_best_metric(self.trainer, is_best)
         save_kwargs = dict(
             is_best=is_best,
             step_count=self.step_count,
             save_freq=self.save_freq,
+            save_iter_checkpoints=self.save_iter_checkpoints,
+            force_full_snapshot=force_snapshot,
+            **self._retention_kwargs(),
         )
-        if _is_last_epoch_step(self.trainer):
+        if is_last_epoch_step:
             # Let after-epoch loggers add their metrics to the same W&B row
             # before checkpoint_state() commits it and records the history cursor.
             self._pending_epoch_save = save_kwargs
@@ -148,8 +231,26 @@ class CheckpointSaver(HookBase):
 
     def after_epoch(self):
         """Save a last-step checkpoint after epoch-end metrics are logged."""
+        is_epoch_eval = bool(
+            self.trainer.cfg.evaluate
+            and self.evaluator_every_n_steps == 0
+        )
         if self._pending_epoch_save is None:
-            return
+            if not is_epoch_eval:
+                return
+            self._pending_epoch_save = dict(
+                is_best=False,
+                step_count=self.step_count,
+                save_freq=self.save_freq,
+                save_iter_checkpoints=self.save_iter_checkpoints,
+                force_full_snapshot=bool(
+                    self.snapshot_on_epoch_end and self.save_full_state_snapshots
+                ),
+                **self._retention_kwargs(),
+            )
+        if is_epoch_eval:
+            is_best = self._update_best(True)
+            self._pending_epoch_save["is_best"] = _sync_best_metric(self.trainer, is_best)
         self.checkpoint_manager.save_epoch_checkpoint(**self._pending_epoch_save)
         self._pending_epoch_save = None
 
@@ -161,6 +262,8 @@ class CheckpointSaver(HookBase):
             is_best=False,
             step_count=self.step_count,
             save_freq=self.save_freq,
+            save_iter_checkpoints=self.save_iter_checkpoints,
+            **self._retention_kwargs(),
         )
 
 
@@ -188,6 +291,8 @@ class CheckpointLoader(HookBase):
             keywords are resolved by longest match, so dict order is irrelevant.
             Mutually exclusive in practice with the scalar form. Must be a dict
             or a ``TypeError`` is raised. Defaults to ``None``.
+        source (str, optional): Additional warm-start checkpoint, skipped on resume.
+            None uses the configured training checkpoint as before.
         strict (bool): Whether to require an exact key match when loading model
             weights (passed through to ``load_state_dict``). Defaults to
             ``False``.
@@ -216,7 +321,9 @@ class CheckpointLoader(HookBase):
             #   reported missing/unexpected keys to confirm the load took
     """
 
-    def __init__(self, keywords="", replacement=None, replacements=None, strict=False):
+    def __init__(
+        self, keywords="", replacement=None, replacements=None, strict=False, source=None
+    ):
         """Configure key replacement and model weight strictness.
 
         Pass ``replacements`` as a ``{keyword: replacement}`` dict to apply several
@@ -242,139 +349,13 @@ class CheckpointLoader(HookBase):
         else:
             self.rules = [(keywords, replacement if replacement is not None else keywords)]
         self.strict = strict
+        self.source = source
 
     def before_train(self):
         """Load configured weights before the trainer enters the train loop."""
-        CheckpointManager(self.trainer).load_weight_and_resume(
-            rules=self.rules,
-            strict=self.strict,
-        )
-
-
-@HOOKS.register_module()
-class CheckpointSaverIteration(HookBase):
-    """Save iteration-oriented checkpoints on a pure global-step cadence.
-
-    Like :class:`CheckpointSaver`, but the save decision depends only on the
-    global step: in ``after_step`` it saves whenever ``step_count % save_freq ==
-    0``. When ``cfg.evaluate`` is set and an evaluator has published
-    ``current_metric_value`` in ``trainer.comm_info``, an improving metric also
-    updates ``trainer.best_metric_value`` and writes ``model_best``. A final
-    checkpoint is written in ``after_train``. Save logic is delegated to
-    :class:`~pimm.utils.checkpoints.CheckpointManager`. Registered as
-    ``CheckpointSaverIteration``.
-
-    Args:
-        save_freq (int, optional): Save every this many global steps. ``None``
-            disables periodic saving. Defaults to ``None``.
-        save_iter_checkpoints (bool): If ``True``, keep a distinct per-step
-            checkpoint copy at each save instead of only rolling the latest.
-            Defaults to ``False``.
-        backend (str, optional): Deprecated selector for the on-disk format,
-            superseded by the top-level ``checkpoint_format`` config key.
-            ``"dcp"`` maps to the standard (hybrid) format and ``"torch"`` to
-            the legacy format; ``None`` resolves to standard. Defaults to
-            ``None``.
-
-    Note:
-        Called on **all** ranks because a standard-format save is collective;
-        because the cadence is purely step-based it is identical across ranks.
-        Place any evaluator hook **before** this saver so the metric is
-        available for the ``model_best`` decision.
-
-    Example:
-        Add to ``cfg.hooks``; in ``after_step`` it saves on a pure global-step
-        cadence:
-
-        .. code-block:: python
-
-            hooks = [dict(type="CheckpointSaverIteration", save_freq=5000)]
-            # → writes a rolling checkpoint every 5000 global steps (and a final
-            #   one in after_train); with cfg.evaluate set and an evaluator's
-            #   comm_info["current_metric_value"], an improving metric also updates
-            #   trainer.best_metric_value and writes model_best
-    """
-
-    def __init__(self, save_freq=None, save_iter_checkpoints=False, backend=None):
-        """Configure save cadence, iteration copies, and checkpoint format."""
-        self.save_freq = save_freq
-        self.save_iter_checkpoints = save_iter_checkpoints
-        self.backend = backend
-        self.step_count = 0
-
-    def before_train(self):
-        """Seed internal step count from resumed trainer progress."""
-        self.checkpoint_manager = CheckpointManager(self.trainer)
-        self._pending_epoch_save = None
-        self.step_count = int(getattr(self.trainer, "global_step", 0) or (
-            self.trainer.start_epoch * len(self.trainer.train_loader)
-            + self.trainer.start_iter
-        ))
-
-    def _update_best(self):
-        """Return is_best, updating best_metric_value identically on every rank."""
-        if not (
-            self.trainer.cfg.evaluate
-            and "current_metric_value" in self.trainer.comm_info
-        ):
-            return False
-        current_metric_value = self.trainer.comm_info["current_metric_value"]
-        current_metric_name = self.trainer.comm_info["current_metric_name"]
-        is_best = False
-        if current_metric_value > self.trainer.best_metric_value:
-            self.trainer.best_metric_value = current_metric_value
-            is_best = True
-            if is_main_process():
-                self.trainer.logger.info(
-                    "Best validation {} updated to: {:.4f}".format(
-                        current_metric_name, current_metric_value
-                    )
-                )
-        if is_main_process():
-            self.trainer.logger.info(
-                "Currently Best {}: {:.4f}".format(
-                    current_metric_name, self.trainer.best_metric_value
-                )
-            )
-        return is_best
-
-    def after_step(self):
-        """Save whenever the configured global-step cadence is reached."""
-        self.step_count += 1
-        if not self.save_freq or self.step_count % self.save_freq != 0:
-            return
-        if is_main_process():
-            self.trainer.logger.info(f"Saving checkpoint at global step {self.step_count}")
-        is_best = self._update_best()
-        save_kwargs = dict(
-            backend=self.backend,
-            is_best=is_best,
-            step_count=self.step_count,
-            save_freq=self.save_freq,
-            save_iter_checkpoints=self.save_iter_checkpoints,
-        )
-        if _is_last_epoch_step(self.trainer):
-            self._pending_epoch_save = save_kwargs
-            return
-        self.checkpoint_manager.save_iteration_checkpoint(**save_kwargs)
-
-    def after_epoch(self):
-        """Save a last-step checkpoint after epoch-end metrics are logged."""
-        if self._pending_epoch_save is None:
-            return
-        self.checkpoint_manager.save_iteration_checkpoint(
-            **self._pending_epoch_save,
-        )
-        self._pending_epoch_save = None
-
-    def after_train(self):
-        """Persist a final checkpoint after the last training step."""
-        if is_main_process():
-            self.trainer.logger.info("Saving final checkpoint")
-        self.checkpoint_manager.save_iteration_checkpoint(
-            backend=self.backend,
-            is_best=False,
-            step_count=self.step_count,
-            save_freq=self.save_freq,
-            save_iter_checkpoints=self.save_iter_checkpoints,
-        )
+        manager = CheckpointManager(self.trainer)
+        if self.source is None:
+            manager.load_weight_and_resume(rules=self.rules, strict=self.strict)
+        elif not self.trainer.cfg.resume:
+            checkpoint = manager._load_checkpoint(self.source)
+            manager._load_model_weights(checkpoint, rules=self.rules, strict=self.strict)

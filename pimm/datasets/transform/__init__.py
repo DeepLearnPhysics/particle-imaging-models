@@ -7,3 +7,4 @@ from .spatial import *
 from .multiview import *
 from .instance import *
 from .detector import *
+from .preparation import SonataPreparation

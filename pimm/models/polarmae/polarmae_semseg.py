@@ -249,4 +249,8 @@ class PoLArMAESemSeg(PointModel):
                 segment[segment >= num_classes] = -1
             loss = self.criteria(seg_logits, segment)
             result["loss"] = loss
+        if not self.training:  # the points are the original points
+            result["offset"] = offset
+            if "segment" in data_dict:
+                result["segment"] = data_dict["segment"]
         return result

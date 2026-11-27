@@ -11,8 +11,7 @@ import math
 import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
-import torch_scatter
-from timm.layers import DropPath
+from pimm.models.utils.misc import DropPath
 
 # from pimm.models.point_prompt_training import PDNorm
 from pimm.models.builder import MODELS
@@ -368,6 +367,8 @@ class SerializedPooling(PointModule):
             self.act = PointSequential(act_layer())
 
     def forward(self, point: Point):
+        import torch_scatter
+
         pooling_depth = (math.ceil(self.stride) - 1).bit_length()
         if pooling_depth > point.serialized_depth:
             pooling_depth = 0

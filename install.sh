@@ -38,9 +38,9 @@ ensure_uv() {
   command -v uv >/dev/null 2>&1 || fail "uv was installed but is not on PATH"
 }
 
-# a pimm checkout is any directory whose pyproject.toml declares name = "pimm"
+# a pimm checkout is any directory whose pyproject.toml declares name = "particle-imaging-models"
 in_pimm_checkout() {
-  [ -f pyproject.toml ] && grep -qE '^name = "pimm"' pyproject.toml
+  [ -f pyproject.toml ] && grep -qE '^name = "particle-imaging-models"' pyproject.toml
 }
 
 ensure_checkout() {
@@ -83,8 +83,9 @@ ensure_uv
 ensure_checkout
 
 if [ "$LAUNCHER_ONLY" -eq 1 ]; then
-  uv sync --locked --no-default-groups
-  echo "launcher environment ready. run commands with: uv run pimm"
+  uv sync --locked --only-group launcher
+  uv pip install --no-deps -e .
+  echo "launcher environment ready. run commands with: uv run --no-sync pimm"
   exit 0
 fi
 
@@ -95,19 +96,7 @@ uv sync --locked
 uv run python - <<PY
 import importlib
 
-modules = [
-    "cnms",
-    "pointgroup_ops",
-    "pointops",
-    "pointrope",
-    "pytorch3d_ops",
-    "serialize_cuda",
-    "spconv",
-    "torch",
-    "torch_cluster",
-    "torch_scatter",
-    "torch_sparse",
-]
+modules = ["pimm", "pimm.models", "spconv", "torch"]
 for module in modules:
     importlib.import_module(module)
 print("validated:", ", ".join(modules))

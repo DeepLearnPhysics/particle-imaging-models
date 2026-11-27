@@ -15,9 +15,9 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from cnms import cnms_padded as cnms
-from pytorch3d_ops import _C
-from pytorch3d_ops.ops import ball_query, knn_points
+
+from pimm.models.polarmae import ops
+
 
 def tiny_value_of_dtype(dtype: torch.dtype) -> float:
     if dtype in (torch.float, torch.double, torch.bfloat16):
@@ -286,18 +286,12 @@ def sample_farthest_points(
     K: int,
     random_start: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """FPS via pytorch3d C++ kernel.  Returns (sampled_points, indices)."""
-    N, P, D = points.shape
-    if lengths.dtype != torch.int64:
-        lengths = lengths.to(torch.int64)
-    K_t = torch.full((N,), K, dtype=torch.int64, device=points.device)
-    start = torch.zeros_like(lengths)
+    """Farthest point sampling over xyz from a random (or the first) point.  Returns (sampled_points, indices)."""
+    start = None
     if random_start:
-        start = (torch.rand(N, device=points.device) * lengths.float()).long()
-    pts = points[..., :3].float().contiguous()
-    idx = _C.sample_farthest_points(pts, lengths, K_t, start, K)
-    sampled = masked_gather(points, idx)
-    return sampled, idx
+        start = (torch.rand(points.shape[0], device=points.device) * lengths.float()).long()
+    idx = ops.sample_farthest_points(points, lengths, K, start_idxs=start)
+    return masked_gather(points, idx), idx
 
 
 @torch.no_grad()
@@ -369,7 +363,7 @@ class PointcloudGrouping(nn.Module):
         possible_lengths = fps_idx.ne(-1).sum(-1)
 
         # CNMS
-        centers, lens1, cnms_idx = cnms(
+        centers, lens1 = ops.cnms(
             possible_centers, overlap_factor=self.overlap_factor,
             radius=self.group_radius, K=self.num_groups, lengths=possible_lengths,
         )
@@ -377,10 +371,10 @@ class PointcloudGrouping(nn.Module):
         centers = centers[:, :self.context_length]
 
         # Ball query
-        _, bq_idx, _ = ball_query(
+        bq_idx = ops.ball_query(
             centers[..., :3], points[..., :3].float(),
             K=self.group_upscale_points, radius=self.group_radius,
-            lengths1=lens1, lengths2=lengths, return_nn=False,
+            lengths1=lens1, lengths2=lengths,
         )
 
         # Reduction
@@ -602,7 +596,7 @@ class PointNetFeatureUpsampling(nn.Module):
         Returns:
             new_points: (B, N_max, D'), idx
         """
-        dists, idx, _ = knn_points(
+        dists, idx = ops.knn_points(
             xyz1[..., :3], xyz2, lengths1=point_lens, lengths2=embedding_lens,
             K=self.K, return_sorted=False,
         )

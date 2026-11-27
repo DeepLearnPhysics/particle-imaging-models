@@ -1,12 +1,13 @@
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 from pimm.launch import submit as submit_mod
 from pimm.launch.config import load_config
 
-CFG = "panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask"
+CFG = "panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask"
 
 
 def run_cli(command, *args):
@@ -39,6 +40,13 @@ def test_submit_no_args_and_help_show_help():
 
 
 def test_slurm_site_base_inheritance():
+    slurm = load_config(site="slurm", recipe=None, launch_timestamp="ts")
+    assert slurm["resources"]["scheduler"] == "slurm"
+    assert slurm["container"]["runtime"] == "none"
+    assert "account" not in slurm["resources"]
+    assert "partition" not in slurm["resources"]
+    assert "setup" not in slurm
+
     s3df = load_config(site="s3df", recipe=None, launch_timestamp="ts")
     assert s3df["resources"]["scheduler"] == "slurm"
     assert s3df["resources"]["nproc_per_node"] == 1
@@ -85,7 +93,7 @@ def test_launch_defaults_to_local_dry_run():
     assert "pimm.launch.run_train" not in script
     assert "pimm.launch.run_job" not in script
     assert sys.executable in script
-    assert "hooks.CheckpointSaverIteration.backend=dcp" not in script
+    assert "hooks." not in script
     assert f"-c {CFG}" in script
     assert "-n implicit-local-smoke" in script
     assert "-m 1" in script
@@ -114,7 +122,7 @@ def test_launch_forwards_resources_and_train_overrides():
     assert "--options" in script
     assert "epoch=1" in script
     assert "batch_size=4" in script
-    assert "hooks.CheckpointSaverIteration.backend=dcp" in script
+    assert "hooks." not in script
 
 
 def test_launch_forwards_wandb_cli_options():
@@ -149,7 +157,7 @@ def test_launch_dry_run_validates_config_before_rendering():
             "launch",
             "--dry-run",
             "--train.config",
-            "panda/pretrain/not-a-real-config",
+            "panda/v1/pretrain/not-a-real-config",
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -180,7 +188,7 @@ def test_launch_accepts_grouped_launcher_overrides():
     assert "OMP_NUM_THREADS=3" in script
     assert "-g 2" in script
     assert "epoch=1" in script
-    assert "hooks.CheckpointSaverIteration.backend=dcp" in script
+    assert "hooks." not in script
 
 
 def test_submit_s3df_renders_submitit_manifest_with_one_task_per_node():
@@ -229,7 +237,7 @@ def test_submit_s3df_renders_submitit_manifest_with_one_task_per_node():
     assert "-m 2" in script
     assert "-g 4" in script
     assert script.index("scontrol show hostnames") < script.index("apptainer run")
-    assert "hooks.CheckpointSaverIteration.backend=dcp" in script
+    assert "hooks." not in script
 
 
 def test_submit_rendezvous_is_resolved_before_nersc_container():
@@ -261,7 +269,11 @@ def test_submit_jobs_render_requeue_attempts_and_resume():
         "submit",
         "--dry-run",
         "--site",
-        "s3df",
+        "slurm",
+        "--resources.account",
+        "science",
+        "--resources.partition",
+        "gpu",
         "--train.config",
         CFG,
         "--run.name",
@@ -285,12 +297,21 @@ def test_submit_jobs_render_requeue_attempts_and_resume():
     assert "wandb_job_index=2" in attempts[1]["script"]
 
 
-def test_interactive_chain_dry_run_renders_watchdog():
+@pytest.mark.parametrize("watchdog_qos", [None, "watchdog"])
+def test_interactive_chain_dry_run_renders_watchdog(watchdog_qos):
+    watchdog_args = [] if watchdog_qos is None else ["--watchdog.qos", watchdog_qos]
     stdout = run_cli(
         "submit",
         "--dry-run",
         "--site",
-        "nersc",
+        "slurm",
+        "--resources.account",
+        "science",
+        "--resources.partition",
+        "gpu",
+        "--resources.qos",
+        "interactive",
+        *watchdog_args,
         "--interactive",
         "--chain.jobs",
         "2",
@@ -303,8 +324,11 @@ def test_interactive_chain_dry_run_renders_watchdog():
 
     assert "# watchdog wrapper ->" in stdout
     assert "PIMM_WATCHDOG_CHILD=1" in stdout
-    assert "#SCRON -q cron" in stdout
-    assert "#SCRON -A m5238_g" in stdout
+    if watchdog_qos is None:
+        assert "#SCRON -q " not in stdout
+    else:
+        assert "#SCRON -q watchdog" in stdout
+    assert "#SCRON -A science" in stdout
     assert "pimm submit" in stdout
 
 
@@ -340,12 +364,17 @@ def test_submit_nersc_uses_container_python_path():
     assert sys.executable not in script
 
 
-def test_submit_no_container_runs_directly_on_node_env():
+@pytest.mark.parametrize("site", [None, "slurm"])
+def test_submit_no_container_runs_directly_on_node_env(site):
+    site_args = [] if site is None else ["--site", site]
     stdout = run_cli(
         "submit",
         "--dry-run",
-        "--site",
-        "s3df",
+        *site_args,
+        "--resources.account",
+        "science",
+        "--resources.partition",
+        "gpu",
         "--train.config",
         CFG,
         "--run.name",
@@ -365,6 +394,11 @@ def test_submit_no_container_runs_directly_on_node_env():
     assert params["nodes"] == 1
     assert params["tasks_per_node"] == 1
     assert params["slurm_use_srun"] is True
+    assert params["slurm_account"] == "science"
+    assert params["slurm_partition"] == "gpu"
+    assert "slurm_mem" not in params
+    assert "slurm_qos" not in params
+    assert "slurm_constraint" not in params
     assert "apptainer run" not in script
     # conda activation removed from sites: with runtime=none the job runs train.sh
     # directly in the node's active environment (no mamba activate).
@@ -372,6 +406,28 @@ def test_submit_no_container_runs_directly_on_node_env():
     assert "scripts/train.sh" in script
     assert "epoch=1" in script
     assert "batch_size=2" in script
+    assert "hooks." not in script
+
+
+def test_submit_forwards_explicit_checkpoint_format():
+    stdout = run_cli(
+        "submit",
+        "--dry-run",
+        "--train.config",
+        CFG,
+        "--resources.account",
+        "science",
+        "--resources.partition",
+        "gpu",
+        "--chain.jobs",
+        "2",
+        "--",
+        "checkpoint_format=legacy",
+    )
+    manifest = yaml.safe_load(stdout)
+    for attempt in manifest["attempts"]:
+        assert "checkpoint_format=legacy" in attempt["script"]
+        assert "hooks." not in attempt["script"]
 
 
 def test_remote_submit_reinvokes_pimm_submit_on_host(monkeypatch, tmp_path):
@@ -389,14 +445,14 @@ def test_remote_submit_reinvokes_pimm_submit_on_host(monkeypatch, tmp_path):
 
     monkeypatch.setattr(submit_mod.subprocess, "run", fake_run)
     cfg = {
-        "site": "s3df",
+        "site": "slurm",
         "paths": {"repo_root": str(tmp_path)},
         "submit": {"host": "iana"},
         "setup": ["source ~/.bashrc"],
     }
 
     output = submit_mod.remote_submit(
-        ["--site", "s3df", "--train.config", "x/y", "--", "epoch=1"],
+        ["--site", "slurm", "--train.config", "x/y", "--", "epoch=1"],
         cfg,
     )
 
@@ -405,7 +461,7 @@ def test_remote_submit_reinvokes_pimm_submit_on_host(monkeypatch, tmp_path):
     assert calls[0][0][1] == "iana"
     assert "source ~/.bashrc" in calls[0][0][2]
     assert (
-        "pimm submit --site s3df --train.config x/y --no-remote -- epoch=1"
+        "pimm submit --site slurm --train.config x/y --no-remote -- epoch=1"
         in calls[0][0][2]
     )
 
@@ -432,7 +488,7 @@ def test_submit_uses_submitit_executor(monkeypatch, tmp_path):
 
     monkeypatch.setattr(submit_mod.submitit, "AutoExecutor", FakeExecutor)
     cfg = {
-        "site": "s3df",
+        "site": "slurm",
         "paths": {"repo_root": str(tmp_path)},
         "resources": {
             "scheduler": "slurm",
@@ -440,7 +496,7 @@ def test_submit_uses_submitit_executor(monkeypatch, tmp_path):
             "nproc_per_node": 4,
             "cpus_per_proc": 12,
             "account": "acct",
-            "partition": "ampere",
+            "partition": "gpu",
             "gpu_directive": "gres",
             "time": "00:30:00",
             "mem": "512G",
@@ -458,7 +514,7 @@ def test_submit_uses_submitit_executor(monkeypatch, tmp_path):
     assert "Helpful commands:" in output
     assert "Next commands:" not in output
     assert (
-        f"config.py:    {tmp_path}/exp/panda/pretrain/submitit-test/config.py" in output
+        f"config.py:    {tmp_path}/exp/panda/v1/pretrain/submitit-test/config.py" in output
     )
     assert "slurm log:    slurm-456.out" in output
     assert "tail -f slurm-456.out" in output
@@ -545,5 +601,5 @@ def test_docker_runtime_renders_docker_run():
 
 
 def test_config_discovery_command():
-    listing = run_cli("ls", "panda/pretrain")
+    listing = run_cli("ls", "panda/v1/pretrain")
     assert CFG in listing

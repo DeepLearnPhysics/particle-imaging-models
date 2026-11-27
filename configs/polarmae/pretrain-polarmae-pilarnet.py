@@ -145,7 +145,7 @@ hooks = [
     ),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="CheckpointSaverIteration", save_freq=1000, save_iter_checkpoints=False),
+    dict(type="CheckpointSaver", save_freq=1000, save_iter_checkpoints=False),
     dict(
         type="WeightDecayExclusion",
         exclude_bias_from_wd=True, exclude_norm_from_wd=True,

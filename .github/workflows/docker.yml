@@ -58,12 +58,6 @@ jobs:
             echo "dispatch the workflow itself at $BUILD_REF" >&2
             exit 1
           fi
-          case "$BUILD_REF" in
-            pimm-wheels-*)
-              echo "native wheel refs are not application image refs" >&2
-              exit 1
-              ;;
-          esac
           if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
             echo "invalid Docker image tag: $IMAGE_TAG" >&2
             exit 1
@@ -187,7 +181,6 @@ jobs:
     env:
       IMAGE: youngsm/pimm@${{ needs.build-standard.outputs.digest }}
       TORCH_VERSION: 2.10.0
-      TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
     steps:
       # the image ships only the environment; pimm code comes from the checkout
@@ -197,7 +190,7 @@ jobs:
       - name: Validate imports, stack, and CLI
         run: |
           docker pull "$IMAGE"
-          docker run --rm -i --env TORCH_VERSION --env TORCHVISION_VERSION \
+          docker run --rm -i --env TORCH_VERSION \
             --env CUDA_VERSION \
             -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" python - <<'PY'
           import importlib
@@ -211,46 +204,26 @@ jobs:
               "exex.xm_cluster",
               "exex.execution",
               "exex.contrib.wandb",
-              "cnms",
-              "pointgroup_ops",
-              "pointops",
-              "pointrope",
-              "pytorch3d_ops",
-              "serialize_cuda",
               "spconv",
               "torch",
-              "torch_cluster",
               "torch_scatter",
-              "torch_sparse",
-              "torchvision",
+              "flash_attn",
               "pimm.models",
           ]
           for module in modules:
               importlib.import_module(module)
           lock = tomlkit.parse(Path("uv.lock").read_text())
-          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex")
-          assert importlib.metadata.version("exex") == expected_exex
+          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex-ml")
+          assert importlib.metadata.version("exex-ml") == expected_exex
           import torch
-          from torch.nn.attention.varlen import varlen_attn  # noqa: F401
           expected = os.environ["TORCH_VERSION"]
           if not torch.__version__.startswith(expected):
               raise SystemExit(f"expected torch {expected}, got {torch.__version__}")
           if torch.version.cuda != os.environ["CUDA_VERSION"]:
               raise SystemExit(f"expected CUDA {os.environ['CUDA_VERSION']}, got {torch.version.cuda}")
-          torchvision_version = importlib.metadata.version("torchvision")
-          if not torchvision_version.startswith(os.environ["TORCHVISION_VERSION"]):
-              raise SystemExit(f"unexpected torchvision: {torchvision_version}")
-          pyg_versions = {
-              name: importlib.metadata.version(name)
-              for name in ("torch-cluster", "torch-scatter", "torch-sparse")
-          }
-          expected_pyg = {
-              "torch-cluster": "1.6.3",
-              "torch-scatter": "2.1.2",
-              "torch-sparse": "0.6.18",
-          }
-          if pyg_versions != expected_pyg:
-              raise SystemExit(f"unexpected PyG compatibility wheels: {pyg_versions}")
+          scatter = importlib.metadata.version("torch-scatter")
+          if not scatter.startswith("2.1.2"):
+              raise SystemExit(f"unexpected torch-scatter: {scatter}")
           print("validated:", ", ".join(modules))
           PY
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" pimm --help
@@ -358,7 +331,6 @@ jobs:
     env:
       IMAGE: youngsm/pimm-nersc@${{ needs.build-nersc.outputs.digest }}
       TORCH_VERSION: 2.10.0
-      TORCHVISION_VERSION: 0.25.0
       CUDA_VERSION: "12.6"
     steps:
       # the image ships only the environment; pimm code comes from the checkout
@@ -368,7 +340,7 @@ jobs:
       - name: Validate imports, stack, MPI, and CLI
         run: |
           docker pull "$IMAGE"
-          docker run --rm -i --env TORCH_VERSION --env TORCHVISION_VERSION \
+          docker run --rm -i --env TORCH_VERSION \
             --env CUDA_VERSION \
             -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" python - <<'PY'
           import importlib
@@ -382,26 +354,18 @@ jobs:
               "exex.xm_cluster",
               "exex.execution",
               "exex.contrib.wandb",
-              "cnms",
-              "pointgroup_ops",
-              "pointops",
-              "pointrope",
-              "pytorch3d_ops",
-              "serialize_cuda",
               "spconv",
               "torch",
-              "torch_cluster",
               "torch_scatter",
-              "torch_sparse",
-              "torchvision",
+              "flash_attn",
               "pimm.models",
               "mpi4py",
           ]
           for module in modules:
               importlib.import_module(module)
           lock = tomlkit.parse(Path("uv.lock").read_text())
-          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex")
-          assert importlib.metadata.version("exex") == expected_exex
+          expected_exex = next(p["version"] for p in lock["package"] if p["name"] == "exex-ml")
+          assert importlib.metadata.version("exex-ml") == expected_exex
           import h5py
           if not h5py.get_config().mpi:
               raise SystemExit("h5py was built without MPI support")
@@ -411,20 +375,9 @@ jobs:
               raise SystemExit(f"expected torch {expected}, got {torch.__version__}")
           if torch.version.cuda != os.environ["CUDA_VERSION"]:
               raise SystemExit(f"expected CUDA {os.environ['CUDA_VERSION']}, got {torch.version.cuda}")
-          torchvision_version = importlib.metadata.version("torchvision")
-          if not torchvision_version.startswith(os.environ["TORCHVISION_VERSION"]):
-              raise SystemExit(f"unexpected torchvision: {torchvision_version}")
-          pyg_versions = {
-              name: importlib.metadata.version(name)
-              for name in ("torch-cluster", "torch-scatter", "torch-sparse")
-          }
-          expected_pyg = {
-              "torch-cluster": "1.6.3",
-              "torch-scatter": "2.1.2",
-              "torch-sparse": "0.6.18",
-          }
-          if pyg_versions != expected_pyg:
-              raise SystemExit(f"unexpected PyG compatibility wheels: {pyg_versions}")
+          scatter = importlib.metadata.version("torch-scatter")
+          if not scatter.startswith("2.1.2"):
+              raise SystemExit(f"unexpected torch-scatter: {scatter}")
           print("validated:", ", ".join(modules))
           PY
           docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work "$IMAGE" pimm --help

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import random
@@ -16,7 +17,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from pimm.utils.config import Config, _is_hook_type_override, _split_hook_type_options
+from pimm.utils.config import Config
 from pimm.utils.env import set_seed
 
 
@@ -37,11 +38,22 @@ def worker_init_fn(worker_id, num_workers, rank, seed):
 
 
 def _set_nested(d, key_path, value):
-    """Set nested dict value: 'a.b.c' -> d['a']['b']['c'] = value."""
+    """Set nested value: 'a.b.c' -> d['a']['b']['c'] = value.
+
+    Numeric segments index into lists, mirroring ``Config.merge_from_dict``
+    (``allow_list_keys``), e.g. ``data.configs.0.pattern``.
+    """
     keys = key_path.split(".")
     for key in keys[:-1]:
-        d = d.setdefault(key, {})
-    d[keys[-1]] = value
+        if isinstance(d, (list, tuple)):
+            d = d[int(key)]
+        else:
+            d = d.setdefault(key, {})
+    last = keys[-1]
+    if isinstance(d, list):
+        d[int(last)] = value
+    else:
+        d[last] = value
 
 
 def _apply_hook_overrides_from_dict(cfg, override_dict):
@@ -228,11 +240,39 @@ def restore_distributed_rng_state(state: dict[str, Any], *, strict: bool = True)
             f"but current world_size={world_size}."
         )
     states = state["states"]
-    if rank >= len(states):
+    local = states[rank] if rank < min(len(states), saved_world_size) else None
+    if not local or any(value is None for value in local.values()):
         if strict:
             raise ValueError(f"No RNG state available for rank {rank}.")
-        rank = 0
-    restore_rng_state(states[rank])
+        # New ranks keep independent streams when a checkpoint has no state for them.
+        return
+    restore_rng_state(local)
+
+
+class GradientAccumulationLoader:
+    """Hand out ``steps`` consecutive batches of ``loader`` at a time, one list per optimizer step.
+
+    ``len()`` counts whole steps, so whatever sizes itself from the train loader's length (the LR schedule, model
+    schedules, checkpoint counters) counts optimizer steps. Other attributes (``sampler``, ``dataset``,
+    ``state_dict``) are the wrapped loader's.
+    The last ``len(loader) % steps`` batches of an epoch, too few for a full step, are dropped.
+    """
+
+    def __init__(self, loader, steps):
+        self.loader, self.steps = loader, steps
+
+    def __len__(self):
+        return len(self.loader) // self.steps
+
+    def __iter__(self):
+        batches = iter(self.loader)
+        while len(step := list(itertools.islice(batches, self.steps))) == self.steps:
+            yield step
+
+    def __getattr__(self, name):
+        if name == "loader":  # not set yet (unpickling)
+            raise AttributeError(name)
+        return getattr(self.loader, name)
 
 
 @dataclass

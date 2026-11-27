@@ -1,6 +1,6 @@
 # PoLAr-MAE
 
-PoLAr-MAE is a transformer pretrained on LArTPC point clouds by masked point modeling: groups of points are hidden, and the model learns to reconstruct their positions and energies. Paper: [arXiv:2502.02558](https://arxiv.org/abs/2502.02558).
+PoLAr-MAE is a transformer pretrained on LArTPC point clouds by masked point modeling: groups of points are hidden, and the model is trained to reconstruct their positions and energies. Paper: [arXiv:2502.02558](https://arxiv.org/abs/2502.02558).
 
 ## Released checkpoints
 
@@ -9,11 +9,11 @@ PoLAr-MAE is a transformer pretrained on LArTPC point clouds by masked point mod
 | `PoLAr-MAE-Pretrain` | `PoLAr-MAE` | `loss`, `chamfer_loss`, `energy_loss`, `mean_points`, `mean_groups` |
 | `PoLAr-MAE-Semantic` | `PoLArMAE-SemSeg` | `seg_logits`, shape (N, 4) |
 
-Semantic classes, in output order: shower, track, Michel, delta. Both models run on CPU as well as CUDA.
+Semantic classes, in output order: shower, track, Michel, delta. You can run both models on CPU as well as CUDA.
 
 ## Input pipeline
 
-The semantic model centers and scales coordinates itself. Its recipe log-scales energy, with a higher floor than Panda, and doesn't grid-sample:
+Coordinates are centered and scaled inside the semantic model. The semantic model's recipe has no grid sampling, and its energy log scale has a higher floor than Panda's:
 
 ```python
 from pimm.datasets.transform import Compose
@@ -25,7 +25,7 @@ polarmae_semantic_transform = Compose([
 ])
 ```
 
-The pretraining recipe normalizes coordinates before the model, with `NormalizeCoord(center=[384, 384, 384], scale=665.1076)` and `LogTransform(min_val=0.01, max_val=20.0)`.
+The pretraining recipe has `NormalizeCoord(center=[384, 384, 384], scale=665.1076)` for coordinates and `LogTransform(min_val=0.01, max_val=20.0)` for energies.
 
 ## Recipes
 

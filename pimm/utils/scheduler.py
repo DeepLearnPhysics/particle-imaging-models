@@ -16,6 +16,14 @@ def resolve_iters(value, total_steps):
     return int(value) if value > 1 else int(value * total_steps)
 
 
+def reference_total_steps(cfg):
+    """Use a fixed reference horizon for auxiliary schedules when configured."""
+    reference = getattr(cfg, "schedule_reference_steps", None)
+    if reference:
+        return int(reference)
+    return int(cfg.scheduler.total_steps)
+
+
 @SCHEDULERS.register_module()
 class MultiStepLR(lr_scheduler.MultiStepLR):
     """Multi-step scheduler that accepts milestone ratios of total steps."""

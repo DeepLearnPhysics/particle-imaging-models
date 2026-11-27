@@ -14,7 +14,7 @@ import os
 import sys
 import weakref
 from functools import partial
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -25,15 +25,16 @@ if sys.version_info >= (3, 10):
     from collections.abc import Iterator
 else:
     from collections import Iterator
-from tensorboardX import SummaryWriter
 from torchdata.stateful_dataloader import StatefulDataLoader
+
+if TYPE_CHECKING:
+    from tensorboardX import SummaryWriter
 
 import pimm.utils.comm as comm
 from pimm.datasets import (
     build_dataset,
     collate_fn,
     inseg_collate_fn,
-    point_collate_fn,
     StatefulRandomSampler,
     set_dataloader_epoch,
 )
@@ -43,6 +44,7 @@ from pimm.distributed import (
     prepare_model,
     unwrap_model,
 )
+from pimm.distributed.distributed import average_gradients
 from pimm.models import build_model
 from pimm.observability import structured_logger as sl
 from pimm.observability.structured_logger.structured_logging import (
@@ -57,11 +59,12 @@ from pimm.utils.scheduler import build_scheduler
 from ._train_utils import worker_init_fn
 from .defaults import resolve_wandb_history
 from .hooks import HookBase, build_hooks
-from ._train_utils import TrainState
+from ._train_utils import GradientAccumulationLoader, TrainState
 
 TRAINERS = Registry("trainers")
 AMP_DTYPE = dict(
     bfloat16=torch.bfloat16,
+    float16=torch.float16,
 )
 _END_OF_DATALOADER = object()
 
@@ -179,6 +182,11 @@ class TrainerBase:
     def run_step(self):
         """Run one optimization step for the current batch."""
         raise NotImplementedError
+
+    def after_backward(self):
+        """Call hooks with unscaled gradients before clipping or optimization."""
+        with sl.log_trace_span("hooks.after_backward"):
+            self._call_hooks("after_backward")
 
     def after_step(self):
         """Call hooks after the current optimization step."""
@@ -318,6 +326,13 @@ class Trainer(TrainerBase):
         self.logger.info("=> Building train dataset & dataloader ...")
         with sl.log_trace_span("build.train_loader"):
             self.train_loader = self.build_train_loader()
+            accumulation = self.cfg.get("gradient_accumulation_steps", 1)
+            if not isinstance(accumulation, int) or isinstance(accumulation, bool) or accumulation < 1:
+                raise ValueError("gradient_accumulation_steps must be a positive integer")
+            if accumulation > 1:
+                if type(self).run_step is not Trainer.run_step:
+                    raise ValueError(f"{type(self).__name__} does not support gradient_accumulation_steps")
+                self.train_loader = GradientAccumulationLoader(self.train_loader, accumulation)
         self.logger.info("=> Building val dataset & dataloader ...")
         with sl.log_trace_span("build.evaluation_loaders"):
             self.val_loader = self.build_val_loader()
@@ -422,6 +437,9 @@ class Trainer(TrainerBase):
                             break
 
                         process_step += 1
+                        if isinstance(input_dict, list):  # micro-batches of one accumulated step
+                            self.comm_info["micro_batches"] = input_dict
+                            input_dict = input_dict[0]  # hooks before the step see the first micro-batch
                         self.comm_info["input_dict"] = input_dict
                         self._log_trace_batch_stats(absolute_step)
                         self.before_step()
@@ -490,7 +508,7 @@ class Trainer(TrainerBase):
                 local_batch = len(input_dict["offset"])
             except TypeError:
                 local_batch = self.cfg.batch_size_per_gpu
-        self.samples_seen += int(local_batch) * comm.get_world_size()
+        self.samples_seen += int(local_batch) * comm.get_world_size() * self.comm_info.get("accumulated_batches", 1)
 
         self.train_state = TrainState.from_trainer(self)
 
@@ -505,52 +523,77 @@ class Trainer(TrainerBase):
             # deprecated warning
             auto_cast = torch.cuda.amp.autocast
 
-        with sl.log_trace_span("batch_to_device"):
-            input_dict = move_batch_to_device(
-                self.comm_info["input_dict"],
-                self.parallel_context.device,
-            )
-        # Store the device-resident batch so hooks and checkpoint state agree.
-        self.comm_info["input_dict"] = input_dict
-
-        with sl.log_trace_span("forward"):
-            with auto_cast(
-                enabled=self.cfg.enable_amp,
-                dtype=AMP_DTYPE[self.cfg.amp_dtype],
-            ):
-                output_dict = self.model(input_dict)
-                loss = output_dict["loss"]
+        # GradientAccumulationLoader hands out a list of micro-batches per optimizer step; a plain batch is one.
+        batches = self.comm_info.pop("micro_batches", None) or [
+            self.comm_info["input_dict"]
+        ]
+        model = unwrap_model(self.model)
+        split_backward = getattr(model, "split_backward", False)
+        ddp = isinstance(self.model, nn.parallel.DistributedDataParallel)
+        forward_model = model if split_backward else self.model
+        self.optimizer.zero_grad()
+        losses = []
+        for index, batch in enumerate(batches):
+            with sl.log_trace_span("batch_to_device"):
+                input_dict = move_batch_to_device(batch, self.parallel_context.device)
+            # Store the device-resident batch so hooks and checkpoint state agree.
+            self.comm_info["input_dict"] = input_dict
+            sync = contextlib.nullcontext()
+            if ddp and (split_backward or index < len(batches) - 1):
+                # Split losses bypass DDP's single-backward reducer.
+                sync = self.model.no_sync()
+            with sync:
+                with sl.log_trace_span("forward"):
+                    with auto_cast(
+                        enabled=self.cfg.enable_amp, dtype=AMP_DTYPE[self.cfg.amp_dtype]
+                    ):
+                        output_dict = forward_model(input_dict)
+                        loss = output_dict["loss"]
+                with sl.log_trace_span("backward"):
+                    tensor_loss = torch.is_tensor(loss)
+                    parts = iter((loss,)) if tensor_loss else iter(loss)
+                    total = 0
+                    while True:
+                        with auto_cast(
+                            enabled=self.cfg.enable_amp,
+                            dtype=AMP_DTYPE[self.cfg.amp_dtype],
+                        ):
+                            part = next(parts, None)
+                            if part is None:
+                                break
+                            scaled = part / len(batches)
+                        (
+                            self.scaler.scale(scaled) if self.cfg.enable_amp else scaled
+                        ).backward()
+                        if not tensor_loss:
+                            total = total + part.detach()
+                    if not tensor_loss:
+                        output_dict["loss"] = total
+            losses.append(output_dict["loss"].detach())
+        if ddp and split_backward:
+            average_gradients(model.parameters(), self.model.process_group)
+        if len(batches) > 1:
+            output_dict["loss"] = torch.stack(losses).mean()
+        self.comm_info["accumulated_batches"] = len(batches)
         # Log average points per sample for throughput analysis
-        if "offset" in input_dict:
+        if "offset" in input_dict and "coord" in input_dict:
             output_dict["avg_pts"] = input_dict["coord"].shape[0] / len(
                 input_dict["offset"]
             )
-        self.optimizer.zero_grad()
         if self.cfg.enable_amp:
-            with sl.log_trace_span("backward"):
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                if self.cfg.clip_grad is not None:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.cfg.clip_grad
-                    )
-            with sl.log_trace_span("optimizer"):
+            self.scaler.unscale_(self.optimizer)
+        self.after_backward()
+        if self.cfg.clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.clip_grad)
+        with sl.log_trace_span("optimizer"):
+            if self.cfg.enable_amp:
+                # The scaler skips optimizer.step after an overflow; step the scheduler only after a real update.
+                scale = self.scaler.get_scale()
                 self.scaler.step(self.optimizer)
-
-                # When enable amp, optimizer.step call are skipped if the loss scaling factor is too large.
-                # Fix torch warning scheduler step before optimizer step.
-                scaler = self.scaler.get_scale()
                 self.scaler.update()
-                if scaler <= self.scaler.get_scale():
+                if scale <= self.scaler.get_scale():
                     self.scheduler.step()
-        else:
-            with sl.log_trace_span("backward"):
-                loss.backward()
-                if self.cfg.clip_grad is not None:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.cfg.clip_grad
-                    )
-            with sl.log_trace_span("optimizer"):
+            else:
                 self.optimizer.step()
                 self.scheduler.step()
         if self.cfg.empty_cache and self.parallel_context.device.type == "cuda":
@@ -620,6 +663,12 @@ class Trainer(TrainerBase):
                 f"Weights & Biases writer initialized with project: {self.cfg.get('wandb_project', 'pimm')}"
             )
         else:
+            try:
+                from tensorboardX import SummaryWriter
+            except ImportError:
+                self.logger.info("Install particle-imaging-models[tensorboard] to write TensorBoard events.")
+                return None
+
             writer = (
                 SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
             )
@@ -643,7 +692,7 @@ class Trainer(TrainerBase):
         shuffling and DDP/worker sharding internally (see the dataset's
         ``__iter__``); ``drop_last`` plus the ``iter_per_epoch`` cap in
         :meth:`train` keeps every rank's step count uniform for DDP lockstep.
-        Works for any ``IterableDataset``, not just the parquet one.
+        Works for any ``IterableDataset``.
         """
         init_fn = (
             partial(
@@ -710,7 +759,7 @@ class Trainer(TrainerBase):
                     )
                 world = max(1, comm.get_world_size())
                 per_rank = int(num_samples()) // world
-                val = per_rank // self.cfg.batch_size_per_gpu
+                val = per_rank // self.cfg.batch_size_per_gpu // self.cfg.get("gradient_accumulation_steps", 1)
                 if val <= 0:
                     raise ValueError(
                         f"Derived iters_per_epoch={val} <= 0 (num_samples per "
@@ -772,7 +821,10 @@ class Trainer(TrainerBase):
         """Build a scheduler sized to all optimizer steps in training."""
         assert hasattr(self, "optimizer")
         assert hasattr(self, "train_loader")
-        self.cfg.scheduler.total_steps = self._iters_per_epoch() * self.cfg.epoch
+        train_steps = self._iters_per_epoch() * self.cfg.epoch
+        self.cfg.scheduler.total_steps = self.cfg.get("schedule_total_steps") or train_steps
+        if self.cfg.scheduler.total_steps < train_steps:
+            raise ValueError("The run exceeds schedule_total_steps")
         return build_scheduler(self.cfg.scheduler, self.optimizer)
 
     def build_scaler(self):
@@ -865,6 +917,7 @@ class GRPOTrainer(Trainer):
         if self.cfg.enable_amp:
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
+            self.after_backward()
             if self.cfg.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.clip_grad
@@ -876,6 +929,7 @@ class GRPOTrainer(Trainer):
                 self.scheduler.step()
         else:
             loss.backward()
+            self.after_backward()
             if self.cfg.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.clip_grad
@@ -1006,6 +1060,7 @@ class GRPOTrainer(Trainer):
 
         if self.cfg.enable_amp:
             self.scaler.unscale_(self.optimizer)
+            self.after_backward()
             if self.cfg.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.clip_grad
@@ -1016,6 +1071,7 @@ class GRPOTrainer(Trainer):
             if scaler <= self.scaler.get_scale():
                 self.scheduler.step()
         else:
+            self.after_backward()
             if self.cfg.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.clip_grad

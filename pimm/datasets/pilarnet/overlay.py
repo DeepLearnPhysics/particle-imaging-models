@@ -3,7 +3,7 @@
 Overlay composites several events into one point cloud (rotating each by random
 90-degree increments about the detector centre and deduplicating colliding
 voxels by semantic priority). It operates purely on decoded ``data_dict``s plus
-random ``get_data(idx)`` access, so it is identical for the HDF5 and parquet
+random ``get_data(idx)`` access, so it is identical for every
 readers -- both mix in :class:`PILArNetOverlayMixin`.
 
 A host class must provide:
@@ -11,6 +11,9 @@ A host class must provide:
     - ``revision`` attr,
     - ``get_data(idx)`` returning one event's ``data_dict``,
     - ``_num_source_events()`` -> count of distinct events (pre-``loop``).
+
+Optional ``overlay_rotate_90``, ``overlay_dedup`` and ``overlay_max_instances``
+attributes default to ``True``, ``True`` and ``None``.
 """
 
 import random
@@ -41,6 +44,34 @@ class PILArNetOverlayMixin:
         if isinstance(self.overlay_n_events, (tuple, list)):
             return random.randint(self.overlay_n_events[0], self.overlay_n_events[1])
         return self.overlay_n_events
+
+    @staticmethod
+    def _instance_counts(data_dict, instance_keys):
+        """Distinct non-ignored instance ids per instance key."""
+        counts = {}
+        for key in instance_keys:
+            values = data_dict.get(key)
+            counts[key] = 0 if values is None else len(np.unique(values[values != -1]))
+        return counts
+
+    def _within_instance_cap(self, counts):
+        """True when every capped instance key holds at most its allowed count."""
+        cap = getattr(self, "overlay_max_instances", None)
+        return cap is None or all(counts.get(key, 0) <= limit for key, limit in cap.items())
+
+    def _draw_donor(self, pool, counts, instance_keys, host_name):
+        """Draw a distinct donor whose instances fit the cap, or return ``None``."""
+        for _ in range(10):
+            try:
+                extra = self.get_data(random.randint(0, pool - 1))
+            except Exception:
+                continue
+            if host_name is not None and extra.get("name") == host_name:
+                continue
+            extra_counts = self._instance_counts(extra, instance_keys)
+            if self._within_instance_cap({key: counts[key] + extra_counts[key] for key in instance_keys}):
+                return extra, extra_counts
+        return None, None
 
     @staticmethod
     def _get_rotation_matrix_90(axis, n_rotations):
@@ -144,18 +175,26 @@ class PILArNetOverlayMixin:
         # Sample from the distinct-event pool (pre-loop) so overlay indices stay
         # valid regardless of the loop multiplier.
         pool = self._num_source_events()
-        if self.overlay_allow_repeats:
-            indices = [random.randint(0, pool - 1) for _ in range(n_events - 1)]
-        else:
-            indices = random.sample(range(pool), min(n_events - 1, pool))
-
         additional_dicts = []
-        for idx in indices:
-            try:
-                extra = self.get_data(idx)
+        if getattr(self, "overlay_max_instances", None) is not None:
+            counts = self._instance_counts(data_dict, instance_keys)
+            for _ in range(n_events - 1):
+                extra, extra_counts = self._draw_donor(pool, counts, instance_keys, data_dict.get("name"))
+                if extra is None:
+                    break
                 additional_dicts.append(extra)
-            except Exception:
-                continue
+                counts = {key: counts[key] + extra_counts[key] for key in instance_keys}
+        else:
+            if self.overlay_allow_repeats:
+                indices = [random.randint(0, pool - 1) for _ in range(n_events - 1)]
+            else:
+                indices = random.sample(range(pool), min(n_events - 1, pool))
+            for idx in indices:
+                try:
+                    extra = self.get_data(idx)
+                    additional_dicts.append(extra)
+                except Exception:
+                    continue
 
         if not additional_dicts:
             return data_dict
@@ -180,7 +219,7 @@ class PILArNetOverlayMixin:
                         max_instance[key] = int(inst[mask].max()) + 1
 
             # apply random 90-degree rotation around detector center
-            if "coord" in extra:
+            if getattr(self, "overlay_rotate_90", True) and "coord" in extra:
                 # rotation center is the detector volume center
                 detector_center = np.array([384.0, 384.0, 384.0], dtype=np.float32)
                 rotations = {axis: random.randint(0, 3) for axis in ("x", "y", "z")}
@@ -218,7 +257,8 @@ class PILArNetOverlayMixin:
                         data_dict[key] = np.concatenate([data_dict[key], extra[key]], axis=0)
 
         # deduplicate overlapping voxels
-        data_dict = self._deduplicate_voxels(data_dict, concat_keys)
+        if getattr(self, "overlay_dedup", True):
+            data_dict = self._deduplicate_voxels(data_dict, concat_keys)
 
         if "name" in data_dict:
             data_dict["name"] = f"{data_dict['name']}_overlay{n_events}"

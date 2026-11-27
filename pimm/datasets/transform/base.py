@@ -318,3 +318,76 @@ class Compose(object):
                     f"Available keys: {keys}. Original error: {exc}"
                 ) from exc
         return data_dict
+
+
+@TRANSFORMS.register_module()
+class JointLabel(object):
+    """Encode selected combinations of NumPy point labels as one compact target.
+
+    ``combinations`` defines the output class order. Points whose component
+    tuple is not listed are assigned ``ignore_index``. This makes the fixed
+    joint target used by standalone downstream training equivalent to the
+    compact joint labels produced by ``PretrainEvaluator``.
+
+    Args:
+        keys (sequence[str]): Component label keys, in tuple order.
+        combinations (sequence[sequence[int]]): Allowed component tuples.
+            The tuple at position ``i`` maps to output class ``i``.
+        out_key (str): Destination label key. Defaults to ``"segment"``.
+        ignore_index (int): Value for unlisted combinations. Defaults to ``-1``.
+
+    Example:
+        Combine a motif label and a particle-type label into one class per listed pair:
+
+        .. code-block:: python
+
+            dict(
+                type="JointLabel",
+                keys=("segment_motif", "segment_pid"),
+                combinations=((0, 2), (1, 1), (2, 4)),  # (motif, pid) -> class 0, 1, 2
+            )
+
+        With ``segment_motif = [0, 1, 2, 1]`` and ``segment_pid = [2, 1, 4, 3]`` this writes
+        ``segment = [0, 1, 2, -1]``: the last point's pair ``(1, 3)`` is not listed.
+    """
+
+    def __init__(
+        self,
+        keys,
+        combinations,
+        out_key="segment",
+        ignore_index=-1,
+    ):
+        self.keys = tuple(keys)
+        self.combinations = tuple(
+            tuple(int(v) for v in combo) for combo in combinations
+        )
+        self.out_key = out_key
+        self.ignore_index = int(ignore_index)
+        if not self.keys:
+            raise ValueError("JointLabel.keys must not be empty")
+        if any(len(combo) != len(self.keys) for combo in self.combinations):
+            raise ValueError("Each JointLabel combination must match len(keys)")
+        if len(set(self.combinations)) != len(self.combinations):
+            raise ValueError("JointLabel combinations must be unique")
+
+    def __call__(self, data_dict):
+        """Write the compact joint label while preserving component labels."""
+        values = [data_dict[key] for key in self.keys]
+        reference = values[0]
+        if any(value.shape != reference.shape for value in values[1:]):
+            raise ValueError(
+                f"JointLabel component shapes must match: "
+                f"{dict(zip(self.keys, (value.shape for value in values)))}"
+            )
+
+        flat = [np.asarray(value).reshape(-1) for value in values]
+        target = np.full(flat[0].shape, self.ignore_index, dtype=np.int32)
+        for class_index, combo in enumerate(self.combinations):
+            mask = np.ones(flat[0].shape, dtype=bool)
+            for value, expected in zip(flat, combo):
+                mask &= value == expected
+            target[mask] = class_index
+
+        data_dict[self.out_key] = target.reshape(reference.shape)
+        return data_dict

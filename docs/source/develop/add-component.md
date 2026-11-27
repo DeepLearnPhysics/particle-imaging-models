@@ -4,7 +4,7 @@ Every component is a registered class. Write it, import it from its package's `_
 
 ## A model
 
-A top-level model receives the packed batch dict and returns a dict. In training it must return a scalar `loss`; in evaluation it returns the outputs its evaluator reads, such as `seg_logits` for `SemSegEvaluator`.
+The input of a top-level model is the packed batch dict, and its output is a dict. In training, the output must contain a scalar `loss`; in evaluation, it contains the outputs the model's evaluator needs, such as `seg_logits`, `segment` and `offset` for `SemSegEvaluator`, all at the same points.
 
 ```python
 # pimm/models/my_segmentor.py
@@ -29,12 +29,14 @@ class MySegmentor(nn.Module):
         output = {}
         if "segment" in input_dict:
             output["loss"] = self.criteria(logits, input_dict["segment"])
+            if not self.training:
+                output["segment"] = input_dict["segment"]
         if not self.training:
-            output["seg_logits"] = logits
+            output.update(seg_logits=logits, offset=input_dict["offset"])
         return output
 ```
 
-This assumes the backbone returns features for every input point. If it pools points, follow how `DefaultSegmentorV2` maps features back. Register the module:
+`MySegmentor` is written for a backbone output with features for every input point, and only these points are scored. If you pool points in the backbone, map features back as in `DefaultSegmentorV2`; to score the points from before `GridSample`, map the logits through `inverse` as `DefaultSegmentorV2` does in evaluation. Register the module:
 
 ```python
 # pimm/models/__init__.py
@@ -43,7 +45,7 @@ from .my_segmentor import MySegmentor
 
 ## A loss
 
-`build_criteria` builds each entry of a `criteria` list from the `LOSSES` registry and sums their outputs. A new loss receives the arguments the model passes to `self.criteria(...)`:
+Call `build_criteria` in the model to build each entry of a `criteria` list from the `LOSSES` registry; the entries' outputs are summed. The arguments of a new loss are the ones you pass to `self.criteria(...)` in the model:
 
 ```python
 from pimm.models.losses.builder import LOSSES
@@ -84,7 +86,7 @@ class RandomEnergyDropout:
         return data_dict
 ```
 
-Import it from `pimm/datasets/transform/__init__.py` and use `dict(type="RandomEnergyDropout", ratio=0.1)`. Transforms run on NumPy arrays before `ToTensor`. A transform that changes the number or order of points must apply the same change to every key in `index_valid_keys`.
+Import it from `pimm/datasets/transform/__init__.py` and use `dict(type="RandomEnergyDropout", ratio=0.1)`. Transforms are applied to NumPy arrays before `ToTensor`. If you change the number or order of points in a transform, apply the same change to every key in `index_valid_keys`.
 
 ## A hook
 
@@ -105,7 +107,7 @@ class MyScalarHook(HookBase):
             self.trainer.writer.add_scalar("my/value", 1.0, step)
 ```
 
-Import it from `pimm/engines/hooks/__init__.py` and add it to `hooks`. Hooks run in list order. Guard file and logging side effects with `is_main_process()`, but let every process enter collective operations, or the other processes wait forever. Checkpoints don't save hook attributes; derive counters from `self.trainer.global_step`.
+Import it from `pimm/engines/hooks/__init__.py` and add it to `hooks`. Hooks are run in list order. Guard file and logging side effects with `is_main_process()`, but let every process enter collective operations, or the other processes are left waiting forever. Checkpoints don't include hook attributes, so derive counters from `self.trainer.global_step`.
 
 ## A dataset
 

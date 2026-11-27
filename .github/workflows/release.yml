@@ -178,6 +178,12 @@ jobs:
       - name: Build distributions
         run: uv build --out-dir "$RUNNER_TEMP/dist"
 
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+
   tag:
     needs:
       - prepare
@@ -267,10 +273,31 @@ jobs:
           echo "could not find the dispatched Docker workflow" >&2
           exit 1
 
-  publish:
+  pypi:
     needs:
       - prepare
       - dispatch-docker
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI trusted publishing
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a retried release uploads only what is missing
+
+  publish:
+    needs:
+      - prepare
+      - pypi
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:

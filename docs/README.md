@@ -1,11 +1,11 @@
 # pimm documentation
 
-Source for <https://deeplearnphysics.org/particle-imaging-models/stable/>: MyST Markdown built with
-Sphinx and the PyData Sphinx Theme.
+This directory is the source for <https://deeplearnphysics.org/particle-imaging-models/stable/>:
+MyST Markdown built with Sphinx and the PyData Sphinx Theme.
 
 ## Build
 
-From the repository root:
+Run these commands from the repository root:
 
 ```bash
 uv sync --locked --group docs
@@ -26,8 +26,6 @@ docs/
     └── _static/             CSS, logos, pimm.js (landing logo, 3D event viewer), figure data
 ```
 
-`tools/gen_reference.py` writes `reference/cli.md`, `recipes.md`, `api.md` and `environment.md` from
-the `pimm` parsers, the configs, the registries and the environment variables the code reads. They
-are not committed: to change them, change the code.
-
-The writing rules are in `source/develop/writing-docs.md`.
+`reference/cli.md`, `recipes.md`, `api.md` and `environment.md` are generated with `tools/gen_reference.py`
+from the `pimm` parsers, the configs, the registries and the environment variables read in the code.
+They are not committed: to change them, change the code.

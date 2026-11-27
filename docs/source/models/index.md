@@ -1,8 +1,8 @@
 # Models
 
-pimm has two pretrained model families for LArTPC point clouds. Each release on Hugging Face is a portable export that `pimm.from_pretrained` loads in one call.
+pimm has two pretrained model families for LArTPC point clouds. Each release on Hugging Face is a portable export that you load with `pimm.from_pretrained` in one call.
 
-| Model | Hugging Face repository | Returns | Classes |
+| Model | Hugging Face repository | Output | Classes |
 |---|---|---|---|
 | Panda Base | `DeepLearnPhysics/Panda-Base` | per-point features (encoder only) | — |
 | Panda Semantic | `DeepLearnPhysics/Panda-Semantic` | `seg_logits`, one row per point | shower, track, Michel, delta, low-energy deposit |
@@ -17,7 +17,7 @@ import pimm
 model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")
 ```
 
-An export rebuilds the architecture and loads the weights. It doesn't include the input pipeline; [Panda](panda.md) and [PoLAr-MAE](polarmae.md) list the transforms each model's recipes use.
+An export is enough to rebuild the architecture and load the weights, but the export doesn't include the input pipeline; see [Panda](panda.md) and [PoLAr-MAE](polarmae.md) for the transforms used in each model's recipes.
 
 ```{toctree}
 panda

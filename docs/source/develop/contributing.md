@@ -28,8 +28,8 @@ uv run pytest -v tests/unit/test_launch_rendering.py
 uv run black --check pimm tests
 ```
 
-Integration tests are marked by what they need, such as `external_data` for downloads. Run the ones your hardware and data allow.
+Integration tests are marked by what they need, such as `external_data` for downloads. Run the ones you have the hardware and data for.
 
 ## Pull requests
 
-Keep each pull request to one change, with a test that fails without it. Open an issue before a large architectural change. When you change a command, config field, output key or file format, update the recipes and docs in the same pull request.
+Keep each pull request to one change, with a test that fails without the change. Open an issue before a large architectural change. When you change a command, config field, output key or file format, update the recipes and docs in the same pull request.

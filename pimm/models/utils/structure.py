@@ -156,23 +156,40 @@ class Point(Dict):
         self["sparse_shape"] = sparse_shape
         self["sparse_conv_feat"] = sparse_conv_feat
 
-    def upcast(self):
-        """Replay the pooling chain to recover input-resolution features.
+    def upcast(self, levels=None, feature_sampling=None):
+        """Replay the pooling chain to recover finer-resolution features.
 
         Walks ``pooling_parent``/``pooling_inverse`` back up, concatenating each
-        stage's features, giving one row per input point (``sum(enc_channels)``
-        wide). Consumes the chain, so a second call is a no-op.
+        stage's features onto its parent's, for ``levels`` steps or, by default,
+        to the input points (``sum(enc_channels)`` wide). Consumes the chain it
+        walks. With ``feature_sampling`` (a method string or a
+        ``{"method": ..., "levels": ...}`` dict), the hierarchy is instead sampled
+        at the input points by
+        :func:`~pimm.models.utils.hierarchical_features.hierarchical_feature_sampling`.
 
         Returns:
-            Point: The input-resolution point, or ``self`` if there is no chain.
+            Point: The upcast point, or ``self`` if there is no chain.
         """
-        point = self
-        while "pooling_parent" in point:
+        if feature_sampling is not None:
+            if levels is not None:
+                raise ValueError("upcast takes levels or feature_sampling, not both")
+            from pimm.models.utils.hierarchical_features import (
+                hierarchical_feature_sampling,
+                normalize_feature_sampling,
+            )
+
+            return hierarchical_feature_sampling(
+                self, **normalize_feature_sampling(feature_sampling)
+            )
+        point, steps = self, 0
+        while "pooling_parent" in point and (levels is None or steps < levels):
             assert "pooling_inverse" in point
             parent = point.pop("pooling_parent")
             inverse = point.pop("pooling_inverse")
             parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-            point = parent
+            point, steps = parent, steps + 1
+        if levels is not None and steps < levels:
+            raise ValueError(f"upcast of {levels} levels, but the pooling chain has {steps}")
         return point
 
     def __getitem__(self, key):

@@ -1,10 +1,10 @@
 # Event format
 
-Every dataset returns an event as a flat dict of NumPy arrays with one row per point, and every model reads a packed batch of such events.
+Each event from a dataset is a flat dict of NumPy arrays with one row per point, and the input of every model is a packed batch of such events.
 
 ## One event
 
-Point-aligned fields have one row per point; scalar quantities keep a trailing axis of length 1. A PILArNet-M event from `PILArNetH5Dataset` contains:
+Point-aligned fields have one row per point; scalar quantities have a trailing axis of length 1. A PILArNet-M event from `PILArNetH5Dataset` contains these fields:
 
 | Key | Shape | Content |
 |---|---|---|
@@ -29,7 +29,7 @@ Point-aligned fields have one row per point; scalar quantities keep a trailing a
 | 4 | low-energy deposit | proton |
 | 5 | — | none (low-energy deposit) |
 
-`-1` marks points to ignore. PILArNet-M coordinates lie in a cube of side 768; recipes rescale them, as described in [Transforms](transforms.md). Other readers emit the same core keys (`coord`, `energy`, `segment`, `instance`) plus their own; see [Supported detectors](datasets.md).
+Points to ignore have the label `-1`. PILArNet-M coordinates are in a cube of side 768; they are rescaled in recipes, as described in [Transforms](transforms.md). Events from other readers have the same core keys (`coord`, `energy`, `segment`, `instance`) plus reader-specific keys; see [Supported detectors](datasets.md).
 
 ## See one
 
@@ -39,14 +39,14 @@ PILArNet-M-mini test event 0 after the Panda transforms: 1,175 points, colored b
 
 ## A batch
 
-After the transforms, `Collect` keeps the keys you name and joins `feat_keys` into `feat`. `collate_fn` concatenates the events and builds `offset`:
+In `Collect`, you name the keys to keep and the `feat_keys` to join into `feat`. Pass the transformed events to `collate_fn` to concatenate them and build `offset`:
 
 | Key | Shape | Content |
 |---|---|---|
 | `coord` | (N_total, 3) | transformed positions |
-| `grid_coord` | (N_total, 3) int | grid cells, when the pipeline grid-samples |
+| `grid_coord` | (N_total, 3) int | grid cells, when grid sampling is in the pipeline |
 | `feat` | (N_total, C) | features in `feat_keys` order |
 | `segment` | (N_total,) | training target, when present |
 | `offset` | (B,) | cumulative end index of each event; `offset[-1] == N_total` |
 
-Inside a model, `Point(batch)` wraps the dict and derives the per-point event index from `offset`.
+Inside a model, the dict is wrapped in `Point(batch)`, and the per-point event index is derived from `offset`.

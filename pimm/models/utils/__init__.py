@@ -5,5 +5,5 @@ from .misc import (
     batch2offset,
     off_diagonal,
 )
-from .checkpoint import checkpoint
+from .checkpoint import checkpoint, recompute_activation
 from .serialization import encode, decode

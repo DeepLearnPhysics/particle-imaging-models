@@ -6,7 +6,7 @@ from pimm.engines.defaults import default_config_parser
 
 
 def test_launch_command_reaches_metadata_and_wandb_notes(monkeypatch, tmp_path):
-    command = "pimm submit --site nersc --train.config configs/example.py"
+    command = "pimm submit --site slurm --train.config configs/example.py"
     run_dir = tmp_path / "run"
     config_path = tmp_path / "config.py"
     config_path.write_text(f"seed = 1\nsave_path = {str(run_dir)!r}\nresume = False\n")

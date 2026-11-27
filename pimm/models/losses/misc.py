@@ -5,6 +5,8 @@ Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -157,6 +159,53 @@ class SmoothL1RegressionLoss(nn.Module):
         return self.loss_weight * F.smooth_l1_loss(
             pred, target, beta=self.beta, reduction=self.reduction
         )
+
+
+@LOSSES.register_module()
+class GeodesicDirectionLoss(nn.Module):
+    """Angular (geodesic) loss for a unit-direction regression head.
+
+    ``forward(pred, target)`` expects ``pred``/``target`` of shape ``(M, D)``
+    (typically ``D==3``), L2-normalizes both to unit vectors, and returns
+    ``loss_weight * mean(arccos(clamp(cos, -c, c)))`` -- the true angular error in
+    radians, where ``c = cos(clamp_deg)``. The cosine similarity is clamped so
+    ``arccos``'s gradient (``1/sin angle``) stays finite; angles below
+    ``clamp_deg`` incur approximately zero gradient. Computed in fp32 because the
+    cosine is very close to one for aligned directions, where fp16 has too little
+    resolution. Registered as ``GeodesicDirectionLoss``.
+
+    Args:
+        clamp_deg (float): Cosine-clamp angle in degrees. Defaults to ``0.1``.
+        loss_weight (float): Global scale on the returned loss. Defaults to
+            ``1.0``.
+        reduction (str): Reduction mode (``"mean"``, ``"sum"``, ``"none"``).
+            ``"none"`` returns the per-instance angular error ``(M,)``. Defaults
+            to ``"mean"``.
+    """
+
+    def __init__(self, clamp_deg=0.1, loss_weight=1.0, reduction="mean"):
+        super().__init__()
+        if reduction not in ("mean", "sum", "none"):
+            raise ValueError(f"Unsupported reduction: {reduction!r}")
+        if not 0.0 < float(clamp_deg) < 90.0:
+            raise ValueError("clamp_deg must be strictly between 0 and 90 degrees")
+        self.clamp_deg = float(clamp_deg)
+        self.loss_weight = float(loss_weight)
+        self.reduction = reduction
+        self._cos_clamp = float(math.cos(math.radians(self.clamp_deg)))
+
+    def forward(self, pred, target):
+        if pred.numel() == 0:
+            return pred.float().sum() * 0.0
+        p = F.normalize(pred.float(), dim=-1, eps=1e-6)
+        t = F.normalize(target.float(), dim=-1, eps=1e-6)
+        cos = (p * t).sum(dim=-1).clamp(-self._cos_clamp, self._cos_clamp)
+        angular_error = self.loss_weight * torch.arccos(cos)
+        if self.reduction == "none":
+            return angular_error
+        if self.reduction == "sum":
+            return angular_error.sum()
+        return angular_error.mean()
 
 
 @LOSSES.register_module()

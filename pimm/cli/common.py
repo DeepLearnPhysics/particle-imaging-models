@@ -54,18 +54,12 @@ def bootstrap_value(argv: list[str], name: str) -> str | None:
     return None
 
 
-def wants_help(argv: list[str]) -> bool:
-    """Return whether this invocation should show Tyro help before validation."""
-    return not argv or any(arg in {"-h", "--help"} for arg in argv)
-
-
 def parse_typed_command(
     command_type: type[CommandT],
     argv: list[str],
     *,
     launch_timestamp: str,
     prog: str,
-    require_site: bool,
     default_site: str = "local",
 ) -> tuple[CommandT, list[str]]:
     """Parse a Tyro command after loading site/recipe defaults."""
@@ -74,7 +68,6 @@ def parse_typed_command(
     if not tyro_args:
         tyro_args = ["--help"]
     site = bootstrap_value(tyro_args, "site") or default_site
-    has_explicit_site = bootstrap_value(tyro_args, "site") is not None
     recipe = bootstrap_value(tyro_args, "recipe")
     base_cfg = load_config(site=site, recipe=recipe, launch_timestamp=launch_timestamp)
     default = command_type.from_config(LaunchConfig.from_dict(base_cfg), recipe=recipe)
@@ -84,6 +77,4 @@ def parse_typed_command(
         default=default,
         prog=prog,
     )
-    if require_site and not has_explicit_site and not wants_help(tyro_args):
-        raise SystemExit(f"{prog} requires --site, e.g. --site s3df")
     return command, training_overrides
