@@ -87,12 +87,16 @@ def compute_semseg_metrics(
     target: np.ndarray,
     num_classes: int,
     *,
+    ignore_index: int,
     macro_ignore_class_ids=(),
     intersection: np.ndarray | None = None,
     union: np.ndarray | None = None,
     target_count: np.ndarray | None = None,
 ) -> SemSegMetrics:
-    """Compute the semantic segmentation metrics used by evaluator/tester."""
+    """Compute the semantic segmentation metrics used by evaluator/tester; points labelled ``ignore_index`` are not
+    scored."""
+    keep = target != ignore_index
+    pred, target = pred[keep], target[keep]
     precision, recall, f1 = _precision_recall_f1(pred, target, num_classes)
     if intersection is None or union is None or target_count is None:
         intersection, union, target_count = _intersection_union_target(

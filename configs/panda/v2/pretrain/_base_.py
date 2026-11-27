@@ -2,7 +2,7 @@ _base_ = ["../_base_/default_runtime.py"]
 
 seed = 0
 batch_size = 96
-batch_size_val = 1
+batch_size_val = None  # one validation event per GPU
 num_worker = 32  # Total across four ranks: eight workers per rank.
 gradient_accumulation_steps = 1
 epoch = eval_epoch = 20

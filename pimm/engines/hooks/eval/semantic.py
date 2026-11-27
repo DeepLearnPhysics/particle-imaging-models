@@ -182,6 +182,7 @@ class SemSegEvaluator(HookBase):
             all_preds,
             all_segments,
             num_classes,
+            ignore_index=self.trainer.cfg.data.ignore_index,
             macro_ignore_class_ids=self.macro_ignore_class_ids,
             intersection=intersection,
             union=union,
