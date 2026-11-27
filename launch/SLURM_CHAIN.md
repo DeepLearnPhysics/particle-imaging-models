@@ -8,13 +8,15 @@ Example:
 
 ```bash
 pimm submit \
-  --site nersc \
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
   --chain.jobs 4 \
-  --run.name e050-tail-chain \
+  --run.name pretrain-chain \
   --resources.nnodes 32 \
   --resources.nproc-per-node 4 \
   --resources.time 02:00:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Behavior:
@@ -24,10 +26,10 @@ Behavior:
 - Requeued attempts resume from the newest complete checkpoint.
 - Each attempt gets a separate W&B run name by default, grouped under the stable
   run name.
-- DCP checkpointing is the default for submitit-requeued runs.
+- DCP checkpointing is the default.
 
-To force the legacy checkpoint backend:
+To select the legacy checkpoint format, add this training override after `--`:
 
 ```bash
-hooks.CheckpointSaverIteration.backend=torch
+checkpoint_format=legacy
 ```

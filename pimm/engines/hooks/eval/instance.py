@@ -1,38 +1,26 @@
 import numpy as np
-import wandb
 import torch
-import torch.distributed as dist
-import pointops
-from uuid import uuid4
-
-try:
-    from torch_cluster import knn_graph
-except ImportError:
-    knn_graph = None
 
 import pimm.utils.comm as comm
 from pimm.distributed import unwrap_model
-from pimm.utils.misc import intersection_and_union_gpu
 from pimm.engines.metrics import (
     aggregate_instance_results,
-    compute_semseg_metrics,
     eval_instances,
+    instance_ari,
 )
 
-from pimm.engines.hooks.default import HookBase
+from pimm.engines.hooks.default import HookBase, get_writer_step
 from pimm.engines.hooks.builder import HOOKS
+from pimm.engines.metrics.panoptic import (
+    event_row,
+    noise_class,
+    noise_points,
+    scored_points,
+    summarize_rows,
+)
 from pimm.observability import structured_logger as sl
-from pimm.models.utils.structure import Point
 from pimm.models.utils.misc import offset2bincount
-import torch.nn.functional as F
 from sklearn.metrics import adjusted_rand_score
-
-def _get_writer_step(trainer):
-    """Local train step for logging; writer applies any configured offset."""
-    ci = getattr(trainer, "comm_info", {})
-    if "epoch" in ci and "iter" in ci:
-        return ci.get("epoch", 0) * ci.get("iter_per_epoch", 0) + ci.get("iter", 0) + 1
-    return getattr(trainer, "epoch", 0)
 
 
 @HOOKS.register_module()
@@ -82,6 +70,11 @@ class InstanceSegmentationEvaluator(HookBase):
         primary_label (Any): Label whose ``det_f1`` becomes the selection
             metric; defaults to the first entry of ``labels``. Defaults to
             ``None``.
+        selection_reduction (str | None): Optionally select checkpoints from a
+            reduction over every configured label's detection F1. Supported
+            values are ``"mean"`` and ``"harmonic_mean"``. When set, this
+            supersedes ``primary_label`` and requires metrics for every label.
+            Defaults to ``None``.
         set_current_metric (bool): Whether to publish a checkpoint-selection
             metric at all. Defaults to ``True``.
         instance_key (str | dict | None): Override input key for GT instance ids
@@ -90,8 +83,11 @@ class InstanceSegmentationEvaluator(HookBase):
             labels (per label). Defaults to ``None``.
         segment_fallback_key (str | dict | None): Fallback semantic key used
             when ``segment_key`` is absent. Defaults to ``None``.
-        log_ari (bool): Compute and log mean ARI over events. Defaults to
-            ``True``.
+        log_ari (bool): Compute and log mean ARI over events. Defaults to True.
+        ari_include_unassigned (bool): Score missed hits as singleton clusters. Defaults to False.
+        pid_tables (bool | None): Explicit PID representation; None keeps public table detection.
+        panoptic_selection (bool): Select checkpoints by the harmonic mean of
+            all-point ARI and macro PQ with a noise class. Defaults to False.
 
     Note:
         Requires validation batch size 1 (asserted). The selection metric is
@@ -127,11 +123,15 @@ class InstanceSegmentationEvaluator(HookBase):
         labels=None,
         prefix=None,
         primary_label=None,
+        selection_reduction=None,
         set_current_metric=True,
         instance_key=None,
         segment_key=None,
         segment_fallback_key=None,
         log_ari=True,
+        ari_include_unassigned=False,
+        pid_tables=None,
+        panoptic_selection=False,
     ):
         """Configure label-specific instance metrics and logging behavior."""
         self.every_n_steps = int(every_n_steps)
@@ -146,11 +146,19 @@ class InstanceSegmentationEvaluator(HookBase):
         self.labels = tuple(labels)
         self.prefix = prefix
         self.primary_label = primary_label
+        if selection_reduction not in (None, "mean", "harmonic_mean"):
+            raise ValueError(
+                "selection_reduction must be None, 'mean', or 'harmonic_mean'"
+            )
+        self.selection_reduction = selection_reduction
         self.set_current_metric = bool(set_current_metric)
         self.instance_key = instance_key
         self.segment_key = segment_key
         self.segment_fallback_key = segment_fallback_key
         self.log_ari = bool(log_ari)
+        self.ari_include_unassigned = bool(ari_include_unassigned)
+        self.pid_tables = pid_tables
+        self.panoptic_selection = bool(panoptic_selection)
         self.class_names = class_names
         self.stuff_classes = stuff_classes
 
@@ -229,7 +237,11 @@ class InstanceSegmentationEvaluator(HookBase):
                 getattr(point, "instance", None),
                 getattr(point, "segment", None),
             )
+        instance_key, segment_key = self._gt_keys(input_dict, model, label)
+        return input_dict.get(instance_key), input_dict.get(segment_key)
 
+    def _gt_keys(self, input_dict, model, label):
+        """Input keys of a named label's ground-truth instance ids and semantic labels."""
         spec = self._label_specs(model).get(label, {})
         instance_key = (
             self._select_for_label(self.instance_key, label, None)
@@ -246,7 +258,7 @@ class InstanceSegmentationEvaluator(HookBase):
         ) or self._spec_value(spec, "segment_fallback_key")
         if segment_key not in input_dict and fallback_key in input_dict:
             segment_key = fallback_key
-        return input_dict.get(instance_key), input_dict.get(segment_key)
+        return instance_key, segment_key
 
     def _get_label_predictions(self, output_dict, label):
         """Return model predictions for an auxiliary label when available."""
@@ -256,21 +268,43 @@ class InstanceSegmentationEvaluator(HookBase):
                 return outputs_by_label[label]
         return None
 
+    def _primary(self):
+        """The label whose metrics select checkpoints: ``primary_label``, else the first label."""
+        return (
+            self.labels[0]
+            if self.primary_label is None and self.labels
+            else self.primary_label
+        )
+
     def _should_set_current_metric(self, label):
         """Return whether this label should update checkpoint selection metrics."""
+        if self.selection_reduction is not None or self.panoptic_selection:
+            return False
         if not self.set_current_metric:
             return False
-        primary = self.primary_label
-        if primary is None:
-            primary = self.labels[0] if self.labels else None
-        return label == primary
+        return label == self._primary()
+
+    @staticmethod
+    def _reduce_selection_metrics(values, reduction):
+        """Reduce per-label F1 values into a joint checkpoint metric."""
+        values = np.asarray(values, dtype=np.float64)
+        if values.size == 0 or not np.isfinite(values).all():
+            return None
+        if reduction == "mean":
+            return float(values.mean())
+        if reduction == "harmonic_mean":
+            if np.any(values <= 0):
+                return 0.0
+            return float(values.size / np.reciprocal(values).sum())
+        raise ValueError(f"unsupported selection reduction: {reduction!r}")
 
     def after_step(self):
         """Run instance evaluation on the configured step cadence."""
         if self.trainer.cfg.evaluate and self.every_n_steps > 0:
             global_iter = (
                 self.trainer.comm_info["iter"]
-                + self.trainer.comm_info["iter_per_epoch"] * self.trainer.comm_info["epoch"]
+                + self.trainer.comm_info["iter_per_epoch"]
+                * self.trainer.comm_info["epoch"]
             )
             if (global_iter + 1) % self.every_n_steps == 0:
                 self.eval()
@@ -294,6 +328,7 @@ class InstanceSegmentationEvaluator(HookBase):
         all_stats_by_label = {label: [] for label in self.labels}
         ari_scores_by_label = {label: [] for label in self.labels}
         momentum_stats_by_label = {label: [] for label in self.labels}
+        panoptic_rows = []
 
         for input_dict in self.trainer.val_loader:
             assert (
@@ -381,7 +416,9 @@ class InstanceSegmentationEvaluator(HookBase):
                 if "pred_momentum" in results:
                     pred_instance_momentum = results["pred_momentum"].cpu()
 
-                gt_inst = gt_instance.detach().reshape(-1).cpu().numpy().astype(np.int64)
+                gt_inst = (
+                    gt_instance.detach().reshape(-1).cpu().numpy().astype(np.int64)
+                )
                 gt_pid = gt_segment.detach().reshape(-1).cpu().numpy().astype(np.int64)
                 pr_inst = pred_instance_labels.numpy().astype(np.int64)
                 pr_pid = pred_pid_labels.numpy().astype(np.int64)
@@ -395,6 +432,7 @@ class InstanceSegmentationEvaluator(HookBase):
                     class_names=class_names,
                     iou_thresh=self.iou_thresh,
                     require_class_for_match=self.require_class_for_match,
+                    pid_tables=self.pid_tables,
                 )
                 all_stats_by_label[label].append(stats)
 
@@ -422,7 +460,9 @@ class InstanceSegmentationEvaluator(HookBase):
                         if mom_stats is not None:
                             momentum_stats_by_label[label].append(mom_stats)
 
-                if self.log_ari:
+                if self.log_ari and self.ari_include_unassigned:
+                    ari_scores_by_label[label].append(instance_ari(gt_inst, pr_inst))
+                elif self.log_ari:
                     valid_ari_mask = pr_inst != -1
                     if valid_ari_mask.any():
                         ari_scores_by_label[label].append(
@@ -432,21 +472,49 @@ class InstanceSegmentationEvaluator(HookBase):
                         )
                     else:
                         ari_scores_by_label[label].append(float("nan"))
+                if self.panoptic_selection and label == self._primary():
+                    spec = self._label_specs(model).get(label, {})
+                    hit_inst, hit_pid, voxel = scored_points(
+                        input_dict, *self._gt_keys(input_dict, model, label)
+                    )
+                    gt_noise, pr_noise = noise_points(
+                        input_dict, spec, results, hit_inst, hit_pid, voxel, pr_inst
+                    )
+                    panoptic_rows.append(
+                        event_row(
+                            hit_inst,
+                            hit_pid,
+                            pr_inst[voxel],
+                            pr_pid[voxel],
+                            gt_noise,
+                            pr_noise,
+                            int(spec["num_classes"]),
+                            noise_class(spec),
+                            self.iou_thresh,
+                        )
+                    )
 
         if comm.get_world_size() > 1:
             gathered = comm.gather(
-                (all_stats_by_label, ari_scores_by_label, momentum_stats_by_label),
+                (
+                    all_stats_by_label,
+                    ari_scores_by_label,
+                    momentum_stats_by_label,
+                    panoptic_rows,
+                ),
                 dst=0,
             )
             if comm.get_rank() == 0:
                 merged_stats = {label: [] for label in self.labels}
                 merged_ari = {label: [] for label in self.labels}
                 merged_momentum = {label: [] for label in self.labels}
-                for stats_chunk, ari_chunk, momentum_chunk in gathered:
+                panoptic_rows = []
+                for stats_chunk, ari_chunk, momentum_chunk, panoptic_chunk in gathered:
                     for label in self.labels:
                         merged_stats[label].extend(stats_chunk.get(label, []))
                         merged_ari[label].extend(ari_chunk.get(label, []))
                         merged_momentum[label].extend(momentum_chunk.get(label, []))
+                    panoptic_rows.extend(panoptic_chunk)
                 all_stats_by_label = merged_stats
                 ari_scores_by_label = merged_ari
                 momentum_stats_by_label = merged_momentum
@@ -461,6 +529,7 @@ class InstanceSegmentationEvaluator(HookBase):
 
         logged_any = False
         current_metric_set = False
+        det_f1_by_label = {}
         for label in self.labels:
             all_stats = all_stats_by_label[label]
             label_name = self._label_name(label)
@@ -480,6 +549,7 @@ class InstanceSegmentationEvaluator(HookBase):
             det_prec = det["precision"]
             det_rec = det["recall"]
             det_f1 = det["f1"]
+            det_f1_by_label[label] = float(det_f1)
             det_iou = det["mean_matched_iou"]
             total_gt = int(det.get("num_gt", 0))
             total_pred = int(det.get("num_pred", 0))
@@ -539,7 +609,7 @@ class InstanceSegmentationEvaluator(HookBase):
                 self._log_momentum_metrics(momentum_aggregated, class_names)
 
             if self.trainer.writer is not None:
-                step = _get_writer_step(self.trainer)
+                step = get_writer_step(self.trainer)
                 self.trainer.writer.add_scalar(
                     self._metric_key(label, "ins_det_precision"), det_prec, step
                 )
@@ -588,7 +658,12 @@ class InstanceSegmentationEvaluator(HookBase):
                     label, "ins_det_f1"
                 )
                 current_metric_set = True
-            elif self.set_current_metric and not current_metric_set:
+            elif (
+                self.selection_reduction is None
+                and not self.panoptic_selection
+                and self.set_current_metric
+                and not current_metric_set
+            ):
                 self.trainer.comm_info.setdefault("current_metric_value", det_f1)
                 self.trainer.comm_info.setdefault(
                     "current_metric_name", self._metric_key(label, "ins_det_f1")
@@ -598,6 +673,69 @@ class InstanceSegmentationEvaluator(HookBase):
         if not logged_any:
             self.trainer.model.train()
             return
+
+        if self.set_current_metric and self.selection_reduction is not None:
+            missing = [label for label in self.labels if label not in det_f1_by_label]
+            if missing:
+                self.trainer.logger.warning(
+                    "Joint instance checkpoint metric unavailable; missing labels: %s",
+                    ", ".join(self._label_name(label) for label in missing),
+                )
+            else:
+                joint_metric = self._reduce_selection_metrics(
+                    [det_f1_by_label[label] for label in self.labels],
+                    self.selection_reduction,
+                )
+                if joint_metric is not None:
+                    joint_prefix = (
+                        str(self.prefix).strip("/")
+                        if self.prefix is not None
+                        else "val"
+                    )
+                    joint_name = (
+                        f"{joint_prefix}/joint/ins_det_f1_"
+                        f"{self.selection_reduction}"
+                    )
+                    self.trainer.comm_info["current_metric_value"] = joint_metric
+                    self.trainer.comm_info["current_metric_name"] = joint_name
+                    if self.trainer.writer is not None:
+                        self.trainer.writer.add_scalar(
+                            joint_name, joint_metric, get_writer_step(self.trainer)
+                        )
+                    self.trainer.logger.info(
+                        "[joint] Detection F1 %s=%.3f over labels %s",
+                        self.selection_reduction,
+                        joint_metric,
+                        ", ".join(self._label_name(label) for label in self.labels),
+                    )
+
+        if self.panoptic_selection and panoptic_rows:
+            spec = self._label_specs(model).get(self._primary(), {})
+            summary = summarize_rows(
+                panoptic_rows, int(spec["num_classes"]), noise_class(spec)
+            )
+            prefix = self._metric_prefix(self._primary())
+            self.trainer.logger.info(
+                "[%s] ARI=%.4f PQ=%.4f headline=%.4f (%d events)",
+                self._label_name(self._primary()),
+                summary["ari"],
+                summary["pid_pq"],
+                summary["headline"],
+                len(panoptic_rows),
+            )
+            if self.trainer.writer is not None:
+                step = get_writer_step(self.trainer)
+                for name, key in (
+                    ("fm4npp_ari", "ari"),
+                    ("pq", "pid_pq"),
+                    ("headline", "headline"),
+                ):
+                    self.trainer.writer.add_scalar(
+                        f"{prefix}/{name}", summary[key], step
+                    )
+            if self.set_current_metric:
+                self.trainer.comm_info["current_metric_value"] = summary["headline"]
+                self.trainer.comm_info["current_metric_name"] = f"{prefix}/headline"
 
         self.trainer.logger.info(
             "<<<<<<<<<<<<<<<<< End Instance Segmentation Evaluation <<<<<<<<<<<<<<<<<"
@@ -622,7 +760,7 @@ class InstanceSegmentationEvaluator(HookBase):
             mom_gt_b = criterion._get_batch_tensor(
                 momentum_gt, b, counts, torch.device("cpu"), None
             )
-            
+
             # get inverse mapping from points to instances
             inst_b = gt_instance.squeeze(-1)
             if inst_b.dim() == 0:
@@ -630,83 +768,91 @@ class InstanceSegmentationEvaluator(HookBase):
             if inst_b.dim() == 2 and inst_b.shape[1] == 1:
                 inst_b = inst_b.squeeze(1)
             inst_b = inst_b.cpu()
-            
+
             # Map GT ID -> Momentum
             unique_gt_ids = torch.unique(inst_b)
             unique_gt_ids = unique_gt_ids[unique_gt_ids >= 0]
             gt_mom_map = {}
             for gt_id in unique_gt_ids:
-                mask = (inst_b == gt_id)
+                mask = inst_b == gt_id
                 if mask.any():
                     gt_mom_map[gt_id.item()] = mom_gt_b[mask].float().mean().item()
-            
+
             # Map Pred ID -> Momentum
             if isinstance(pred_instance_labels, np.ndarray):
                 pred_inst_t = torch.from_numpy(pred_instance_labels)
             else:
                 pred_inst_t = pred_instance_labels
-                
+
             # Sort points by instance ID
             sorted_ids, sort_idx = torch.sort(pred_inst_t)
             # Get unique IDs and their first occurrence index in the sorted array
-            unique_ids_sorted, counts_sorted = torch.unique_consecutive(sorted_ids, return_counts=True)
-            
+            unique_ids_sorted, counts_sorted = torch.unique_consecutive(
+                sorted_ids, return_counts=True
+            )
+
             # Compute start indices
             cumsum_counts = torch.cat([torch.tensor([0]), counts_sorted.cumsum(0)[:-1]])
-            
+
             # Extract values at first indices
             first_indices = sort_idx[cumsum_counts]
             mom_values = pred_instance_momentum[first_indices]
-            
+
             # Build map
-            pr_mom_map = {uid.item(): val.item() for uid, val in zip(unique_ids_sorted, mom_values) if uid.item() >= 0}
+            pr_mom_map = {
+                uid.item(): val.item()
+                for uid, val in zip(unique_ids_sorted, mom_values)
+                if uid.item() >= 0
+            }
 
             matched_preds = []
-            
+
             # Iterate matches
             for m in matches:
                 pid = m["pred_id"]
                 gid = m["gt_id"]
-                pred_cls = m["pred_cls"] # used for per-class stats
-                
+                pred_cls = m["pred_cls"]  # used for per-class stats
+
                 if pid in pr_mom_map and gid in gt_mom_map:
-                    matched_preds.append({
-                        "pred": pr_mom_map[pid],
-                        "gt": gt_mom_map[gid],
-                        "cls": pred_cls
-                    })
-            
+                    matched_preds.append(
+                        {
+                            "pred": pr_mom_map[pid],
+                            "gt": gt_mom_map[gid],
+                            "cls": pred_cls,
+                        }
+                    )
+
             if not matched_preds:
                 return None
-                
+
             # Compute stats
             all_p = np.array([x["pred"] for x in matched_preds])
             all_g = np.array([x["gt"] for x in matched_preds])
             all_c = np.array([x["cls"] for x in matched_preds])
             all_e = all_p - all_g
-            
+
             # Collect stats per class
             class_stats = {}
             for cls_idx in range(num_classes):
-                cls_mask = (all_c == cls_idx)
+                cls_mask = all_c == cls_idx
                 if not np.any(cls_mask):
                     continue
-                
+
                 cls_errors = all_e[cls_mask]
                 cls_mae = float(np.mean(np.abs(cls_errors)))
-                cls_rmse = float(np.sqrt(np.mean(cls_errors ** 2)))
+                cls_rmse = float(np.sqrt(np.mean(cls_errors**2)))
                 cls_count = int(np.sum(cls_mask))
-                
+
                 class_stats[cls_idx] = {
                     "mae": cls_mae,
                     "rmse": cls_rmse,
                     "count": cls_count,
                 }
-            
+
             # Overall
             overall_mae = float(np.mean(np.abs(all_e)))
-            overall_rmse = float(np.sqrt(np.mean(all_e ** 2)))
-            
+            overall_rmse = float(np.sqrt(np.mean(all_e**2)))
+
             return {
                 "per_class": class_stats,
                 "overall": {
@@ -719,39 +865,40 @@ class InstanceSegmentationEvaluator(HookBase):
         except Exception as e:
             self.trainer.logger.warning(f"Error evaluating momentum: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
     def _aggregate_momentum_results(self, momentum_stats_list, class_names):
         """Aggregate momentum evaluation results across batches."""
         num_classes = len(class_names)
-        
+
         # initialize per-class accumulators
         class_mae = {i: [] for i in range(num_classes)}
         class_rmse = {i: [] for i in range(num_classes)}
         class_count = {i: 0 for i in range(num_classes)}
-        
+
         # overall accumulators
         overall_mae = []
         overall_rmse = []
         overall_count = 0
-        
+
         for stats in momentum_stats_list:
             if stats is None:
                 continue
-            
+
             # accumulate per-class stats
             for cls_idx, cls_stats in stats["per_class"].items():
                 if cls_idx < num_classes:
                     class_mae[cls_idx].append(cls_stats["mae"])
                     class_rmse[cls_idx].append(cls_stats["rmse"])
                     class_count[cls_idx] += cls_stats["count"]
-            
+
             # accumulate overall stats
             overall_mae.append(stats["overall"]["mae"])
             overall_rmse.append(stats["overall"]["rmse"])
             overall_count += stats["overall"]["count"]
-        
+
         # compute aggregated per-class metrics
         aggregated_per_class = {}
         for cls_idx in range(num_classes):
@@ -761,14 +908,14 @@ class InstanceSegmentationEvaluator(HookBase):
                     "rmse": float(np.mean(class_rmse[cls_idx])),
                     "count": class_count[cls_idx],
                 }
-        
+
         # compute aggregated overall metrics
         aggregated_overall = {
             "mae": float(np.mean(overall_mae)) if overall_mae else 0.0,
             "rmse": float(np.mean(overall_rmse)) if overall_rmse else 0.0,
             "count": overall_count,
         }
-        
+
         return {
             "per_class": aggregated_per_class,
             "overall": aggregated_overall,
@@ -777,7 +924,7 @@ class InstanceSegmentationEvaluator(HookBase):
     def _log_momentum_metrics(self, momentum_aggregated, class_names):
         """Log momentum regression metrics."""
         self.trainer.logger.info("Momentum Regression Metrics:")
-        
+
         # overall metrics
         overall = momentum_aggregated["overall"]
         self.trainer.logger.info(
@@ -785,30 +932,45 @@ class InstanceSegmentationEvaluator(HookBase):
                 overall["mae"], overall["rmse"], overall["count"]
             )
         )
-        
+
         # per-class metrics
         per_class = momentum_aggregated["per_class"]
         if per_class:
             self.trainer.logger.info("Per-class metrics:")
             for cls_idx in sorted(per_class.keys()):
-                cls_name = class_names[cls_idx] if cls_idx < len(class_names) else f"class_{cls_idx}"
+                cls_name = (
+                    class_names[cls_idx]
+                    if cls_idx < len(class_names)
+                    else f"class_{cls_idx}"
+                )
                 cls_stats = per_class[cls_idx]
                 self.trainer.logger.info(
                     "  {}: MAE={:.4f} RMSE={:.4f} Count={}".format(
-                        cls_name, cls_stats["mae"], cls_stats["rmse"], cls_stats["count"]
+                        cls_name,
+                        cls_stats["mae"],
+                        cls_stats["rmse"],
+                        cls_stats["count"],
                     )
                 )
-        
+
         # log to tensorboard if available
         if self.trainer.writer is not None:
-            step = _get_writer_step(self.trainer)
+            step = get_writer_step(self.trainer)
             overall = momentum_aggregated["overall"]
-            self.trainer.writer.add_scalar("val/momentum_overall_mae", overall["mae"], step)
-            self.trainer.writer.add_scalar("val/momentum_overall_rmse", overall["rmse"], step)
-            
+            self.trainer.writer.add_scalar(
+                "val/momentum_overall_mae", overall["mae"], step
+            )
+            self.trainer.writer.add_scalar(
+                "val/momentum_overall_rmse", overall["rmse"], step
+            )
+
             per_class = momentum_aggregated["per_class"]
             for cls_idx in sorted(per_class.keys()):
-                cls_name = class_names[cls_idx] if cls_idx < len(class_names) else f"class_{cls_idx}"
+                cls_name = (
+                    class_names[cls_idx]
+                    if cls_idx < len(class_names)
+                    else f"class_{cls_idx}"
+                )
                 cls_stats = per_class[cls_idx]
                 self.trainer.writer.add_scalar(
                     f"val/momentum_{cls_name}_mae", cls_stats["mae"], step

@@ -1,5 +1,6 @@
 """Training logging and W&B naming hooks."""
 
+import re
 import time
 
 from pimm.utils.timer import Timer
@@ -67,6 +68,11 @@ class WandbNamer(HookBase):
             dotted nested access such as ``"data.train.max_len"`` or
             ``"model.type"``; keys that resolve to ``None`` are skipped.
             Defaults to ``()``.
+        template (str, optional): Name template containing dotted config
+            placeholders such as
+            ``"{experiment.study}__{experiment.variant}__s{seed}"``.
+            When set, it takes precedence over ``keys``, ``sep``, and ``extra``.
+            Defaults to ``None``.
         sep (str): Separator joining the parts. Defaults to ``"-"``.
         format_numbers (bool): If ``True``, render numeric values with K/M/B
             suffixes (e.g. ``1000000`` -> ``"1M"``). Defaults to ``True``.
@@ -94,11 +100,19 @@ class WandbNamer(HookBase):
             #   wandb_run_name was passed on the CLI)
     """
 
-    def __init__(self, keys=(), sep="-", format_numbers=True, extra=None):
+    def __init__(
+        self,
+        keys=(),
+        sep="-",
+        format_numbers=True,
+        extra=None,
+        template=None,
+    ):
         """Store config keys and formatting options for generated run names."""
         self.keys = keys
         self.sep = sep
         self.format_numbers = format_numbers
+        self.template = template
         # normalize extra to tuple
         if extra is None:
             self.extra = ()
@@ -136,11 +150,33 @@ class WandbNamer(HookBase):
         elif abs(n_val) >= 1_000:
             return f"{n_val / 1_000:.1f}K".rstrip('0').rstrip('.')
         return str(int(n_val) if n_val == int(n_val) else n_val)
+
+    def _format_template(self, cfg):
+        """Resolve dotted config placeholders in the configured template."""
+
+        def replace(match):
+            key = match.group(1)
+            value = self._get_nested(cfg, key)
+            if value is None:
+                raise ValueError(
+                    f"WandbNamer template placeholder {key!r} is missing."
+                )
+            return self._format_value(value)
+
+        return re.sub(
+            r"\{([A-Za-z_][A-Za-z0-9_.]*)\}",
+            replace,
+            self.template,
+        )
     
     def modify_config(self, cfg):
         """Build wandb_run_name from specified keys."""
         # skip if wandb_run_name already set via CLI
         if 'wandb_run_name' in getattr(cfg, '_cli_options', set()):
+            return
+
+        if self.template is not None:
+            cfg.wandb_run_name = self._format_template(cfg)
             return
         
         parts = []

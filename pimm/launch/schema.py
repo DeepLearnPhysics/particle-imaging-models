@@ -97,12 +97,11 @@ class Watchdog:
     """Supervision of chained *interactive* runs (see pimm/launch/watchdog.py).
 
     A chained `pimm submit --interactive` run installs a scron job that hosts its
-    driver resiliently. These knobs shape that scron entry; defaults suit NERSC,
-    whose `cron` QOS runs on the login nodes and caps walltime at 1 day (the
-    driver is simply re-fired by scron, resuming from checkpoint, each cycle).
+    driver resiliently. Set the QOS and walltime to match the cluster's scron
+    configuration; scron restarts the driver from its checkpoint each cycle.
     """
 
-    qos: str = "cron"
+    qos: str | None = None
     interval_min: int = 5
     time: str = "1-00:00:00"
 

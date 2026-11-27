@@ -11,22 +11,18 @@ Please cite our work if the code is helpful to you.
 """
 
 import argparse
-import json
 import multiprocessing as mp
 import os
-import socket
-import subprocess
 import sys
-from datetime import datetime, timezone
 
 import pimm.utils.comm as comm
 from pimm.engines._train_utils import (
     _apply_hook_overrides,
     _apply_hook_overrides_from_dict,
     _save_config_artifacts,
-    _split_hook_type_options,
 )
-from pimm.utils.config import Config, DictAction
+from pimm.ops.attention import set_attention_backend
+from pimm.utils.config import Config, DictAction, _split_hook_type_options
 from pimm.utils.env import get_random_seed, set_seed
 
 
@@ -160,14 +156,16 @@ def default_config_parser(file_path, options, *, save_artifacts=True):
     except FileExistsError:
         pass
 
-    if not cfg.resume and save_artifacts:
+    process_rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", 0)))
+    if not cfg.resume and save_artifacts and process_rank == 0:
         _save_config_artifacts(cfg, file_path, options)
     
     return cfg
 
 
 def default_setup(cfg):
-    """Derive per-rank settings and seed this process."""
+    """Derive per-rank settings, set the attention backend and seed this process."""
+    set_attention_backend(cfg.get("attention_backend", "flash"))
     # Batch-size configs are global totals and are divided across ranks here.
     world_size = comm.get_world_size()
     cfg.num_worker = cfg.num_worker if cfg.num_worker is not None else mp.cpu_count()

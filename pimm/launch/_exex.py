@@ -124,7 +124,7 @@ def _plan(cfg):
         )
     if cfg.get("watchdog", {}) not in (
         {},
-        {"qos": "cron", "interval_min": 5, "time": "1-00:00:00"},
+        {"qos": None, "interval_min": 5, "time": "1-00:00:00"},
     ):
         raise SystemExit(
             "The exex path has no watchdog; salloc requires a live launcher"

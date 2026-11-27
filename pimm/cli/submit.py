@@ -22,8 +22,7 @@ def parse_command(
         argv,
         launch_timestamp=launch_timestamp,
         prog="pimm submit",
-        require_site=False,
-        default_site="s3df",
+        default_site="slurm",
     )
 
 

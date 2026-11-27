@@ -13,7 +13,6 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 import torch
 import torch.distributed as dist
-import pointops
 from sklearn.metrics import adjusted_rand_score
 
 import pimm.utils.comm as comm
@@ -21,6 +20,7 @@ from pimm.engines.metrics import (
     aggregate_instance_results,
     compute_semseg_metrics,
     eval_instances,
+    instance_ari,
 )
 from pimm.distributed import create_parallel_context, prepare_model, unwrap_model
 from pimm.datasets import build_dataset, collate_fn
@@ -194,7 +194,8 @@ class TesterBase:
 
 @TESTERS.register_module()
 class SemSegTester(TesterBase):
-    """Semantic segmentation tester following SemSegEvaluator pattern."""
+    """Semantic segmentation tester following SemSegEvaluator pattern; the model's ``seg_logits`` are scored against
+    the ``segment`` labels in the model's output."""
 
     def __init__(
         self,
@@ -234,20 +235,7 @@ class SemSegTester(TesterBase):
                 )
 
             pred = output.max(1)[1]
-            segment = input_dict["segment"]
-
-            if "origin_coord" in input_dict.keys():
-                idx, _ = pointops.knn_query(
-                    1,
-                    input_dict["coord"].float(),
-                    input_dict["offset"].int(),
-                    input_dict["origin_coord"].float(),
-                    input_dict["origin_offset"].int(),
-                )
-                pred = pred[idx.flatten().long()]
-                segment = input_dict["origin_segment"]
-
-            segment = segment.squeeze(-1)
+            segment = output_dict["segment"].squeeze(-1)
 
             all_preds.append(pred.cpu())
             all_segments.append(segment.cpu())
@@ -263,12 +251,9 @@ class SemSegTester(TesterBase):
                 dist.all_reduce(union)
                 dist.all_reduce(target)
 
-            info = "Test: [{iter}/{max_iter}]".format(
-                iter=i + 1, max_iter=len(self.test_loader)
+            self.logger.info(
+                "Test: [{iter}/{max_iter}]".format(iter=i + 1, max_iter=len(self.test_loader))
             )
-            if "origin_coord" in input_dict.keys():
-                info = "Interp. " + info
-            self.logger.info(info)
 
         if comm.get_world_size() > 1:
             all_preds_gathered = comm.gather(all_preds, dst=0)
@@ -386,7 +371,7 @@ class SemSegTester(TesterBase):
 
 @TESTERS.register_module()
 class InstanceSegTester(TesterBase):
-    """Panoptic/Instance segmentation tester following InstanceSegmentationEvaluator pattern."""
+    """Test instances, with optional singleton ARI and an explicit PID representation."""
 
     def __init__(
         self,
@@ -400,12 +385,16 @@ class InstanceSegTester(TesterBase):
         stuff_classes=None,
         iou_thresh=0.5,
         require_class_for_match=False,
+        ari_include_unassigned=False,
+        pid_tables=None,
     ):
         super().__init__(cfg, model, test_loader, verbose)
         self.stuff_threshold = float(stuff_threshold)
         self.mask_threshold = float(mask_threshold)
         self.iou_thresh = float(iou_thresh)
         self.require_class_for_match = bool(require_class_for_match)
+        self.ari_include_unassigned = bool(ari_include_unassigned)
+        self.pid_tables = pid_tables
         self.class_names = tuple(class_names or [])
         self.stuff_classes = tuple(sorted(stuff_classes or ()))
 
@@ -508,6 +497,7 @@ class InstanceSegTester(TesterBase):
                 class_names=class_names,
                 iou_thresh=self.iou_thresh,
                 require_class_for_match=self.require_class_for_match,
+                pid_tables=self.pid_tables,
             )
             all_stats.append(stats)
 
@@ -532,7 +522,9 @@ class InstanceSegTester(TesterBase):
                     momentum_stats.append(mom_stats)
 
             led_mask = pr_inst != -1
-            if led_mask.any():
+            if self.ari_include_unassigned:
+                ari_scores.append(instance_ari(gt_inst, pr_inst))
+            elif led_mask.any():
                 ari_scores.append(
                     adjusted_rand_score(gt_inst[led_mask], pr_inst[led_mask])
                 )

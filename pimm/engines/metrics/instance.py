@@ -5,14 +5,31 @@ from __future__ import annotations
 import numpy as np
 
 
+def instance_ari(gt_inst, pr_inst):
+    """Adjusted Rand index over the points of true instances (``gt_inst >= 0``).
+
+    Unassigned predictions each form a singleton cluster. Returns NaN when no true instance is present.
+    """
+    from sklearn.metrics import adjusted_rand_score
+
+    valid = gt_inst >= 0
+    if not valid.any():
+        return float("nan")
+    gt, pr = gt_inst[valid], pr_inst[valid].copy()
+    missed = pr < 0
+    pr[missed] = pr.max(initial=-1) + 1 + np.arange(missed.sum())
+    return adjusted_rand_score(gt, pr)
+
+
 def eval_instances(
     gt_inst,  # (N,) int, ground-truth instance id per point
     pr_inst,  # (N,) int, predicted instance id per point
-    gt_pid,  # either (N,) int per-point PID (constant within GT instance) OR (M_gt,) int table indexed by inst id
-    pr_pid,  # either (N,) int per-point PID (constant within Pred instance) OR (M_pr,) int table indexed by inst id
+    gt_pid,  # (N,) int PID per point; with pid_tables, a table indexed by GT instance id
+    pr_pid,  # (N,) int PID per point; with pid_tables, a table indexed by predicted instance id
     class_names=("photon", "electron", "muon", "pion", "proton"),
     iou_thresh=0.5,
     require_class_for_match=False,  # True means panoptic-style class-aware matching
+    pid_tables=None,  # None preserves automatic table detection; False requires per-point PIDs
 ):
     """
     Returns:
@@ -26,6 +43,8 @@ def eval_instances(
     K = len(class_names)
     N = gt_inst.shape[0]
     assert pr_inst.shape[0] == N
+    if pid_tables is False and (gt_pid.shape[0] != N or pr_pid.shape[0] != N):
+        raise ValueError("per-point PIDs must have one entry per point; pass pid_tables=True for per-instance tables")
 
     # Filter out background and invalid PIDs (bg_id=-1, pid=5)
     valid_mask = (gt_inst >= 0) & (pr_inst >= 0)
@@ -50,13 +69,11 @@ def eval_instances(
     # build per-instance PID from arrays
     def build_inst_pid_map(inst_ids_present, inst_ids_per_point, pid_array):
         inst_ids_present = list(map(int, inst_ids_present))
-        m = int(np.max(inst_ids_present)) + 1 if inst_ids_present else 0
+        m = max(inst_ids_present, default=-1) + 1
+        if pid_tables or (pid_tables is None and pid_array.ndim == 1 and pid_array.shape[0] >= m and m > 0):
+            return {i: int(pid_array[i]) for i in inst_ids_present if i < len(pid_array) and 0 <= int(pid_array[i]) < K}
 
-        # case A: pid_array is per-instance table (len > max inst id)
-        if pid_array.ndim == 1 and pid_array.shape[0] >= m and m > 0:
-            return {i: int(pid_array[i]) for i in inst_ids_present if 0 <= int(pid_array[i]) < K}
-
-        # case B: pid_array is per-point; take the mode for each instance
+        # per-point PIDs: take the mode for each instance
         pid_map = {}
         if len(inst_ids_present) == 0:
             return pid_map

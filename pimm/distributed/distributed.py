@@ -8,6 +8,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.nn.parallel import DistributedDataParallel
 
 import pimm.utils.comm as comm
@@ -91,6 +92,42 @@ def unwrap_model(model: nn.Module) -> nn.Module:
     return model
 
 
+def average_gradients(parameters, group=None):
+    """Average dense gradients once after a sequence of backwards outside DDP."""
+    parameters = [p for p in parameters if p.requires_grad]
+    world_size = dist.get_world_size(group)
+    if world_size == 1 or not parameters:
+        return
+    present = torch.tensor(
+        [p.grad is not None for p in parameters],
+        dtype=torch.int32,
+        device=parameters[0].device,
+    )
+    dist.all_reduce(present, group=group)
+    gradients = []
+    for parameter, count in zip(parameters, present.tolist()):
+        if count:
+            if parameter.grad is None:
+                parameter.grad = torch.zeros_like(parameter)
+            if parameter.grad.is_sparse:
+                raise ValueError("Split backward requires dense gradients")
+            gradients.append(parameter.grad)
+    bucket, size = [], 0
+    for grad in gradients:
+        nbytes = grad.numel() * grad.element_size()
+        if bucket and (grad.dtype != bucket[0].dtype or size + nbytes > 25 * 2**20):
+            flat = _flatten_dense_tensors(bucket).mul_(1 / world_size)
+            dist.all_reduce(flat, group=group)
+            torch._foreach_copy_(bucket, _unflatten_dense_tensors(flat, bucket))
+            bucket, size = [], 0
+        bucket.append(grad)
+        size += nbytes
+    if bucket:
+        flat = _flatten_dense_tensors(bucket).mul_(1 / world_size)
+        dist.all_reduce(flat, group=group)
+        torch._foreach_copy_(bucket, _unflatten_dense_tensors(flat, bucket))
+
+
 def _fsdp2_wrap(model: nn.Module, parallel_cfg: Any, context: ParallelContext) -> nn.Module:
     """Wrap modules with PyTorch composable FSDP2."""
     try:
@@ -136,7 +173,9 @@ def prepare_model(model: nn.Module, cfg: Any, context: ParallelContext) -> nn.Mo
             ddp_kwargs["device_ids"] = [context.device.index]
             ddp_kwargs["output_device"] = context.device.index
         try:
-            return DistributedDataParallel(model, static_graph=True, **ddp_kwargs)
+            return DistributedDataParallel(
+                model, static_graph=not getattr(model, "split_backward", False), **ddp_kwargs
+            )
         except TypeError:
             return DistributedDataParallel(model, **ddp_kwargs)
     if strategy == "fsdp2":

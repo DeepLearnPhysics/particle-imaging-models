@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from collections import OrderedDict
 
@@ -693,6 +694,104 @@ def save_split_checkpoint(payload, checkpoint_dir):
     synchronize()
 
 
+# Prune full-state and weights-only snapshots independently by step.
+_RETAINED_CHECKPOINT_FAMILIES = (
+    (re.compile(r"^step_(\d+)$"), True),
+    (re.compile(r"^step_(\d+)\.pth$"), False),
+    (re.compile(r"^iter_(\d+)\.pth$"), False),
+)
+
+
+def full_state_snapshot_path(model_dir, step_count, *, legacy=False):
+    """Return the retained full-state snapshot path for a global step."""
+    suffix = ".pth" if legacy else ""
+    return os.path.join(str(model_dir), f"step_{int(step_count)}{suffix}")
+
+
+def publish_full_state_snapshot(source, destination):
+    """Retain a published checkpoint as an immutable full-state snapshot.
+
+    Hard-links rather than copies: a published checkpoint is never mutated in
+    place (each save builds ``<name>.tmp`` and swaps it in with ``os.replace``),
+    so the snapshot's links keep the original inodes alive even after the next
+    save unlinks the rolling checkpoint. Disk usage still grows by one
+    checkpoint per retained snapshot, but no bytes are re-read or re-written --
+    which matters because the alternative is copying the full optimizer state
+    every ``snapshot_freq`` steps.
+
+    Staged through ``<destination>.tmp`` and renamed, so an interrupted link
+    walk cannot leave a directory that has the ``.complete`` sentinel but is
+    missing shards. Falls back to a real copy on filesystems that reject
+    hard links.
+    """
+    tmp = str(destination) + ".tmp"
+    if os.path.isdir(tmp):
+        shutil.rmtree(tmp)
+    elif os.path.exists(tmp):
+        os.remove(tmp)
+    if os.path.isdir(source):
+        try:
+            shutil.copytree(source, tmp, copy_function=os.link)
+        except OSError:
+            # Hard links unsupported (or a stale partial tree): pay for a copy.
+            if os.path.isdir(tmp):
+                shutil.rmtree(tmp)
+            shutil.copytree(source, tmp)
+    else:
+        try:
+            os.link(source, tmp)
+        except OSError:
+            shutil.copyfile(source, tmp)
+    if os.path.isdir(destination):
+        shutil.rmtree(destination)
+    os.replace(tmp, destination)
+    return destination
+
+
+def _remove_retained_entry(path, is_dir):
+    """Delete a retained checkpoint plus any atomic-save siblings it left."""
+    if is_dir:
+        shutil.rmtree(path, ignore_errors=True)
+        return
+    for candidate in (path, path + ".prev", path + ".tmp"):
+        if os.path.exists(candidate):
+            os.remove(candidate)
+
+
+def prune_retained_checkpoints(model_dir, keep_last_n):
+    """Delete all but the ``keep_last_n`` newest retained checkpoints.
+
+    Each family (full-state ``step_*`` snapshots and weights-only ``iter_*.pth``
+    files) is pruned independently and ordered by the global step encoded in the
+    name, not by mtime -- a hard-linked snapshot inherits the source's timestamps
+    and a resumed run can rewrite an earlier step. The rolling ``last``
+    checkpoint and ``model_best.pth`` are never touched.
+
+    Returns the list of removed paths.
+    """
+    if not keep_last_n or int(keep_last_n) <= 0 or not os.path.isdir(model_dir):
+        return []
+    keep_last_n = int(keep_last_n)
+    found = {index: [] for index in range(len(_RETAINED_CHECKPOINT_FAMILIES))}
+    for name in os.listdir(model_dir):
+        for index, (pattern, is_dir) in enumerate(_RETAINED_CHECKPOINT_FAMILIES):
+            match = pattern.fullmatch(name)
+            if match is None:
+                continue
+            path = os.path.join(model_dir, name)
+            if os.path.isdir(path) != is_dir:
+                continue
+            found[index].append((int(match.group(1)), path))
+            break
+    removed = []
+    for index, entries in found.items():
+        is_dir = _RETAINED_CHECKPOINT_FAMILIES[index][1]
+        for _, path in sorted(entries)[:-keep_last_n]:
+            _remove_retained_entry(path, is_dir)
+            removed.append(path)
+    return removed
+
+
 def load_dcp_trainer_state(checkpoint_dir, trainer):
     """Load a complete trainer-state DCP into a typed placeholder payload."""
     import torch.distributed.checkpoint as dcp
@@ -808,12 +907,10 @@ class CheckpointManager:
     def __init__(self, trainer):
         self.trainer = trainer
 
-    def _checkpoint_format(self, hook_backend=None):
+    def _checkpoint_format(self):
         """Resolve the on-disk checkpoint format."""
         aliases = {"dcp": "standard", "torch": "legacy"}
         fmt = _cfg_get(self.trainer.cfg, "checkpoint_format", None)
-        if fmt is None:
-            fmt = hook_backend
         fmt = str(fmt or "standard").lower()
         fmt = aliases.get(fmt, fmt)
         if fmt not in ("standard", "legacy"):
@@ -824,18 +921,46 @@ class CheckpointManager:
         return fmt
 
     def _write_checkpoint(
-        self, payload, *, fmt, is_best, step_count, save_freq, save_iter_checkpoints
+        self,
+        payload,
+        *,
+        fmt,
+        is_best,
+        step_count,
+        save_freq,
+        save_iter_checkpoints,
+        save_full_state_snapshots=False,
+        snapshot_freq=None,
+        keep_last_n=None,
+        force_full_snapshot=False,
     ):
         """Write a built payload in the resolved format.
 
         Must be called on ALL ranks: the ``standard`` format performs a
         collective DCP save. Rank-0-only side artifacts (the best/iter weight
-        files and the legacy single file) are guarded internally.
+        files, retained snapshots, pruning, and the legacy single file) are
+        guarded internally.
+
+        ``snapshot_freq=None`` inherits ``save_freq`` (snapshot at every save);
+        ``0`` turns the step cadence off, leaving ``force_full_snapshot`` as the
+        only way to publish one. That is how a caller asks for snapshots on some
+        boundary the step counter cannot express -- an epoch end, when
+        ``iters_per_epoch`` is not a multiple of ``save_freq``.
         """
         model_dir = os.path.join(self.trainer.cfg.save_path, "model")
         best_file = os.path.join(model_dir, "model_best.pth")
         do_iter_snapshot = bool(
             save_iter_checkpoints and save_freq and step_count and step_count % save_freq == 0
+        )
+        if snapshot_freq is None:
+            snapshot_freq = save_freq
+        do_full_snapshot = bool(
+            save_full_state_snapshots
+            and step_count
+            and (
+                force_full_snapshot
+                or (snapshot_freq and step_count % snapshot_freq == 0)
+            )
         )
         if fmt == "standard":
             last_dir = os.path.join(model_dir, "last")
@@ -851,6 +976,15 @@ class CheckpointManager:
                     save_model_weights_file(
                         payload, os.path.join(model_dir, f"iter_{step_count}.pth")
                     )
+                if do_full_snapshot:
+                    # Reuse files from the rolling save to avoid serializing state twice.
+                    snapshot = publish_full_state_snapshot(
+                        last_dir, full_state_snapshot_path(model_dir, step_count)
+                    )
+                    self.trainer.logger.info(
+                        f"Retained resumable snapshot: {snapshot}"
+                    )
+                self._prune_retained(model_dir, keep_last_n)
             return
         # legacy: single monolithic file, written by rank 0 only
         if is_main_process():
@@ -863,10 +997,54 @@ class CheckpointManager:
                 shutil.copyfile(
                     filename, os.path.join(model_dir, f"iter_{step_count}.pth")
                 )
+            if do_full_snapshot:
+                # Keep full-state snapshot names consistent across checkpoint formats.
+                snapshot = publish_full_state_snapshot(
+                    filename, full_state_snapshot_path(model_dir, step_count, legacy=True)
+                )
+                self.trainer.logger.info(f"Retained resumable snapshot: {snapshot}")
+            self._prune_retained(model_dir, keep_last_n)
+
+    def _prune_retained(self, model_dir, keep_last_n):
+        """Drop stale retained checkpoints, never failing the save on error."""
+        if not keep_last_n:
+            return
+        try:
+            removed = prune_retained_checkpoints(model_dir, keep_last_n)
+        except OSError as error:
+            # A failed prune must not abort the collective checkpoint save.
+            self.trainer.logger.warning(f"Checkpoint pruning failed: {error}")
+            return
+        if removed:
+            self.trainer.logger.info(
+                f"Pruned {len(removed)} checkpoint(s) beyond keep_last_n="
+                f"{keep_last_n}: {', '.join(os.path.basename(p) for p in removed)}"
+            )
 
     @sl.log_trace_span("checkpoint_save")
-    def save_epoch_checkpoint(self, *, is_best=False, step_count=0, save_freq=None):
-        """Save an epoch/metric-oriented checkpoint. Must run on all ranks."""
+    def save_epoch_checkpoint(
+        self,
+        *,
+        is_best=False,
+        step_count=0,
+        save_freq=None,
+        save_iter_checkpoints=None,
+        save_full_state_snapshots=False,
+        snapshot_freq=None,
+        keep_last_n=None,
+        force_full_snapshot=False,
+    ):
+        """Save an epoch/metric-oriented checkpoint. Must run on all ranks.
+
+        ``save_iter_checkpoints=None`` keeps the historical coupling, writing a
+        weights-only ``iter_N.pth`` beside the rolling checkpoint whenever a
+        ``save_freq`` cadence is set. Pass ``False`` to keep the cadence but skip
+        that family, which is redundant once ``save_full_state_snapshots`` is on
+        (those ``step_N`` snapshots are resumable; ``iter_N.pth`` is not).
+
+        ``force_full_snapshot=True`` publishes a retained ``step_N`` snapshot at
+        this step whatever ``snapshot_freq`` says -- see :meth:`_write_checkpoint`.
+        """
         sl.add_step_tag("checkpoint")
         fmt = self._checkpoint_format()
         payload = build_checkpoint_payload(
@@ -880,34 +1058,13 @@ class CheckpointManager:
             is_best=is_best,
             step_count=step_count,
             save_freq=save_freq,
-            save_iter_checkpoints=bool(save_freq),
-        )
-
-    @sl.log_trace_span("checkpoint_save")
-    def save_iteration_checkpoint(
-        self,
-        *,
-        backend=None,
-        is_best=False,
-        step_count=0,
-        save_freq=None,
-        save_iter_checkpoints=False,
-    ):
-        """Save an iteration-oriented checkpoint. Must run on all ranks."""
-        sl.add_step_tag("checkpoint")
-        fmt = self._checkpoint_format(backend)
-        payload = build_checkpoint_payload(
-            self.trainer,
-            distributed_rng=True,
-            initialize_logger=True,
-        )
-        self._write_checkpoint(
-            payload,
-            fmt=fmt,
-            is_best=is_best,
-            step_count=step_count,
-            save_freq=save_freq,
-            save_iter_checkpoints=save_iter_checkpoints,
+            save_iter_checkpoints=(
+                bool(save_freq) if save_iter_checkpoints is None else save_iter_checkpoints
+            ),
+            save_full_state_snapshots=save_full_state_snapshots,
+            snapshot_freq=snapshot_freq,
+            keep_last_n=keep_last_n,
+            force_full_snapshot=force_full_snapshot,
         )
 
     @sl.log_trace_span("checkpoint_load")
@@ -1120,13 +1277,17 @@ class CheckpointManager:
             apply_train_state_to_trainer(self.trainer, train_state)
             if train_state.iter_in_epoch > 0:
                 if not local_dataloader_state:
-                    self.trainer.logger.warning(
-                        "Checkpoint is mid-epoch but has no dataloader state; "
-                        "resuming from the beginning of the saved epoch and "
-                        "replaying already-completed batches."
-                    )
-                    self.trainer.start_iter = 0
-                    self.trainer.global_step = self.trainer.start_epoch * iter_per_epoch
+                    if self.trainer.cfg.get("resume_preserve_step", False):
+                        self.trainer.logger.warning(
+                            "Checkpoint has no dataloader state; keeping the saved step with fresh data order."
+                        )
+                    else:
+                        self.trainer.logger.warning(
+                            "Checkpoint is mid-epoch but has no dataloader state; "
+                            "resuming from the beginning of the saved epoch and replaying already-completed batches."
+                        )
+                        self.trainer.start_iter = 0
+                        self.trainer.global_step = self.trainer.start_epoch * iter_per_epoch
                 else:
                     load_dataloader_state_dict(
                         self.trainer.train_loader,

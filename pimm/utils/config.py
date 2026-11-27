@@ -3,6 +3,7 @@
 
 import ast
 import copy
+import inspect
 import os
 import os.path as osp
 import platform
@@ -487,7 +488,8 @@ class Config:
 
         def _format_basic_types(k, v, use_mapping=False):
             if isinstance(v, str):
-                v_str = f"'{v}'"
+                # Config dumps must preserve quotes and newlines in executable Python.
+                v_str = repr(v)
             else:
                 v_str = str(v)
 
@@ -768,3 +770,8 @@ class DictAction(Action):
             key, val = kv.split("=", maxsplit=1)
             options[key] = self._parse_iterable(val)
         setattr(namespace, self.dest, options)
+
+
+def resolve_arguments(cls, config):
+    """The constructor arguments of ``cls``: the value in ``config`` for each one it sets, the class's default otherwise."""
+    return {p.name: config.get(p.name, p.default) for p in inspect.signature(cls).parameters.values()}

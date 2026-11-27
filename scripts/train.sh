@@ -17,7 +17,7 @@ Usage: sh scripts/train.sh [OPTIONS] [-- --options key=val ...]
 
 Options:
   -c CONFIG     Config path under configs/, with or without .py
-                (e.g., panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask)
+                (e.g., panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask)
   -n NAME       Experiment name (default: auto-generated from CONFIG + timestamp)
   -g GPUS       GPUs per machine (default: auto-detect all available)
   -m MACHINES   Number of machines (default: 1)
@@ -30,16 +30,16 @@ Options:
 
 Examples:
   # Single-GPU Sonata pre-training
-  sh scripts/train.sh -g 1 -c panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  sh scripts/train.sh -g 1 -c panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 
   # 4-GPU with custom experiment name
-  sh scripts/train.sh -g 4 -c panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask -n my_exp
+  sh scripts/train.sh -g 4 -c panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask -n my_exp
 
   # Override config values
-  sh scripts/train.sh -g 1 -c panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-lin -- --options epoch=10
+  sh scripts/train.sh -g 1 -c panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-lin -- --options epoch=10
 
   # No code copy (changes to repo take effect immediately)
-  sh scripts/train.sh -C -g 1 -c panda/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-lin -n dev
+  sh scripts/train.sh -C -g 1 -c panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-lin -n dev
 EOF
   exit 0
 }

@@ -184,6 +184,7 @@ def setup_distributed():
         backend='nccl',
         world_size=world_size,
         rank=rank,
+        device_id=torch.device('cuda', local_rank),
     )
     
     # Build a same-node group for local rank and local size queries.

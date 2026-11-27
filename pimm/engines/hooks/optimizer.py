@@ -1,6 +1,6 @@
 """Optimizer mutation and scheduling hooks."""
 
-from pimm.utils.scheduler import CosineScheduler
+from pimm.utils.scheduler import CosineScheduler, reference_total_steps
 
 from .default import HookBase
 from .builder import HOOKS
@@ -136,20 +136,20 @@ class WeightDecayScheduler(HookBase):
     """Apply a cosine schedule to optimizer parameter-group weight decay.
 
     In ``before_train`` it builds a :class:`~pimm.utils.scheduler.CosineScheduler`
-    spanning ``cfg.scheduler.total_steps * warmup_ratio`` iterations (advanced to
-    the current step so resumes continue smoothly). In ``before_step`` it steps
-    the schedule and writes the resulting weight decay onto every optimizer group
-    flagged ``apply_wd=True`` (groups flagged ``False`` keep their original, e.g.
-    ``0.0``), then logs it to the writer as ``params/wd``. Registered as
-    ``WeightDecayScheduler``.
+    spanning :func:`~pimm.utils.scheduler.reference_total_steps` ``* warmup_ratio``
+    iterations (advanced to the current step so resumes continue smoothly). In
+    ``before_step`` it steps the schedule and writes the resulting weight decay
+    onto every optimizer group flagged ``apply_wd=True`` (groups flagged ``False``
+    keep their original, e.g. ``0.0``), then logs it to the writer as
+    ``params/wd``. Registered as ``WeightDecayScheduler``.
 
     Args:
         base_value (float): Starting weight decay. Defaults to ``0.04``.
         final_value (float): Ending weight decay after the schedule. Defaults to
             ``0.2``.
-        warmup_ratio (float): Fraction of ``cfg.scheduler.total_steps`` over
-            which the cosine schedule runs (scales the schedule length).
-            Defaults to ``1.0``.
+        warmup_ratio (float): Fraction of the reference horizon over which the
+            cosine schedule runs (scales the schedule length). Defaults to
+            ``1.0``.
 
     Note:
         The ``apply_wd`` flags are produced by :class:`WeightDecayExclusion`;
@@ -190,7 +190,7 @@ class WeightDecayScheduler(HookBase):
         self.scheduler = CosineScheduler(
             base_value=self.base_value,
             final_value=self.final_value,
-            total_iters=self.trainer.cfg.scheduler.total_steps * self.warmup_ratio,
+            total_iters=reference_total_steps(self.trainer.cfg) * self.warmup_ratio,
         )
         self.scheduler.iter = curr_step
 

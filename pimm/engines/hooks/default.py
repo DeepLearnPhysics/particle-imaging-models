@@ -10,6 +10,14 @@ import weakref
 from .builder import HOOKS
 
 
+def get_writer_step(trainer):
+    """Return the local step; the writer applies any configured offset."""
+    info = getattr(trainer, "comm_info", {})
+    if "epoch" in info and "iter" in info:
+        return info.get("epoch", 0) * info.get("iter_per_epoch", 0) + info.get("iter", 0) + 1
+    return getattr(trainer, "epoch", 0)
+
+
 class HookBase:
     """Base class for all training hooks registered with the trainer.
 
@@ -28,7 +36,10 @@ class HookBase:
     - ``before_epoch()``: called at the start of every epoch.
     - ``before_step()``: called before each training step (before the batch is
       consumed by the model).
-    - ``after_step()``: called after each training step (after forward/backward).
+    - ``after_backward()``: called after gradients are unscaled and before any
+      gradient clipping or optimizer update.
+    - ``after_step()``: called after each training step (after the optimizer
+      update).
     - ``after_epoch()``: called at the end of every epoch.
     - ``after_train()``: called once after the training loop finishes.
 
@@ -58,6 +69,9 @@ class HookBase:
         pass
 
     def before_step(self):
+        pass
+
+    def after_backward(self):
         pass
 
     def after_step(self):
@@ -117,6 +131,9 @@ class ModelHook(HookBase):
 
     def before_step(self):
         self.model.before_step()
+
+    def after_backward(self):
+        self.model.after_backward()
 
     def after_step(self):
         self.model.after_step()

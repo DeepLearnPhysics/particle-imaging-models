@@ -91,8 +91,7 @@ class PushToHub(HookBase):
             ``None``.
         every_n_steps (int, optional): Push the rolling checkpoint in
             ``after_step`` every N global steps -- use this to match an
-            iteration-oriented saver like ``CheckpointSaverIteration`` (set it to
-            the saver's ``save_freq``). The step counter is seeded from resumed
+            ``CheckpointSaver`` (set it to the saver's ``save_freq``). The step counter is seeded from resumed
             progress in ``before_train``. ``None`` disables. Defaults to ``None``.
         background (bool): Run periodic raw uploads in a background thread so
             they never block the training step (uploads to the same path are

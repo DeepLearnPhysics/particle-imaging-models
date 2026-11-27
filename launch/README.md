@@ -13,7 +13,7 @@ Run on one local process:
 
 ```bash
 pimm launch \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Run on four local GPUs:
@@ -21,7 +21,7 @@ Run on four local GPUs:
 ```bash
 pimm launch \
   --resources.nproc-per-node 4 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Run from inside a user-authored Slurm allocation:
@@ -30,7 +30,7 @@ Run from inside a user-authored Slurm allocation:
 srun pimm launch \
   --resources.nnodes "$SLURM_NNODES" \
   --resources.nproc-per-node "$SLURM_GPUS_ON_NODE" \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Training config overrides go after `--` as plain `key=value` arguments:
@@ -38,7 +38,7 @@ Training config overrides go after `--` as plain `key=value` arguments:
 ```bash
 pimm launch \
   --resources.nproc-per-node 4 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
   -- epoch=1 data.train.max_len=1000 batch_size=8
 ```
 
@@ -46,31 +46,23 @@ Use `--dry-run` to print the rendered local launch script.
 
 ## Managed Slurm Submission
 
-Submit through the site-aware submitit path:
+Submit through the generic Slurm profile, which is also the default for
+`pimm submit`. Supply your account and partition through flags or a site file:
 
 ```bash
 pimm submit \
-  --site s3df \
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
   --resources.nnodes 1 \
   --resources.nproc-per-node 4 \
   --resources.time 00:30:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
   -- epoch=1 data.train.max_len=1000 batch_size=8
 ```
 
-For NERSC:
-
-```bash
-pimm submit \
-  --site nersc \
-  --resources.nnodes 1 \
-  --resources.nproc-per-node 4 \
-  --resources.time 00:30:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
-```
-
 Use `--dry-run` to print the submitit manifest and `--output PATH` to write it.
-`--submit.host iana` can be used when submission should happen from a remote login host.
+`--submit.host login.cluster.example` submits from a remote login host.
 
 ## Container Repo Mounts
 
@@ -87,15 +79,15 @@ apptainer exec --nv \
   --bind "$PWD:/opt/pimm/src" \
   --pwd /opt/pimm/src \
   /path/to/pimm.sif \
-  pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Manual Shifter use should do the equivalent volume mount:
 
 ```bash
-shifter --image=youngsm/pimm-nersc:pytorch2.10.0-cuda12.6 \
+shifter --image=<container-image> \
   --volume="$PWD:/opt/pimm/src" \
-  /bin/bash -lc 'cd /opt/pimm/src && pimm launch --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask'
+  /bin/bash -lc 'cd /opt/pimm/src && pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask'
 ```
 
 ## Requeue Attempts
@@ -105,12 +97,14 @@ and submitit requeues it on timeout up to `N - 1` times.
 
 ```bash
 pimm submit \
-  --site nersc \
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
   --chain.jobs 4 \
   --resources.nnodes 32 \
   --resources.nproc-per-node 4 \
   --resources.time 02:00:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 ```
 
 Attempt 1 starts normally unless resume is requested. Requeued attempts resume
@@ -122,33 +116,38 @@ after checkpoint progress:
 
 ```bash
 pimm submit \
-  --site nersc \
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
   --interactive \
   --chain.jobs 4 \
-  --resources.qos interactive \
+  --resources.qos <interactive-qos> \
+  --watchdog.qos <watchdog-qos> \
   --resources.time 02:00:00 \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 
 pimm watchdog ls
 ```
 
-This requires a site with `scrontab` and a login-node QOS such as NERSC's
-`cron` QOS.
+This requires `scrontab` and a QOS for the watchdog driver. Configure it with
+`--watchdog.qos` and `--watchdog.time` for your cluster.
+Omitting `--watchdog.qos` uses the cluster's default QOS.
 
 ## Checkpoint Backend Policy
 
-`pimm launch` and `pimm submit` default `CheckpointSaverIteration` to DCP when
-the rendered run is multi-rank, submitit-requeued, or requests
-`parallel.strategy=fsdp2`.
+`CheckpointSaver` uses the standard DCP format by default, for both local and
+distributed runs. The launcher forwards explicit training options.
 
 Plain `.pth` checkpoints remain supported for local/simple runs, legacy loading,
-and export-style artifacts. To force the legacy backend:
+and export-style artifacts. To select the legacy format:
 
 ```bash
 pimm submit \
-  --site s3df \
-  --train.config panda/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
-  -- hooks.CheckpointSaverIteration.backend=torch
+  --site slurm \
+  --resources.account <account> \
+  --resources.partition <gpu-partition> \
+  --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
+  -- checkpoint_format=legacy
 ```
 
 ## File Ownership
@@ -156,14 +155,14 @@ pimm submit \
 - `launch/defaults.yaml`: common launcher defaults.
 - `launch/sites/slurm.yaml`: generic Slurm defaults for resources, logs, and
   environment; cluster-specific Slurm sites inherit from this with `_base_`.
-- `launch/sites/s3df.yaml`: S3DF account/partition and environment variables;
+- `launch/sites/s3df.yaml`: example S3DF account/partition and environment variables;
   bare metal, jobs run in the checkout's uv-managed `.venv`.
-- `launch/sites/s3df-container.yaml`: containerized S3DF alternative
+- `launch/sites/s3df-container.yaml`: example containerized S3DF profile
   (Singularity, frozen image environment) for large-scale or pinned runs.
-- `launch/sites/nersc.yaml`: NERSC account/qos/constraint and Perlmutter
+- `launch/sites/nersc.yaml`: example NERSC account/qos/constraint and Perlmutter
   environment variables; bare metal, using the `.venv` prepared once with
   `scripts/nersc_env.sh`.
-- `launch/sites/nersc-container.yaml`: containerized NERSC alternative
+- `launch/sites/nersc-container.yaml`: example containerized NERSC profile
   (Shifter, frozen image environment) for large-scale or pinned runs.
 - `container.repo_mount`: in-container path where `paths.repo_root` is mounted
   so `pimm` imports resolve to the checkout; defaults to `/opt/pimm/src`.

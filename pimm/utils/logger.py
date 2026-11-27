@@ -11,8 +11,6 @@ import logging
 import torch
 import torch.distributed as dist
 
-from termcolor import colored
-
 logger_initialized = {}
 root_status = 0
 
@@ -23,6 +21,8 @@ class _ColorfulFormatter(logging.Formatter):
         super(_ColorfulFormatter, self).__init__(*args, **kwargs)
 
     def formatMessage(self, record):
+        from termcolor import colored
+
         log = super(_ColorfulFormatter, self).formatMessage(record)
         if record.levelno == logging.WARNING:
             prefix = colored("WARNING", "red", attrs=["blink"])
@@ -89,6 +89,8 @@ def get_logger(name, log_file=None, log_level=logging.INFO, file_mode="a", color
         "[%(asctime)s %(levelname)s %(filename)s line %(lineno)d] %(message)s"
     )
     if color:
+        from termcolor import colored
+
         formatter = _ColorfulFormatter(
             colored("[%(asctime)s %(name)s]: ", "green") + "%(message)s",
             datefmt="%m/%d %H:%M:%S",

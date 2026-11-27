@@ -1,19 +1,10 @@
-
 import numpy as np
 import torch
 
 import pimm.utils.comm as comm
-import wandb
 from pimm.engines.hooks.builder import HOOKS
-from pimm.engines.hooks.default import HookBase
+from pimm.engines.hooks.default import HookBase, get_writer_step
 from pimm.observability import structured_logger as sl
-
-def _get_writer_step(trainer):
-    """Local train step for logging; writer applies any configured offset."""
-    ci = getattr(trainer, "comm_info", {})
-    if "epoch" in ci and "iter" in ci:
-        return ci.get("epoch", 0) * ci.get("iter_per_epoch", 0) + ci.get("iter", 0) + 1
-    return getattr(trainer, "epoch", 0)
 
 
 @HOOKS.register_module()
@@ -59,7 +50,12 @@ class MAEEvaluator(HookBase):
             #   (= -avg loss, so higher is better)
     """
 
-    def __init__(self, every_n_steps: int = 0, max_batches: int = None, log_pointclouds: bool = True):
+    def __init__(
+        self,
+        every_n_steps: int = 0,
+        max_batches: int = None,
+        log_pointclouds: bool = True,
+    ):
         """
         Args:
             every_n_steps: run validation every N steps. If 0, run every epoch instead.
@@ -77,7 +73,8 @@ class MAEEvaluator(HookBase):
         if self.every_n_steps > 0:
             global_iter = (
                 self.trainer.comm_info["iter"]
-                + self.trainer.comm_info["iter_per_epoch"] * self.trainer.comm_info["epoch"]
+                + self.trainer.comm_info["iter_per_epoch"]
+                * self.trainer.comm_info["epoch"]
             )
             if (global_iter + 1) % self.every_n_steps == 0:
                 self.eval()
@@ -101,7 +98,9 @@ class MAEEvaluator(HookBase):
                 comm.synchronize()
             return
 
-        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start MAE Validation >>>>>>>>>>>>>>>>")
+        self.trainer.logger.info(
+            ">>>>>>>>>>>>>>>> Start MAE Validation >>>>>>>>>>>>>>>>"
+        )
         self.trainer.model.eval()
 
         total_loss = 0.0
@@ -122,7 +121,7 @@ class MAEEvaluator(HookBase):
 
             # use AMP if enabled in config to match training conditions
             # on first batch, request visualization data
-            return_viz = (i == 0 and self.log_pointclouds)
+            return_viz = i == 0 and self.log_pointclouds
             if getattr(self.trainer.cfg, "enable_amp", False):
                 amp_dtype = getattr(self.trainer.cfg, "amp_dtype", "bfloat16")
                 dtype = torch.bfloat16 if amp_dtype == "bfloat16" else torch.float16
@@ -185,16 +184,20 @@ class MAEEvaluator(HookBase):
 
         # log to wandb/tensorboard
         if self.trainer.writer is not None:
-            step = _get_writer_step(self.trainer)
+            step = get_writer_step(self.trainer)
             self.trainer.writer.add_scalar("val/loss", avg_loss, step)
             self.trainer.writer.add_scalar("val/coord_loss", avg_coord, step)
             self.trainer.writer.add_scalar("val/feat_loss", avg_feat, step)
             self.trainer.writer.add_scalar("val/mask_ratio", avg_mask_ratio, step)
 
-        self.trainer.comm_info["current_metric_value"] = -avg_loss  # negative since lower is better
+        self.trainer.comm_info["current_metric_value"] = (
+            -avg_loss
+        )  # negative since lower is better
         self.trainer.comm_info["current_metric_name"] = "neg_val_loss"
 
-        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End MAE Validation <<<<<<<<<<<<<<<<<")
+        self.trainer.logger.info(
+            "<<<<<<<<<<<<<<<<< End MAE Validation <<<<<<<<<<<<<<<<<"
+        )
         self.trainer.model.train()
 
         # synchronize other ranks
@@ -207,8 +210,13 @@ class MAEEvaluator(HookBase):
             # check if wandb is available and active
             if self.trainer.writer is None:
                 return
-            if not hasattr(self.trainer.writer, "run") or self.trainer.writer.run is None:
+            if (
+                not hasattr(self.trainer.writer, "run")
+                or self.trainer.writer.run is None
+            ):
                 return
+            import wandb  # only reached with an active W&B writer
+
 
             visible_coord = output_dict["viz_visible_coord"].numpy()  # (N_vis, 3)
             pred_coord = output_dict["viz_pred_coord"].numpy()  # (N_masked, K, 3)
@@ -244,18 +252,22 @@ class MAEEvaluator(HookBase):
 
             # combine visible + target (ground truth)
             gt_combined = np.vstack([visible_coord, target_coord])
-            gt_colors = np.vstack([
-                np.full((n_vis, 3), [0, 0, 255]),  # blue for visible
-                np.full((n_target, 3), [0, 255, 0]),  # green for masked (GT)
-            ])
+            gt_colors = np.vstack(
+                [
+                    np.full((n_vis, 3), [0, 0, 255]),  # blue for visible
+                    np.full((n_target, 3), [0, 255, 0]),  # green for masked (GT)
+                ]
+            )
             gt_pointcloud = np.hstack([gt_combined, gt_colors])
 
             # combine visible + predicted (reconstruction)
             recon_combined = np.vstack([visible_coord, pred_coord_flat])
-            recon_colors = np.vstack([
-                np.full((n_vis, 3), [0, 0, 255]),  # blue for visible
-                np.full((n_pred, 3), [255, 0, 0]),  # red for predicted
-            ])
+            recon_colors = np.vstack(
+                [
+                    np.full((n_vis, 3), [0, 0, 255]),  # blue for visible
+                    np.full((n_pred, 3), [255, 0, 0]),  # red for predicted
+                ]
+            )
             recon_pointcloud = np.hstack([recon_combined, recon_colors])
 
             # log to wandb
@@ -264,7 +276,7 @@ class MAEEvaluator(HookBase):
                     "val/pointcloud_gt": wandb.Object3D(gt_pointcloud),
                     "val/pointcloud_recon": wandb.Object3D(recon_pointcloud),
                 },
-                _get_writer_step(self.trainer),
+                get_writer_step(self.trainer),
             )
 
             self.trainer.logger.info("Logged point cloud visualizations to wandb")

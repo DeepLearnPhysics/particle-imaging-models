@@ -1,7 +1,6 @@
 site: slurm
 
-# Optional entries are left commented so this profile keeps its current
-# behavior. Uncomment and customize only the settings this site needs.
+# Default for pimm submit and base for site profiles; supply account and partition.
 # interactive: true # `pimm submit` uses a blocking salloc instead of sbatch
 
 paths:
@@ -58,7 +57,7 @@ env:  # put secrets in .env, not here!
 
 # Used only for chained interactive jobs supervised through scron.
 # watchdog:
-#   qos: cron
+#   qos: watchdog
 #   interval_min: 5
 #   time: "1-00:00:00"
 

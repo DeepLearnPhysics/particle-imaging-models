@@ -8,6 +8,7 @@ Please cite our work if the code is helpful to you.
 """
 
 import datetime
+import importlib
 import json
 import logging
 import os
@@ -16,11 +17,7 @@ import torch
 import numpy as np
 import traceback
 import sys
-try:
-    import wandb
-except ImportError:
-    wandb = None
-import matplotlib.pyplot as plt
+wandb = None
 
 from typing import List, Optional, Tuple, Dict, Any, Union
 from collections import defaultdict
@@ -39,6 +36,17 @@ __all__ = [
 
 _CURRENT_STORAGE_STACK = []
 WANDB_STEP_METRIC = "train/global_step"
+
+
+def _require_wandb():
+    """Load W&B when a writer is requested."""
+    global wandb
+    if wandb is None:
+        try:
+            wandb = importlib.import_module("wandb")
+        except ImportError as error:
+            raise ImportError("W&B logging requires the training dependencies") from error
+    return wandb
 
 
 def _define_wandb_metrics(run):
@@ -683,11 +691,7 @@ class WandbWriter(EventWriter):
             config (dict): Dictionary of configuration parameters for the run
             kwargs: other arguments passed to `wandb.init(...)`
         """
-        if wandb is None:
-            raise ImportError(
-                "WandbWriter requires the training environment; "
-                "run `uv sync --all-extras --locked`"
-            )
+        _require_wandb()
         
         self._window_size = window_size
         self._wandb_initialized = False
@@ -806,11 +810,7 @@ class WandbSummaryWriter:
             history: new, append, or fork; defaults to PIMM_WANDB_HISTORY or new.
             **kwargs: Additional arguments passed to wandb.init
         """
-        if wandb is None:
-            raise ImportError(
-                "WandbSummaryWriter requires the training environment; "
-                "run `uv sync --all-extras --locked`"
-            )
+        _require_wandb()
 
         from exex.contrib import wandb as tracking
 
@@ -968,6 +968,8 @@ class WandbSummaryWriter:
         self.log({tag: wandb.Image(figure)}, global_step)
         
         if close:
+            import matplotlib.pyplot as plt
+
             plt.close(figure)
     
     def add_text(

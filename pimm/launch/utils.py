@@ -18,7 +18,10 @@ def find_repo_root() -> Path:
     for candidate in candidates:
         if (candidate / "launch" / "defaults.yaml").is_file():
             return candidate
-    return Path(__file__).resolve().parents[2]
+    raise SystemExit(
+        f"This pimm command runs from a pimm checkout, and none was found in {Path.cwd()} or above the pimm package. "
+        "Clone https://github.com/DeepLearnPhysics/particle-imaging-models and run the command from it."
+    )
 
 
 ROOT = find_repo_root()

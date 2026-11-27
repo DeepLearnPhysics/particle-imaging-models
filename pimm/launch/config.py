@@ -15,7 +15,6 @@ from .utils import (
     PLACEHOLDER_RE,
     ROOT,
     as_bool,
-    chain_jobs,
     distributed_world_size,
     parse_value,
     scheduler,
@@ -170,36 +169,6 @@ def build_run_name(cfg: dict[str, Any], launch_timestamp: str) -> str | None:
     return name
 
 
-def uses_fsdp2(cfg: dict[str, Any]) -> bool:
-    """Return whether launch-time training options request FSDP2."""
-    options = cfg.get("train", {}).get("options") or {}
-    strategy = options.get("parallel.strategy", options.get("distributed.strategy"))
-    return str(strategy).lower() == "fsdp2"
-
-
-def has_explicit_checkpoint_backend(cfg: dict[str, Any]) -> bool:
-    """Return whether the user/recipe explicitly chose a checkpoint backend."""
-    options = cfg.get("train", {}).get("options") or {}
-    for key in options:
-        if not key.startswith("hooks."):
-            continue
-        parts = key.split(".")
-        if len(parts) >= 3 and parts[-1] == "backend":
-            return True
-    return False
-
-
-def apply_checkpoint_backend_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Default serious launch/resume paths to DCP unless explicitly overridden."""
-    cfg = copy.deepcopy(cfg)
-    should_use_dcp = distributed_world_size(cfg) > 1 or chain_jobs(cfg) > 1 or uses_fsdp2(cfg)
-    if should_use_dcp and not has_explicit_checkpoint_backend(cfg):
-        cfg.setdefault("train", {}).setdefault("options", {})[
-            "hooks.CheckpointSaverIteration.backend"
-        ] = "dcp"
-    return cfg
-
-
 def parse_training_overrides(overrides: list[str] | None) -> dict[str, Any]:
     """Parse training `key=value` overrides from the CLI tail or `--train`."""
     parsed: dict[str, Any] = {}
@@ -278,8 +247,6 @@ def finalize_config(
     cfg = normalize_train_config(cfg)
     cfg = resolve_all(cfg, launch_timestamp)
     cfg = normalize_train_config(cfg)
-    if os.environ.get("PIMM_USE_EXEX") != "1":
-        cfg = apply_checkpoint_backend_defaults(cfg)
 
     if require_config and not cfg.get("train", {}).get("config"):
         raise SystemExit("Need --train.config")
