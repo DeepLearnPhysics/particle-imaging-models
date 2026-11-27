@@ -3,6 +3,7 @@ weight = "weights/sphenix.pth"
 encoder = dict(in_channels=4, grid_size=0.003)
 model = dict(
     model=dict(
+        zero_init_positions=True,  # with the decoder core loaded below
         labels=("particle",),
         num_queries=(64,),
         num_classes=(5,),
@@ -203,7 +204,7 @@ hooks = [
     ),
     dict(
         type="CheckpointLoader",
-        source="weights/decoder_core_sphenix.pth",
+        source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
         replacements={"decoder.": "model.decoder."},
         strict=False,
     ),

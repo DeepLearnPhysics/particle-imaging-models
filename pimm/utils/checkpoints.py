@@ -1111,7 +1111,8 @@ class CheckpointManager:
         self.trainer.logger.info(message)
 
     def _load_checkpoint(self, weight_path):
-        """Load a direct, split, or directory checkpoint reference."""
+        """Load a direct, split, directory or ``hf://`` checkpoint reference."""
+        weight_path = resolve_remote_weight(weight_path)
         map_location = (lambda storage, loc: storage.cuda()) if torch.cuda.is_available() else "cpu"
         if os.path.isdir(weight_path):
             exported = exported_weights_file(weight_path)

@@ -6,6 +6,7 @@ encoder = dict(in_channels=29, grid_size=0.03)
 model = dict(
     model=dict(
         decoding="wc",
+        zero_init_positions=True,  # with the decoder core loaded below
         labels=("particle",),
         num_queries=(32,),
         num_classes=(8,),
@@ -219,7 +220,7 @@ hooks = [
     ),
     dict(
         type="CheckpointLoader",
-        source="weights/decoder_core_wc.pth",
+        source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
         replacements={"decoder.": "model.decoder."},
         strict=False,
     ),

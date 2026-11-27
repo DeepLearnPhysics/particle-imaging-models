@@ -530,6 +530,7 @@ class PandaV2Detector(PointModel):
         min_points=2,
         fill_uncovered=False,
         average_placements=False,  # inference only: mean encoder features over the 8 voxel-grid placements
+        zero_init_positions=False,  # zero query_embed and pos_emb's output layer, for a synthetically pretrained core
         decoding="panda_v2",
     ):
         PointModel.__init__(self)
@@ -586,6 +587,11 @@ class PandaV2Detector(PointModel):
             center_pos_k=center_pos_k,
             mlp_point_proj=mlp_point_proj,
         )
+        if zero_init_positions:  # the core was pretrained without either, so both start as no-ops
+            nn.init.zeros_(self.decoder.query_embed.weight)
+            if self.decoder.pos_emb is not None:
+                nn.init.zeros_(self.decoder.pos_emb[-1].weight)
+                nn.init.zeros_(self.decoder.pos_emb[-1].bias)
 
         if decoding not in _DECODING_DEFAULTS:
             raise ValueError(f"Unknown decoding rule: {decoding!r}")

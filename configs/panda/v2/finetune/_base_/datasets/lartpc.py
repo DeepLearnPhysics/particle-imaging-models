@@ -3,6 +3,7 @@ weight = "weights/lartpc.pth"
 encoder = dict(in_channels=4, grid_size=0.001)
 model = dict(
     model=dict(
+        zero_init_positions=True,  # with the decoder core loaded below
         labels=("interaction", "particle"),
         num_queries=(12, 32),
         num_classes=(2, 6),
@@ -175,7 +176,7 @@ hooks = [
     ),
     dict(
         type="CheckpointLoader",
-        source="weights/decoder_core_lartpc.pth",
+        source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
         replacements={"decoder.": "model.decoder."},
         strict=False,
     ),
