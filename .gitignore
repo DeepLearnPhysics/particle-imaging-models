@@ -33,16 +33,8 @@ run.log
 *.ckpt
 *.npz
 
-# third-party clones under libs/ — ignore everything except the vendored,
-# tracked build libs (new libs are ignored by default; add a negation to track)
+# third-party clones under libs/ (ignored; add a negation to track one)
 libs/*
-!libs/cnms/
-!libs/pointgroup_ops/
-!libs/pointops/
-!libs/pointops2/
-!libs/pointrope/
-!libs/pytorch3d_ops/
-!libs/serialize_cuda/
 
 # agent / assistant tooling (don't commit to the repo)
 .claude/

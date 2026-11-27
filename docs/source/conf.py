@@ -16,7 +16,7 @@ author = "Samuel Young"
 copyright = f"{datetime.date.today().year}, DeepLearnPhysics"
 
 try:
-    release = metadata.version("pimm")
+    release = metadata.version("particle-imaging-models")
 except metadata.PackageNotFoundError:
     _pyproject = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text()
     release = re.search(r'^version = "([^"]+)"', _pyproject, flags=re.M).group(1)
