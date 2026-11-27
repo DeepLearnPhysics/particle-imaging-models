@@ -105,6 +105,9 @@ class LoRAAdapter(nn.Module):
         trainable_keywords: parameters whose dotted name contains any of these
             substrings stay trainable (e.g. the task head). Everything else in the
             base model is frozen. Empty => only LoRA params train.
+        freeze_batchnorm: keep every BatchNorm whose parameters are all frozen in
+            eval mode when the model is put in train mode, so it normalizes with
+            (and never updates) its pretrained running statistics.
     """
 
     def __init__(
@@ -115,8 +118,10 @@ class LoRAAdapter(nn.Module):
         dropout: float = 0.0,
         target_modules=("attn.qkv", "attn.proj"),
         trainable_keywords=(),
+        freeze_batchnorm=False,
     ):
         super().__init__()
+        self.freeze_batchnorm = bool(freeze_batchnorm)
         self.model = build_model(model)
         self.rank = rank
         self.alpha = alpha
@@ -130,6 +135,11 @@ class LoRAAdapter(nn.Module):
 
         # 2) inject LoRA into every targeted attention projection
         self._adapted = self._inject_lora()
+
+        # Frozen backbones can opt into gradients for injected adapters.
+        enable_adapter_grad = getattr(self.model, "enable_adapter_grad", None)
+        if callable(enable_adapter_grad):
+            enable_adapter_grad()
 
         # 3) re-enable any explicitly whitelisted modules (e.g. the readout head)
         if self.trainable_keywords:
@@ -150,7 +160,9 @@ class LoRAAdapter(nn.Module):
             ):
                 targets.append(name)
 
-        if not targets:
+        if (
+            self.target_modules and not targets
+        ):  # an empty target_modules is a frozen model: no adapters
             raise ValueError(
                 f"LoRAAdapter found no nn.Linear matching target_modules="
                 f"{self.target_modules}. Check the module names of the built model."
@@ -158,12 +170,16 @@ class LoRAAdapter(nn.Module):
 
         for name in targets:
             parent_name, _, child_name = name.rpartition(".")
-            parent = self.model.get_submodule(parent_name) if parent_name else self.model
+            parent = (
+                self.model.get_submodule(parent_name) if parent_name else self.model
+            )
             base = getattr(parent, child_name)
             setattr(
                 parent,
                 child_name,
-                LoRALinear(base, rank=self.rank, alpha=self.alpha, dropout=self.dropout),
+                LoRALinear(
+                    base, rank=self.rank, alpha=self.alpha, dropout=self.dropout
+                ),
             )
         return targets
 
@@ -176,6 +192,16 @@ class LoRAAdapter(nn.Module):
             f"{len(self._adapted)} attention projections; trainable "
             f"{n_train:,}/{n_total:,} params ({100.0 * n_train / max(n_total, 1):.2f}%)"
         )
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze_batchnorm:
+            for module in self.model.modules():
+                if isinstance(module, nn.modules.batchnorm._BatchNorm) and not any(
+                    p.requires_grad for p in module.parameters()
+                ):
+                    module.eval()
+        return self
 
     def forward(self, *args, **kwargs):
         # Transparent pass-through to the base model

@@ -1,10 +1,4 @@
-"""A much simplified version of detector_v4.
-
-This has the same functionality as detector_v4, but is much
-simpler and easier to understand.
-
-A breaking change is the keyword argument format.
-"""
+"""Panda V1 query detector with per-label instance and class heads."""
 
 from __future__ import annotations
 
@@ -13,7 +7,7 @@ from typing import Any, Callable, Literal
 
 import torch
 import torch.nn.functional as F
-from timm.layers import trunc_normal_
+from torch.nn.init import trunc_normal_
 from torch import nn
 
 from pimm.models.builder import MODELS, build_model
@@ -21,7 +15,6 @@ from pimm.models.losses import build_criteria
 from pimm.models.modules import PointModel
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
-from pimm.utils import PimmDeprecationWarning, warn
 from pimm.utils.comm import reduce_scalar_outputs_for_logging
 
 from .layers import Block, MLP
@@ -76,7 +69,7 @@ class LabelConfig:
 
 @dataclass
 class PostprocessConfig:
-    """Thresholds and NMS settings used by :meth:`UnifiedDetector.postprocess`."""
+    """Thresholds and NMS settings used by :meth:`PandaV1Detector.postprocess`."""
 
     stuff_threshold: float = 0.5
     mask_threshold: float = 0.5
@@ -445,8 +438,8 @@ class GenericMultiTaskDecoder(nn.Module):
         return outputs
 
 
-@MODELS.register_module("detector-v5")
-class UnifiedDetector(PointModel):
+@MODELS.register_module("panda-detector-v1m1")
+class PandaV1Detector(PointModel):
     """Backbone, shared query decoder, losses, and panoptic postprocessing.
 
     ``label_configs`` insertion order defines the label and query order. Each
@@ -507,13 +500,6 @@ class UnifiedDetector(PointModel):
         The remaining attention, normalization, and dropout arguments are
         forwarded unchanged to every decoder block.
         """
-        warn(
-            "`detector-v5` is deprecated because its final mask logits are "
-            "predicted before the final decoder query update. Use "
-            "`detector-v5m2`, which predicts masks from the final updated queries.",
-            PimmDeprecationWarning,
-            stacklevel=3,
-        )
         super().__init__()
         self.label_specs = {
             label: LabelConfig(**config) for label, config in label_configs.items()

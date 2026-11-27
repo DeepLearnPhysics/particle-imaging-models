@@ -1,6 +1,6 @@
 """LitePT backbone for pimm.
 
-This is a pimm-local port of the Pointcept-style LitePT implementation. The
+This is a port of the Pointcept-style LitePT implementation. The
 LitePT-specific helpers are kept in this file so the backbone can move as a
 single module without importing implementation details from PTv3.
 """
@@ -11,16 +11,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import spconv.pytorch as spconv
-import torch_scatter
 from addict import Dict
-from timm.layers import DropPath
-
-from pointrope import PointROPE
+from pimm.models.utils.misc import DropPath
 
 from pimm.models.builder import MODELS
 from pimm.models.modules import PointModule, PointSequential
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
+from pimm.ops.rope import apply_rope, rope_tables
 
 try:
     from flash_attn import flash_attn_varlen_qkvpacked_func
@@ -101,6 +99,8 @@ class GridPooling(PointModule):
         self.act = PointSequential(act_layer()) if act_layer else None
 
     def forward(self, point: Point):
+        import torch_scatter
+
         if "grid_coord" in point.keys():
             grid_coord = point.grid_coord
         elif {"coord", "grid_size"}.issubset(point.keys()):
@@ -241,7 +241,7 @@ class PointROPEAttention(PointModule):
         self.qkv = nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = nn.Linear(channels, channels)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.rope = PointROPE(freq=rope_freq)
+        self.rope_freq = rope_freq
 
     @torch.no_grad()
     def get_padding_and_inverse(self, point):
@@ -339,20 +339,11 @@ class PointROPEAttention(PointModule):
             inverse = unpad[point.serialized_inverse[self.order_index]]
 
         qkv = self.qkv(point.feat)[order]
-        pos = point.grid_coord[order].reshape(-1, 3).unsqueeze(0)
-        q, k, v = qkv.half().chunk(3, dim=-1)
-        q = q.reshape(-1, heads, channels // heads).transpose(0, 1)[None]
-        k = k.reshape(-1, heads, channels // heads).transpose(0, 1)[None]
-        q = self.rope(q.float(), pos).to(q.dtype)
-        k = self.rope(k.float(), pos).to(k.dtype)
-        qkv_rotated = torch.stack(
-            [
-                q.squeeze(0).transpose(0, 1),
-                k.squeeze(0).transpose(0, 1),
-                v.reshape(-1, heads, channels // heads),
-            ],
-            dim=1,
-        )
+        cos, sin = rope_tables(point.grid_coord[order], channels // heads, self.rope_freq)
+        q, k, v = qkv.half().unflatten(1, (3, heads, channels // heads)).unbind(1)
+        q = apply_rope(q.float(), cos, sin).to(q.dtype)
+        k = apply_rope(k.float(), cos, sin).to(k.dtype)
+        qkv_rotated = torch.stack([q, k, v], dim=1)
         feat = flash_attn_varlen_qkvpacked_func(
             qkv_rotated,
             cu_seqlens,

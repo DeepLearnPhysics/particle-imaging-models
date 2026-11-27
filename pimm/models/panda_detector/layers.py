@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from timm.layers import DropPath
+from pimm.models.utils.misc import DropPath
 
 try:
     from flash_attn import flash_attn_varlen_func

@@ -1,66 +1,28 @@
-"""Unified, fully configurable Panda detector (detector-v4).
-
-This query-based instance and panoptic decoder supports the following config
-options:
-
-It exposes four axes as pure config:
-
-1. **Pre-cross-attention point removal** (``point_filter``): an optional,
-   pluggable module that drops points (e.g. "stuff" / low-energy) *before* the
-   decoder cross-attention; mask logits are scattered back to the full cloud.
-2. **Arbitrary per-query heads** (``query_heads``): any number of categorical
-   *and* continuous heads per label, on top of the primary categorical (PID)
-   head that drives matching.
-3. **Configurable query count** per label.
-4. **Overlapping queries** (``overlap`` per label): switches ground-truth
-   construction + fusion between mutually-exclusive (one-hot, greedy NMS) and
-   overlap-aware (multi-hot membership, independent sigmoid).
-
-The decoder (``GenericMultiTaskDecoder``) lives in this file and composes the
-low-level transformer layers from ``layers.py`` (SDPA masked cross-attention with
-a bounded ``log(sigmoid+eps)`` mask). It is **not** forced to fp32; precision is
-controlled by ``upcast_softmax`` (cheap, softmax-only) and an optional
-``decoder_fp32`` escape hatch.
-"""
+"""Panda V2 query decoder for exclusive and overlapping instances."""
 
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
-from timm.layers import trunc_normal_
+from torch.nn.init import trunc_normal_
 
 from pimm.models.builder import MODELS, build_model
 from pimm.models.losses import build_criteria
 from pimm.models.modules import PointModel
 from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
-from pimm.utils.comm import get_world_size, reduce_scalar_outputs_for_logging
+from pimm.utils.comm import reduce_scalar_outputs_for_logging
 
-from .layers import MLP, Block  # low-level transformer layers; the decoder lives here
+from .layers import MLP, Block
 from .postprocess import postprocess_batch, postprocess_overlap_batch
 
-
-# Default per-label specs (instance/segment keys, class counts, stuff classes).
-_DEFAULT_LABEL_SPECS = {
-    "particle": dict(
-        instance_key="instance_particle",
-        segment_key="segment_particle",
-        segment_fallback_key="segment_pid",
-        num_classes=6,
-        stuff_classes=[5],
-    ),
-    "interaction": dict(
-        instance_key="instance_interaction",
-        segment_key="segment_interaction",
-        num_classes=2,
-        stuff_classes=[0],
-    ),
-}
+PLACEMENTS = [
+    (x, y, z) for x in (0, 1) for y in (0, 1) for z in (0, 1)
+]  # voxel-grid offsets for average_placements
 
 # Output keys the decoder/forward populate itself -- user head pred_keys may not
 # collide with these.
@@ -72,24 +34,20 @@ _RESERVED_OUTPUT_KEYS = {
     "stuff_logits",
     "stuff_probs",
     "pred_regression",
-    "filter_logits",
 }
 
+_DECODING_DEFAULTS = {
+    "panda_v1": dict(
+        conf_threshold=0.5, rank_by_class_score=False, argmax_fill_min_prob=None
+    ),
+    "panda_v2": dict(
+        conf_threshold=0.3, rank_by_class_score=True, argmax_fill_min_prob=0.1
+    ),
+    "wc": dict(
+        conf_threshold=0.65, rank_by_class_score=True, argmax_fill_min_prob=None
+    ),
+}
 
-def _as_list(value):
-    """Accept a list, a single dict (with ``name``), or a ``{name: cfg}`` dict."""
-    if value is None:
-        return []
-    if isinstance(value, dict):
-        if "name" in value:
-            return [value]
-        return [dict(cfg, name=name) for name, cfg in value.items()]
-    return list(value)
-
-
-# --------------------------------------------------------------------------- #
-# Head-spec normalization                                                      #
-# --------------------------------------------------------------------------- #
 _DEFAULT_CONTINUOUS_CRITERION = dict(
     type="SmoothL1RegressionLoss", beta=1.0, reduction="mean"
 )
@@ -110,13 +68,11 @@ def normalize_query_heads(heads):
 
     Common keys: ``name`` (required, unique), ``pred_key`` (default
     ``pred_<name>``), ``target_key`` (default ``name``), ``loss_weight``
-    (default 1.0), ``use_class_logits`` / ``detach_class_logits`` (default
-    False -- condition the head input on the primary class logits), ``required``
-    (default True), ``head_mlp`` (default True -- MLP vs Linear).
+    (default 1.0), and ``required`` (default True).
     """
     targets = []
     seen = set()
-    for cfg in _as_list(heads):
+    for cfg in heads or []:
         cfg = deepcopy(cfg)
         name = cfg.get("name")
         if not name:
@@ -139,13 +95,10 @@ def normalize_query_heads(heads):
             )
         cfg.setdefault("target_key", name)
         cfg.setdefault("loss_weight", 1.0)
-        cfg.setdefault("use_class_logits", False)
-        cfg.setdefault("detach_class_logits", False)
         cfg.setdefault("required", True)
-        cfg.setdefault("head_mlp", True)
 
         if kind == "continuous":
-            cfg["dim"] = int(cfg.get("dim", cfg.get("out_dim", 1)))
+            cfg["dim"] = int(cfg.get("dim", 1))
             cfg.setdefault("aggregation", "mean")
             cfg.setdefault("squeeze", cfg["dim"] == 1)
             cfg.setdefault("criterion", deepcopy(_DEFAULT_CONTINUOUS_CRITERION))
@@ -155,9 +108,7 @@ def normalize_query_heads(heads):
                 )
         else:  # categorical
             if "num_classes" not in cfg:
-                raise ValueError(
-                    f"categorical head {name!r} requires 'num_classes'"
-                )
+                raise ValueError(f"categorical head {name!r} requires 'num_classes'")
             cfg["num_classes"] = int(cfg["num_classes"])
             cfg["dim"] = cfg["num_classes"]
             cfg.setdefault("aggregation", "mode")
@@ -171,114 +122,9 @@ def normalize_query_heads(heads):
     return targets
 
 
-def _with_query_heads(label_configs, labels, query_heads):
-    """Fold a top-level ``query_heads`` (dict-by-label or list for single label)
-    into per-label ``label_configs``."""
-    label_configs = deepcopy(label_configs or {})
-    if query_heads is None:
-        return label_configs
-    if isinstance(query_heads, dict) and not (
-        "name" in query_heads or "kind" in query_heads
-    ):
-        for label, heads in query_heads.items():
-            label_configs.setdefault(label, {})["query_heads"] = heads
-        return label_configs
-    if len(labels) != 1:
-        raise ValueError(
-            "Top-level query_heads must be a dict keyed by label when training "
-            "multiple labels"
-        )
-    label_configs.setdefault(labels[0], {})["query_heads"] = query_heads
-    return label_configs
-
-
-# --------------------------------------------------------------------------- #
-# Pre-cross-attention point filter                                             #
-# --------------------------------------------------------------------------- #
-class PointFilter(nn.Module):
-    """Optional, pluggable removal of points before the decoder cross-attention.
-
-    Types:
-
-    * ``"stuff"`` -- a learned per-point binary classifier; keeps points with
-      ``sigmoid(logit) < threshold``. During training, if ``train_filter_use_gt``
-      and a GT segment is available, keeps points whose class is not in
-      ``drop_classes``. Emits ``filter_logits`` for an auxiliary BCE.
-    * ``"energy_threshold"`` -- fixed rule: keep points whose feature channel
-      ``energy_channel`` exceeds ``energy_threshold`` (operates on the *raw*
-      backbone feature; no learnable params).
-
-    Returns ``(keep_mask, filter_logits_or_None)``. Always keeps at least one
-    point per non-empty cloud so the decoder still runs.
-    """
-
-    def __init__(
-        self,
-        type: str = "stuff",
-        full_in_channels: int = 0,
-        hidden_channels: int = 256,
-        threshold: float = 0.5,
-        drop_classes=None,
-        train_filter_use_gt: bool = False,
-        energy_channel: int = 0,
-        energy_threshold: float = 0.0,
-    ):
-        super().__init__()
-        self.type = type
-        self.threshold = float(threshold)
-        self.drop_classes = list(drop_classes or [])
-        self.train_filter_use_gt = bool(train_filter_use_gt)
-        self.energy_channel = int(energy_channel)
-        self.energy_threshold = float(energy_threshold)
-        if type == "stuff":
-            self.head = nn.Sequential(
-                nn.Linear(full_in_channels, hidden_channels),
-                nn.ReLU(),
-                nn.Linear(hidden_channels, 1),
-            )
-        elif type == "energy_threshold":
-            self.head = None
-        else:
-            raise ValueError(f"Unknown PointFilter type: {type!r}")
-
-    @staticmethod
-    def _ensure_nonempty(keep_mask):
-        if not keep_mask.any():
-            # Keep a single point so the decoder doesn't crash on an empty cloud.
-            keep_mask = keep_mask.clone()
-            keep_mask[0] = True
-        return keep_mask
-
-    def forward(self, feat, gt_segment=None, training=False):
-        filter_logits = None
-        if self.type == "stuff":
-            filter_logits = self.head(feat).squeeze(-1)  # (N,)
-            if (
-                training
-                and self.train_filter_use_gt
-                and gt_segment is not None
-                and len(self.drop_classes) > 0
-            ):
-                segment = gt_segment
-                if segment.dim() == 2 and segment.shape[1] == 1:
-                    segment = segment.squeeze(1)
-                is_drop = torch.zeros_like(segment, dtype=torch.bool)
-                for cls_id in self.drop_classes:
-                    is_drop |= segment == int(cls_id)
-                keep_mask = ~is_drop
-            else:
-                keep_mask = filter_logits.sigmoid() < self.threshold
-        else:  # energy_threshold
-            keep_mask = feat[:, self.energy_channel] > self.energy_threshold
-        return self._ensure_nonempty(keep_mask), filter_logits
-
-
-# --------------------------------------------------------------------------- #
-# Decoder                                                                      #
-# --------------------------------------------------------------------------- #
 class GenericMultiTaskDecoder(nn.Module):
     """Masked-cross-attention query decoder (loosely Mask2Former / OneFormer3D),
-    generalized for multiple labels and arbitrary per-query heads + a point filter.
+    with per-label class and regression heads.
     """
 
     def __init__(
@@ -297,54 +143,39 @@ class GenericMultiTaskDecoder(nn.Module):
         layer_scale=None,
         norm_layer=nn.LayerNorm,
         act_layer=nn.GELU,
-        pre_norm=True,
-        enable_flash=True,
         upcast_attention=False,
-        upcast_softmax=False,
         pos_emb=True,
-        enc_mode=False,
-        query_type: Literal["learned"] = "learned",
+        center_pos_k=False,
         mlp_point_proj=False,
-        supervise_attn_mask=True,
-        point_filter_cfg=None,
     ):
         nn.Module.__init__(self)
         self.labels = tuple(label_specs.keys())
         self.label_specs = label_specs
         query_slices = {}
         query_start = 0
-        max_classes = 1
         for label, spec in label_specs.items():
             query_end = query_start + int(spec["num_queries"])
             query_slices[label] = (query_start, query_end)
             query_start = query_end
-            max_classes = max(max_classes, int(spec["num_classes"]))
         self.query_slices = query_slices
         self.total_queries = query_start
 
         # ---- shared decoder modules ------------------------------------- #
-        self.full_in_channels = full_in_channels
         self.mask_channels = hidden_channels
-        self.num_classes = max_classes
-        self.enc_mode = enc_mode
         self.num_queries = self.total_queries
-        self.query_type = query_type
-        if query_type == "learned":
-            self.query_feat = nn.Embedding(self.total_queries, hidden_channels)
-            self.query_embed = nn.Embedding(self.total_queries, hidden_channels)
-        self.pos_emb = nn.Sequential(
-            nn.Linear(3, hidden_channels),
-            nn.GELU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        ) if pos_emb else None
-
-        # attention-mask annealing (configured via set_attn_mask_anneal)
-        self.attn_mask_anneal = False
-        self.attn_mask_anneal_steps = 10000
-        self.attn_mask_warmup_steps = 0
-        self.attn_mask_progressive = False
-        self.attn_mask_progressive_delay = 0
-        self.supervise_attn_mask = supervise_attn_mask
+        self.query_feat = nn.Embedding(self.total_queries, hidden_channels)
+        self.query_embed = nn.Embedding(self.total_queries, hidden_channels)
+        self.pos_emb = (
+            nn.Sequential(
+                nn.Linear(3, hidden_channels),
+                nn.GELU(),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+            if pos_emb
+            else None
+        )
+        # Removing the event-wide offset keeps positional keys stable in half precision.
+        self.center_pos_k = center_pos_k
 
         self.blocks = nn.ModuleList(
             [
@@ -360,17 +191,8 @@ class GenericMultiTaskDecoder(nn.Module):
                     layer_scale=layer_scale,
                     norm_layer=norm_layer,
                     act_layer=act_layer,
-                    pre_norm=pre_norm,
-                    enable_flash=enable_flash,
                     upcast_attention=upcast_attention,
-                    upcast_softmax=upcast_softmax,
-                    use_attn_mask=True,
                     attn_mask_eps=1e-6,
-                    attn_mask_anneal=self.attn_mask_anneal,
-                    attn_mask_anneal_steps=self.attn_mask_anneal_steps,
-                    attn_mask_warmup_steps=self.attn_mask_warmup_steps,
-                    supervise_attn_mask=self.supervise_attn_mask,
-                    is_last_block=(i == depth - 1),
                 )
                 for i in range(depth)
             ]
@@ -383,11 +205,9 @@ class GenericMultiTaskDecoder(nn.Module):
         )
 
         # ---- per-label / per-query heads -------------------------------- #
-        # No single-task class head; we use per-label heads instead.
-        self.cls_pred = nn.Identity()
-        self.cls_pred_by_label = nn.ModuleDict()   # primary PID head (matching)
+        self.cls_pred_by_label = nn.ModuleDict()  # primary PID head (matching)
         self.stuff_head_by_label = nn.ModuleDict()  # auxiliary per-label stuff loss
-        self.head_by_key = nn.ModuleDict()          # extra categorical/continuous
+        self.head_by_key = nn.ModuleDict()  # extra categorical/continuous
         self.query_heads_by_label = {}
 
         for label, spec in label_specs.items():
@@ -408,27 +228,12 @@ class GenericMultiTaskDecoder(nn.Module):
             self.query_heads_by_label[label] = heads
             for head in heads:
                 head_key = self._head_key(label, head["name"])
-                in_dim = hidden_channels
-                if head["use_class_logits"]:
-                    in_dim += int(spec["num_classes"])
-                out_dim = int(head["dim"])
-                self.head_by_key[head_key] = (
-                    MLP(in_dim, hidden_channels, out_dim)
-                    if head.get("head_mlp", True)
-                    else nn.Linear(in_dim, out_dim)
+                self.head_by_key[head_key] = MLP(
+                    hidden_channels, hidden_channels, int(head["dim"])
                 )
-
-        # Optional pre-cross-attention point filter (global, shared across labels).
-        self.point_filter = None
-        if point_filter_cfg:
-            cfg = deepcopy(point_filter_cfg)
-            cfg.setdefault("full_in_channels", full_in_channels)
-            cfg.setdefault("hidden_channels", hidden_channels)
-            self.point_filter = PointFilter(**cfg)
 
         self.apply(self._init_weights)
 
-    # ----- decoder core ---------------------------------------------------- #
     @staticmethod
     def _init_weights(module):
         if isinstance(module, nn.Linear):
@@ -436,132 +241,92 @@ class GenericMultiTaskDecoder(nn.Module):
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-    def set_attn_mask_anneal(
-        self,
-        enable: bool,
-        anneal_steps: int = 10000,
-        warmup_steps: int = 0,
-        progressive: bool = False,
-        progressive_delay: int = 0,
-    ):
-        """Configure attention-mask annealing for all blocks."""
-        self.attn_mask_anneal = enable
-        self.attn_mask_anneal_steps = anneal_steps
-        self.attn_mask_warmup_steps = warmup_steps
-        self.attn_mask_progressive = progressive
-        self.attn_mask_progressive_delay = progressive_delay
-        for i, block in enumerate(self.blocks):
-            block.attn_mask_anneal = enable
-            block.attn_mask_anneal_steps = anneal_steps
-            if progressive and progressive_delay > 0:
-                block.attn_mask_warmup_steps = warmup_steps + (i * progressive_delay)
-            else:
-                block.attn_mask_warmup_steps = warmup_steps
-
-    def update_anneal_step(self, step: int):
-        for block in self.blocks:
-            block.set_anneal_step(step)
-
-    def _get_queries(
-        self, point: Point
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
-        batch_size = point.offset.shape[0]
-        device = point.feat.device
-        max_queries = self.num_queries
-        if self.query_type == "learned":
-            base_q = self.query_feat.weight  # [Q, C]
-            base_pos = self.query_embed.weight if hasattr(self, "query_embed") else None
-            q = base_q.unsqueeze(0).repeat(batch_size, 1, 1)  # [B, Q, C]
-            pos_q = base_pos.unsqueeze(0).repeat(batch_size, 1, 1) if base_pos is not None else None
-            counts = torch.full((batch_size,), max_queries, dtype=torch.int32, device=device)
-            valid_mask = torch.ones(batch_size, max_queries, dtype=torch.bool, device=device)
-            return q, pos_q, counts, valid_mask
-        raise NotImplementedError(f"Invalid query type: {self.query_type}")
-
     def _forward_decoder(self, point: Point, return_aux: bool = False):
-        """Run the transformer decoder blocks. Returns out_q, final_mask_logits,
-        query_counts, query_valid (+ aux lists if return_aux)."""
+        """Decode packed events, retaining intermediate predictions for training."""
         point_proj = point.feat  # projection done in caller
-        pos_k = self.pos_emb(point.coord) if self.pos_emb else None
-        cu_seqlens_kv = torch.cat([point.offset.new_zeros(1), point.offset]).int()  # [B + 1]
+        pos_k = (
+            self.pos_emb(point.coord)
+            if self.pos_emb and not self.center_pos_k
+            else None
+        )
+        if self.pos_emb and self.center_pos_k:
+            with torch.autocast(point.coord.device.type, enabled=False):
+                pos_k = self.pos_emb(point.coord.float())
+            counts = offset2bincount(point.offset).to(torch.long)
+            event = torch.repeat_interleave(
+                torch.arange(len(counts), device=pos_k.device), counts
+            )
+            mean = (
+                pos_k.new_zeros(len(counts), pos_k.shape[1]).index_add_(0, event, pos_k)
+                / counts[:, None]
+            )
+            pos_k = pos_k - mean[event]
+        cu_seqlens_kv = torch.cat(
+            [point.offset.new_zeros(1), point.offset]
+        ).int()  # [B + 1]
         max_seqlen_kv = cu_seqlens_kv.diff().max()
 
-        q, pos_q, query_counts, query_valid = self._get_queries(point)
-        cu_seqlens_q = torch.cat([query_counts.new_zeros(1), query_counts.cumsum(dim=0)]).int()
+        batch_size = len(point.offset)
+        q = self.query_feat.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+        pos_q = self.query_embed.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+        query_counts = torch.full(
+            (batch_size,), self.total_queries, device=q.device, dtype=torch.long
+        )
+        cu_seqlens_q = torch.cat(
+            [query_counts.new_zeros(1), query_counts.cumsum(dim=0)]
+        ).int()
         max_seqlen_q = int(query_counts.max().item()) if query_counts.numel() > 0 else 0
 
         q = q.reshape(-1, self.mask_channels)  # [B * Q, C]
         pos_q = pos_q.reshape(-1, self.mask_channels) if pos_q is not None else None
-        query_valid = query_valid.reshape(-1, 1)
-        query_valid_f = query_valid.to(q.dtype)
 
         aux_outputs = []
         aux_p_hat_list = []
-        final_mask_logits = None
+        query_dtype = q.dtype
         for blk in self.blocks:
-            q, mask_logits, mask_embed, mask_point_proj = blk(
-                q, point_proj, cu_seqlens_q, cu_seqlens_kv,
-                max_seqlen_q, max_seqlen_kv, pos_q, pos_k,
+            q, mask_logits, mask_embed, _ = blk(
+                q,
+                point_proj,
+                cu_seqlens_q,
+                cu_seqlens_kv,
+                max_seqlen_q,
+                max_seqlen_kv,
+                pos_q,
+                pos_k,
             )
-            if mask_logits is not None:
-                mask_logits = mask_logits * query_valid_f
-                final_mask_logits = mask_logits
-            q = q * query_valid_f
+            # Query embeddings determine residual and mask precision under autocast.
+            q = q.to(query_dtype)
+            mask_logits = mask_logits.to(query_dtype)
             if return_aux:
                 aux_outputs.append(self.final_norm(q))
-                aux_p_hat_list.append(mask_logits if self.supervise_attn_mask else None)
+                aux_p_hat_list.append(mask_logits)
 
         outputs = {
             "out_q": self.final_norm(q),
-            "final_mask_logits": final_mask_logits,
-            "query_counts": query_counts.to(torch.long),
-            "query_valid": query_valid.squeeze(-1).bool(),
+            "mask_embed": mask_embed,
+            "final_mask_logits": mask_logits,
         }
         if return_aux:
             outputs["aux_q_list"] = aux_outputs[:-1]
             outputs["aux_mask_logits_list"] = aux_p_hat_list[:-1]
         return outputs
 
-    def up_cast(self, point):
-        """enc_mode=False: no-op. enc_mode=True: walk the pooling hierarchy,
-        concatenating multi-scale features up to point resolution."""
-        if not self.enc_mode:
-            return point
-        while "pooling_parent" in point.keys():
-            assert "pooling_inverse" in point.keys()
-            parent = point.pop("pooling_parent")
-            inverse = point.pop("pooling_inverse")
-            parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-            point = parent
-        return point
-
     @staticmethod
     def _head_key(label, name):
         return f"{label}__{name}".replace(".", "_").replace("/", "_")
 
-    # ----- per-query head predictions ------------------------------------- #
-    def _compute_head_embeddings(self, label, q_features, class_embed):
-        spec = self.label_specs[label]
-        num_classes = int(spec["num_classes"])
+    def _compute_head_embeddings(self, label, q_features):
         embeddings = {}
         for head in self.query_heads_by_label.get(label, []):
-            head_input = q_features
-            if head["use_class_logits"]:
-                cls_input = class_embed[:, :num_classes]
-                if head["detach_class_logits"]:
-                    cls_input = cls_input.detach()
-                head_input = torch.cat([q_features, cls_input], dim=-1)
-            pred = self.head_by_key[self._head_key(label, head["name"])](head_input)
+            pred = self.head_by_key[self._head_key(label, head["name"])](q_features)
             if head.get("squeeze") and pred.dim() == 2 and pred.shape[-1] == 1:
                 pred = pred.squeeze(-1)
             embeddings[head["name"]] = (head, pred)
         return embeddings
 
-    def _compute_label_predictions(
-        self, label, q_features, mask_logits, point, query_valid
-    ):
+    def _compute_label_predictions(self, label, q_features, mask_logits, point):
         class_embed = self.cls_pred_by_label[label](q_features)
-        head_embeddings = self._compute_head_embeddings(label, q_features, class_embed)
+        head_embeddings = self._compute_head_embeddings(label, q_features)
 
         pred_masks = []
         pred_cls = []
@@ -584,15 +349,14 @@ class GenericMultiTaskDecoder(nn.Module):
 
             mask_logits_b = mask_logits[q_start:q_end, p_start:p_end]
             cls_b = class_embed[q_start:q_end]
-            valid_b = query_valid[q_start:q_end]
 
-            mask_logits_b = mask_logits_b[valid_b]
-            cls_b = cls_b[valid_b]
+            mask_logits_b = mask_logits_b.contiguous()
+            cls_b = cls_b.contiguous()
 
             pred_masks.append(mask_logits_b)
             pred_cls.append(cls_b)
             for name, (_, values) in head_embeddings.items():
-                pred_heads[name].append(values[q_start:q_end][valid_b])
+                pred_heads[name].append(values[q_start:q_end].contiguous())
 
             if mask_logits_b.shape[0] > 0:
                 s = mask_logits_b.transpose(0, 1).unsqueeze(-1)
@@ -620,95 +384,53 @@ class GenericMultiTaskDecoder(nn.Module):
                 output[head["pred_key"]] = values
         return output
 
-    # ----- point-filter plumbing ------------------------------------------ #
-    def _scatter_mask_logits(self, mask_logits, keep_mask, num_points, dropped_mask_logit=-1e4):
-        """Expand (Q_total, N_kept) mask logits back to (Q_total, N_full),
-        filling dropped columns with a large-negative sentinel."""
-        if mask_logits is None:
-            return None
-        full = mask_logits.new_full(
-            (mask_logits.shape[0], num_points), dropped_mask_logit
-        )
-        full[:, keep_mask] = mask_logits
-        return full
+    def forward(self, point: Point, return_geometry=False):
+        point_full = point
 
-    def forward(self, point: Point):
-        point_full = self.up_cast(point)
-        num_points = point_full.feat.shape[0]
-
-        # ---- optional pre-cross-attention point removal ------------------- #
-        keep_mask = None
-        filter_logits = None
-        if self.point_filter is not None:
-            gt_segment = getattr(point_full, "_filter_gt_segment", None)
-            keep_mask, filter_logits = self.point_filter(
-                point_full.feat, gt_segment=gt_segment, training=self.training
-            )
-            decoder_point = point_full[keep_mask]
-        else:
-            decoder_point = point_full.copy()
+        decoder_point = Point(point_full.copy())
         decoder_point.feat = self.full_point_proj(decoder_point.feat)
 
         return_aux = self.training
         decoder_outputs = self._forward_decoder(decoder_point, return_aux=return_aux)
-        query_valid = decoder_outputs["query_valid"]
         out_q = decoder_outputs["out_q"]
 
         final_mask_logits = decoder_outputs["final_mask_logits"]
         aux_q_list = decoder_outputs.get("aux_q_list", [])
         aux_mask_logits_list = decoder_outputs.get("aux_mask_logits_list", [])
-        if keep_mask is not None:
-            final_mask_logits = self._scatter_mask_logits(
-                final_mask_logits, keep_mask, num_points
-            )
-            aux_mask_logits_list = [
-                self._scatter_mask_logits(m, keep_mask, num_points)
-                for m in aux_mask_logits_list
-            ]
-
         outputs_by_label = {}
         for label in self.labels:
             predictions = self._compute_label_predictions(
-                label, out_q, final_mask_logits, point_full, query_valid
+                label, out_q, final_mask_logits, point_full
             )
             if return_aux:
                 aux_outputs = []
                 for aux_q, aux_mask_logits in zip(aux_q_list, aux_mask_logits_list):
-                    if aux_mask_logits is None:
-                        continue
                     aux_outputs.append(
                         self._compute_label_predictions(
-                            label, aux_q, aux_mask_logits, point_full, query_valid
+                            label, aux_q, aux_mask_logits, point_full
                         )
                     )
                 if aux_outputs:
                     predictions["aux_outputs"] = aux_outputs
 
             if label in self.stuff_head_by_label:
-                stuff_logits = self.stuff_head_by_label[label](
-                    point_full.feat
-                ).squeeze(-1)
+                stuff_logits = self.stuff_head_by_label[label](point_full.feat).squeeze(
+                    -1
+                )
                 predictions["stuff_logits"] = stuff_logits
                 predictions["stuff_probs"] = stuff_logits.sigmoid()
             outputs_by_label[label] = predictions
 
-        if filter_logits is not None:
-            outputs_by_label["__filter_logits__"] = filter_logits
+        if return_geometry:
+            return outputs_by_label, decoder_outputs["mask_embed"], decoder_point.feat
         return outputs_by_label
 
 
-# --------------------------------------------------------------------------- #
-# Detector                                                                     #
-# --------------------------------------------------------------------------- #
-@MODELS.register_module("detector-v4")
-class UnifiedDetector(PointModel):
-    """Unified Panda detector: arbitrary per-query heads, optional pre-attention
-    point removal, configurable queries, and per-label overlap.
+@MODELS.register_module("panda-detector-v2m1")
+class PandaV2Detector(PointModel):
+    """Panda instance detector; ``backbone=None`` trains the decoder on input features. Attention runs with the
+    process's attention backend (``pimm.ops.set_attention_backend``)."""
 
-    Self-contained: owns its decoder stack and multi-label plumbing; imports only
-    helpers (postprocess, registries, point utils)."""
-
-    # ----- per-label config selection helpers ----------------------------- #
     @staticmethod
     def _select_value(value, labels, label, idx, default=None):
         if value is None:
@@ -730,35 +452,14 @@ class UnifiedDetector(PointModel):
                 return value[idx]
         return value
 
-    # ----- shared plumbing ------------------------------------------------ #
     def up_cast(self, point: Point) -> Point:
         enc_mode = getattr(self.backbone, "enc_mode", True)
-        if not enc_mode:
-            return point
-        while "pooling_parent" in point.keys():
-            assert "pooling_inverse" in point.keys()
-            parent = point.pop("pooling_parent")
-            inverse = point.pop("pooling_inverse")
-            parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
-            point = parent
-        return point
-
-    def update_anneal_step(self, step: int):
-        self.decoder.update_anneal_step(step)
-
-    def _segment_key(self, input_dict: Dict, spec: Dict) -> str:
-        segment_key = spec["segment_key"]
-        if segment_key in input_dict:
-            return segment_key
-        fallback = spec.get("segment_fallback_key")
-        if fallback is not None and fallback in input_dict:
-            return fallback
-        return segment_key
+        return point.upcast() if enc_mode else point
 
     def _task_input(self, input_dict: Dict, label: str) -> Dict:
         spec = self.label_specs[label]
         instance_key = spec["instance_key"]
-        segment_key = self._segment_key(input_dict, spec)
+        segment_key = spec["segment_key"]
         if instance_key not in input_dict:
             raise KeyError(f"Missing instance labels for {label!r}: {instance_key}")
         if segment_key not in input_dict:
@@ -771,7 +472,11 @@ class UnifiedDetector(PointModel):
     @staticmethod
     def _compute_stuff_loss(decoder, label, stuff_logits, task_input):
         segment = task_input["segment"]
-        if isinstance(segment, torch.Tensor) and segment.dim() == 2 and segment.shape[1] == 1:
+        if (
+            isinstance(segment, torch.Tensor)
+            and segment.dim() == 2
+            and segment.shape[1] == 1
+        ):
             segment = segment.squeeze(1)
         stuff_target = torch.zeros_like(stuff_logits)
         for stuff_class in decoder.label_specs[label]["stuff_classes"]:
@@ -792,11 +497,8 @@ class UnifiedDetector(PointModel):
         num_queries=None,
         num_classes=None,
         label_configs=None,
-        query_heads=None,
         overlap=None,  # None -> per-label `label_configs[...]["overlap"]` (default False);
-                       # a bool here forces it for ALL labels (see _select_value)
-        point_filter=None,
-        filter_loss_weight=1.0,
+        # a bool here forces it for ALL labels (see _select_value)
         loss_weights=None,
         eval_label=None,
         backbone=None,
@@ -812,39 +514,32 @@ class UnifiedDetector(PointModel):
         layer_scale=None,
         norm_layer=nn.LayerNorm,
         act_layer=nn.GELU,
-        pre_norm=True,
-        enable_flash=True,
         upcast_attention=False,
-        upcast_softmax=False,
         pos_emb=True,
-        attn_mask_anneal=False,
-        attn_mask_anneal_steps=10000,
-        attn_mask_warmup_steps=0,
-        attn_mask_progressive=False,
-        attn_mask_progressive_delay=0,
-        query_type: Literal["learned"] = "learned",
+        center_pos_k=False,
         use_stuff_head=False,
         stuff_classes=None,
-        supervise_attn_mask=True,
         mlp_point_proj=False,
         stuff_threshold=0.5,
         mask_threshold=0.5,
-        conf_threshold=0.5,
+        conf_threshold=None,
         nms_kernel="gaussian",
         nms_sigma=2.0,
         nms_pre=-1,
         nms_max=-1,
         min_points=2,
         fill_uncovered=False,
+        average_placements=False,  # inference only: mean encoder features over the 8 voxel-grid placements
+        decoding="panda_v2",
     ):
         PointModel.__init__(self)
         if isinstance(labels, str):
             labels = (labels,)
         self.labels = tuple(labels)
+        self.average_placements = bool(average_placements)
         if len(self.labels) == 0:
             raise ValueError("labels must contain at least one label name")
 
-        label_configs = _with_query_heads(label_configs, self.labels, query_heads)
         self.label_specs = self._build_label_specs(
             self.labels,
             label_configs=label_configs,
@@ -861,12 +556,13 @@ class UnifiedDetector(PointModel):
                 f"eval_label={self.eval_label!r} must be one of {self.labels}"
             )
 
-        self.point_filter_cfg = deepcopy(point_filter) if point_filter else None
-        self.filter_loss_weight = float(filter_loss_weight)
-
-        self.backbone = build_model(backbone)
+        self.backbone = (
+            build_model(backbone) if backbone is not None else nn.Identity()
+        )
         self.criteria_by_label = {
-            label: build_criteria(self._criteria_cfg(label, criteria, criteria_by_label))
+            label: build_criteria(
+                self._criteria_cfg(label, criteria, criteria_by_label)
+            )
             for label in self.labels
         }
 
@@ -885,40 +581,34 @@ class UnifiedDetector(PointModel):
             layer_scale=layer_scale,
             norm_layer=norm_layer,
             act_layer=act_layer,
-            pre_norm=pre_norm,
-            enable_flash=enable_flash,
             upcast_attention=upcast_attention,
-            upcast_softmax=upcast_softmax,
             pos_emb=pos_emb,
-            enc_mode=False,
-            query_type=query_type,
+            center_pos_k=center_pos_k,
             mlp_point_proj=mlp_point_proj,
-            supervise_attn_mask=supervise_attn_mask,
-            point_filter_cfg=self.point_filter_cfg,
         )
 
-        if attn_mask_anneal:
-            self.decoder.set_attn_mask_anneal(
-                enable=True,
-                anneal_steps=attn_mask_anneal_steps,
-                warmup_steps=attn_mask_warmup_steps,
-                progressive=attn_mask_progressive,
-                progressive_delay=attn_mask_progressive_delay,
-            )
-
+        if decoding not in _DECODING_DEFAULTS:
+            raise ValueError(f"Unknown decoding rule: {decoding!r}")
+        self.decoding = decoding
+        decoding_defaults = _DECODING_DEFAULTS[decoding]
         self.postprocess_cfg = dict(
             stuff_threshold=stuff_threshold,
             mask_threshold=mask_threshold,
-            conf_threshold=conf_threshold,
+            conf_threshold=(
+                decoding_defaults["conf_threshold"]
+                if conf_threshold is None
+                else conf_threshold
+            ),
             nms_kernel=nms_kernel,
             nms_sigma=nms_sigma,
             nms_pre=nms_pre,
             nms_max=nms_max,
             min_points=min_points,
             fill_uncovered=fill_uncovered,
+            rank_by_class_score=decoding_defaults["rank_by_class_score"],
+            argmax_fill_min_prob=decoding_defaults["argmax_fill_min_prob"],
         )
 
-    # ----- config / spec building ----------------------------------------- #
     def _criteria_cfg(self, label, criteria, criteria_by_label):
         """Auto-inject the per-label head specs + overlap flag into the loss cfg
         so the user does not have to duplicate them."""
@@ -929,28 +619,15 @@ class UnifiedDetector(PointModel):
         )
         spec = self.label_specs[label]
 
-        # Instance-loss variants are all upgraded to the unified loss, which is a
-        # superset (handles the primary mask/dice/cls plus arbitrary per-query
-        # heads and the overlap path). Per-label head specs + overlap flag are
-        # injected so configs don't have to duplicate them.
-        _instance_types = {
-            "InstanceSegmentationLoss",
-            "FastInstanceSegmentationLoss",
-            "FastInstanceSegmentationRegressionLoss",
-            "FastUnifiedInstanceLoss",
-        }
-
         def _inject(cfg):
             cfg = deepcopy(cfg)
             if isinstance(cfg, dict):
-                if cfg.get("type") in _instance_types:
-                    cfg["type"] = "FastUnifiedInstanceLoss"
-                    # carry over regression_targets written the v3m3 way
-                    legacy = cfg.pop("regression_targets", None)
-                    heads = cfg.get("query_heads", spec.get("query_heads"))
-                    if heads is None and legacy is not None:
-                        heads = legacy
-                    cfg["query_heads"] = heads
+                if cfg.get("type") in (
+                    "FastUnifiedInstanceLoss",
+                    "ConsistentMatchingInstanceLoss",
+                ):
+                    cfg.setdefault("panda_v2", True)
+                    cfg.setdefault("query_heads", spec.get("query_heads"))
                     cfg.setdefault("overlap", spec.get("overlap", False))
                 return cfg
             if isinstance(cfg, (list, tuple)):
@@ -974,8 +651,7 @@ class UnifiedDetector(PointModel):
         label_configs = label_configs or {}
         specs = {}
         for idx, label in enumerate(labels):
-            spec = deepcopy(_DEFAULT_LABEL_SPECS.get(label, {}))
-            spec.update(deepcopy(label_configs.get(label, {})))
+            spec = deepcopy(label_configs.get(label, {}))
 
             # precedence: explicit top-level num_queries > label_configs > 32
             queries = cls._select_value(
@@ -1017,28 +693,25 @@ class UnifiedDetector(PointModel):
 
     def _prediction_keys_for_label(self, label):
         return [
-            head["pred_key"]
-            for head in self.label_specs[label].get("query_heads", [])
+            head["pred_key"] for head in self.label_specs[label].get("query_heads", [])
         ]
 
-    # ----- forward -------------------------------------------------------- #
     def forward(self, input_dict, return_point=False):
         point = Point(input_dict)
         point = self.backbone(point)
         point_full = self.up_cast(point)
-
-        # Stash GT segment for an optional GT-driven point filter.
-        if self.point_filter_cfg and self.training:
-            eval_spec = self.label_specs[self.eval_label]
-            seg_key = self._segment_key(input_dict, eval_spec)
-            if seg_key in input_dict:
-                point_full._filter_gt_segment = input_dict[seg_key]
+        if self.average_placements and not self.training:
+            # Grid shifts change pooling boundaries while keeping the original point order.
+            grid = input_dict["grid_coord"]
+            for offset in PLACEMENTS[1:]:
+                shifted = dict(input_dict, grid_coord=grid + grid.new_tensor(offset))
+                point_full.feat = (
+                    point_full.feat + self.up_cast(self.backbone(Point(shifted))).feat
+                )
+            point_full.feat = point_full.feat / len(PLACEMENTS)
 
         decoder_point = Point(point_full.copy())
-        if hasattr(point_full, "_filter_gt_segment"):
-            decoder_point._filter_gt_segment = point_full._filter_gt_segment
         outputs_by_label = self.decoder(decoder_point)
-        filter_logits = outputs_by_label.pop("__filter_logits__", None)
 
         loss = None
         return_dict = {}
@@ -1047,7 +720,7 @@ class UnifiedDetector(PointModel):
         for label in self.labels:
             task_input = None
             spec = self.label_specs[label]
-            segment_key = self._segment_key(input_dict, spec)
+            segment_key = spec["segment_key"]
             has_targets = (
                 spec["instance_key"] in input_dict and segment_key in input_dict
             )
@@ -1084,15 +757,6 @@ class UnifiedDetector(PointModel):
                     loss = loss + stuff_loss
                     return_dict[f"{label}_stuff_loss"] = stuff_loss
 
-        # Optional point-filter supervision (global, label-agnostic).
-        if filter_logits is not None and self.training:
-            filter_loss = self._compute_filter_loss(filter_logits, input_dict)
-            if filter_loss is not None:
-                loss = (
-                    filter_loss if loss is None else loss + filter_loss
-                )
-                return_dict["filter_loss"] = filter_loss
-
         if emit_predictions or return_point:
             primary_outputs = outputs_by_label[self.eval_label]
             primary_spec = self.label_specs[self.eval_label]
@@ -1104,7 +768,7 @@ class UnifiedDetector(PointModel):
             point_full.pred_regression = primary_outputs.get("pred_regression")
             if primary_spec["instance_key"] in input_dict:
                 point_full.instance = input_dict[primary_spec["instance_key"]]
-            primary_segment_key = self._segment_key(input_dict, primary_spec)
+            primary_segment_key = primary_spec["segment_key"]
             if primary_segment_key in input_dict:
                 point_full.segment = input_dict[primary_segment_key]
 
@@ -1139,25 +803,39 @@ class UnifiedDetector(PointModel):
             return_dict["point"] = point_full
         return self._sync_scalar_outputs(return_dict)
 
-    def _compute_filter_loss(self, filter_logits, input_dict):
-        """Binary BCE supervising the point filter to drop `drop_classes`."""
-        drop_classes = self.point_filter_cfg.get("drop_classes") or []
-        if not drop_classes:
-            return None
-        eval_spec = self.label_specs[self.eval_label]
-        seg_key = self._segment_key(input_dict, eval_spec)
-        if seg_key not in input_dict:
-            return None
-        segment = input_dict[seg_key]
-        if segment.dim() == 2 and segment.shape[1] == 1:
-            segment = segment.squeeze(1)
-        target = torch.zeros_like(filter_logits)
-        for cls_id in drop_classes:
-            target[segment == int(cls_id)] = 1.0
-        loss = F.binary_cross_entropy_with_logits(filter_logits, target)
-        return self.filter_loss_weight * loss
+    @torch.inference_mode()
+    def predict(self, input_dict):
+        """Return masks, class probabilities and spherical-cap geometry per event."""
+        point = self.up_cast(self.backbone(Point(input_dict)))
+        outputs, mask_embed, features = self.decoder(point, return_geometry=True)
+        norm = self.decoder.blocks[-1].norm_kv
+        axis = mask_embed.float() * norm.weight.float()
+        axis = axis - axis.mean(dim=1, keepdim=True)
+        magnitude = axis.norm(dim=1).clamp_min(1e-12)
+        sharpness = magnitude * mask_embed.shape[1] ** 0.5
+        threshold = -(mask_embed.float() @ norm.bias.float()) / sharpness
+        axis = axis / magnitude[:, None]
+        from pimm.datasets.sphere_prior.geometry import to_sphere
 
-    # ----- postprocess ---------------------------------------------------- #
+        counts = offset2bincount(point.offset).tolist()
+        spheres = to_sphere(features.float()).split(counts)
+        start, end = self.decoder.query_slices[self.eval_label]
+        total = self.decoder.total_queries
+        output = outputs[self.eval_label]
+        return [
+            dict(
+                mask_logits=masks.float(),
+                class_probs=logits.float().softmax(-1),
+                sphere_points=sphere,
+                cap_axis=axis[b * total + start : b * total + end],
+                cap_threshold=threshold[b * total + start : b * total + end],
+                cap_sharpness=sharpness[b * total + start : b * total + end],
+            )
+            for b, (masks, logits, sphere) in enumerate(
+                zip(output["pred_masks"], output["pred_logits"], spheres)
+            )
+        ]
+
     def postprocess(
         self,
         forward_output: dict,
@@ -1172,9 +850,22 @@ class UnifiedDetector(PointModel):
         min_points: int = None,
         background_class_label: int = None,
         fill_uncovered: bool = None,
+        rank_by_class_score: bool = None,
+        dedup_iou: float = None,
+        decoding: str = None,
     ):
         label = label or self.eval_label
         cfg = self.postprocess_cfg.copy()
+        decoding = self.decoding if decoding is None else decoding
+        if decoding not in _DECODING_DEFAULTS:
+            raise ValueError(f"Unknown decoding rule: {decoding!r}")
+        if decoding != self.decoding:
+            cfg.update(_DECODING_DEFAULTS[decoding])
+        cfg["stuff_class_label"] = (
+            self.label_specs[label].get("stuff_class_label")
+            if decoding == "panda_v2"
+            else None
+        )
         overrides = {
             "stuff_threshold": stuff_threshold,
             "mask_threshold": mask_threshold,
@@ -1186,6 +877,7 @@ class UnifiedDetector(PointModel):
             "min_points": min_points,
             "background_class_label": background_class_label,
             "fill_uncovered": fill_uncovered,
+            "rank_by_class_score": rank_by_class_score,
         }
         for key, value in overrides.items():
             if value is not None:
@@ -1198,19 +890,6 @@ class UnifiedDetector(PointModel):
             stuff_probs = task_output.get("stuff_probs")
             pred_regression = task_output.get("pred_regression")
             point_counts = forward_output.get("point_counts")
-        elif (
-            "pred_masks_by_label" in forward_output
-            and label in forward_output["pred_masks_by_label"]
-        ):
-            pred_masks = forward_output["pred_masks_by_label"][label]
-            pred_logits = forward_output["pred_logits_by_label"][label]
-            stuff_probs = None
-            if "stuff_probs_by_label" in forward_output:
-                stuff_probs = forward_output["stuff_probs_by_label"].get(label)
-            pred_regression = None
-            if "pred_regression_by_label" in forward_output:
-                pred_regression = forward_output["pred_regression_by_label"].get(label)
-            point_counts = forward_output.get("point_counts")
         else:
             pred_masks = forward_output["pred_masks"]
             pred_logits = forward_output["pred_logits"]
@@ -1221,12 +900,13 @@ class UnifiedDetector(PointModel):
         if point_counts is None:
             point_counts = forward_output.get(f"{label}_point_counts")
 
-        # Single entry point, dispatched by the label's `overlap` config:
-        #   overlap=False -> mutually-exclusive greedy panoptic fusion (per-point
-        #     instance/class labels). UNCHANGED.
-        #   overlap=True  -> overlap-preserving per-query rings (independent sigmoid
-        #     masks), selected by mask/class confidence only (no physics dedup).
         if self.label_specs[label].get("overlap", False):
+            if decoding == "wc":
+                cfg.update(dedup_iou=1.0, min_eg_points=50)
+            if (
+                dedup_iou is not None
+            ):  # near-duplicate removal of overlapping rings (1.0 turns it off)
+                cfg["dedup_iou"] = dedup_iou
             return postprocess_overlap_batch(
                 pred_masks=pred_masks,
                 pred_logits=pred_logits,

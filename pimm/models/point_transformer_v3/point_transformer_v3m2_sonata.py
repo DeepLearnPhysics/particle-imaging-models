@@ -9,10 +9,8 @@ constants.SPCONV_ALLOW_TF32 = True
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
-import torch_scatter
-import pointops
 from addict import Dict
-from timm.layers import DropPath
+from pimm.models.utils.misc import DropPath
 from torch.nn.init import trunc_normal_
 
 from pimm.models.builder import MODELS
@@ -467,6 +465,8 @@ class GridPooling(PointModule):
             self.act = PointSequential(act_layer())
 
     def forward(self, point: Point):
+        import torch_scatter
+
         if "grid_coord" in point.keys():
             grid_coord = point.grid_coord
         elif {"coord", "grid_size"}.issubset(point.keys()):

@@ -17,9 +17,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from pimm.models.builder import MODELS
-from pimm.models.losses.chamfer import chamfer_distance
 from pimm.models.modules import PointModel
 from pimm.models.polarmae.data import packed_to_batched
+from pimm.models.polarmae.ops import chamfer_distance
 from pimm.models.polarmae.layers import (
     LearnedPositionalEncoder,
     MaskedMiniPointNet,
@@ -107,6 +107,7 @@ class PoLArMAE(PointModel):
 
         # --- Encoder & Decoder ---
         self.encoder = make_transformer(arch, use_kv=False, **transformer_kwargs)
+        self.decoder_use_kv = decoder_use_kv
         self.decoder = make_transformer(
             decoder_arch, use_kv=decoder_use_kv, **decoder_kwargs.get("transformer_kwargs", {}),
         )
@@ -178,7 +179,13 @@ class PoLArMAE(PointModel):
 
         # 5. Decode masked tokens
         tok_m = self.mask_token.expand(m_mask.shape[0], m_mask.shape[1], -1)
-        dec_out = self.decoder(tok_m, m_pos, m_mask, kv=enc_out, pos_kv=um_pos, kv_mask=um_mask).last_hidden_state
+        if self.decoder_use_kv:  # mask tokens cross-attend to the encoded tokens
+            dec_out = self.decoder(tok_m, m_pos, m_mask, kv=enc_out, pos_kv=um_pos, kv_mask=um_mask).last_hidden_state
+        else:  # as in PoLAr-MAE: encoded and mask tokens are decoded together with self-attention
+            visible = enc_out.shape[1]
+            dec_out = self.decoder(
+                torch.cat([enc_out, tok_m], 1), torch.cat([um_pos, m_pos], 1), torch.cat([um_mask, m_mask], 1)
+            ).last_hidden_state[:, visible:]
 
         # Flatten to valid masked tokens only
         masked_output = dec_out[m_mask]
@@ -190,7 +197,7 @@ class PoLArMAE(PointModel):
         with torch.amp.autocast(device_type=feat.device.type, dtype=torch.float32):
             up = self.increase_dim(masked_output.unsqueeze(-1)).squeeze(-1)
             up = up.reshape(up.shape[0], -1, self.mae_channels)
-            chamfer_loss, _, _ = chamfer_distance(
+            chamfer_loss = chamfer_distance(
                 up.float(), masked_groups[..., :self.mae_channels].float(),
                 x_lengths=point_lengths, y_lengths=point_lengths,
             )

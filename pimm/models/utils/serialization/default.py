@@ -6,7 +6,6 @@ from .z_order import xyz2key as z_order_encode_
 from .z_order import key2xyz as z_order_decode_
 from .hilbert import encode_int as hilbert_encode_
 from .hilbert import decode as hilbert_decode_
-from . import _cuda_backend
 
 @torch.inference_mode()
 def encode(grid_coord, batch=None, depth=16, order="z"):
@@ -69,13 +68,10 @@ def encode_batch(grid_coord, batch=None, depth=16, orders=("z",)):
         
         # stack and encode all z-order variants at once
         stacked = torch.cat(z_coords, dim=0)  # (num_z_orders * n_points, 3)
-        if _cuda_backend.available(stacked):
-            all_z_codes = _cuda_backend.morton_encode(stacked)
-        else:
-            x = stacked[:, 0].long()
-            y = stacked[:, 1].long()
-            z = stacked[:, 2].long()
-            all_z_codes = z_order_encode_(x, y, z, b=None, depth=depth)
+        x = stacked[:, 0].long()
+        y = stacked[:, 1].long()
+        z = stacked[:, 2].long()
+        all_z_codes = z_order_encode_(x, y, z, b=None, depth=depth)
         
         # split back and assign
         z_code_chunks = all_z_codes.split(n_points)
@@ -95,10 +91,7 @@ def encode_batch(grid_coord, batch=None, depth=16, orders=("z",)):
         
         # stack and encode all hilbert variants at once
         stacked = torch.cat(h_coords, dim=0)  # (num_hilbert_orders * n_points, 3)
-        if _cuda_backend.available(stacked):
-            all_h_codes = _cuda_backend.hilbert_encode(stacked, depth)
-        else:
-            all_h_codes = hilbert_encode_(stacked, num_dims=3, num_bits=depth)
+        all_h_codes = hilbert_encode(stacked, depth=depth)
         
         # split back and assign
         h_code_chunks = all_h_codes.split(n_points)
@@ -130,8 +123,6 @@ def decode(code, depth=16, order="z"):
 
 def z_order_encode(grid_coord: torch.Tensor, depth: int = 16):
     """Encode ``(N, 3)`` grid coordinates with Morton z-order keys."""
-    if _cuda_backend.available(grid_coord):
-        return _cuda_backend.morton_encode(grid_coord)
     x, y, z = grid_coord[:, 0].long(), grid_coord[:, 1].long(), grid_coord[:, 2].long()
     # we block the support to batch, maintain batched code in Point class
     code = z_order_encode_(x, y, z, b=None, depth=depth)
@@ -146,9 +137,11 @@ def z_order_decode(code: torch.Tensor, depth):
 
 
 def hilbert_encode(grid_coord: torch.Tensor, depth: int = 16):
-    """Encode ``(N, 3)`` grid coordinates with Hilbert curve keys."""
-    if _cuda_backend.available(grid_coord):
-        return _cuda_backend.hilbert_encode(grid_coord, depth)
+    """Encode ``(N, 3)`` grid coordinates with Hilbert curve keys; CUDA tensors use the equal Triton kernel."""
+    if grid_coord.is_cuda:
+        from pimm.ops import hilbert_encode as hilbert_encode_cuda
+
+        return hilbert_encode_cuda(grid_coord, depth)
     return hilbert_encode_(grid_coord, num_dims=3, num_bits=depth)
 
 

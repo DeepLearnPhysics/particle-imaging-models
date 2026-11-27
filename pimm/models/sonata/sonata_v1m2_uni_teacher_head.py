@@ -12,16 +12,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-import torch_scatter
-from timm.layers import trunc_normal_
+from torch.nn.init import trunc_normal_
 
-import pointops
 from pimm.models.utils.structure import Point
 from pimm.models.builder import MODELS, build_model
 from pimm.models.modules import PointModel
 from pimm.models.utils import offset2batch, offset2bincount, batch2offset
 from pimm.utils.comm import get_world_size, all_gather
 from pimm.utils.scheduler import CosineScheduler
+from pimm.ops import nearest_neighbor
 
 
 class OnlineCluster(nn.Module):
@@ -296,6 +295,8 @@ class Sonata(PointModel):
         return q.t()
 
     def generate_mask(self, coord, offset):
+        import torch_scatter
+
         batch = offset2batch(offset)
         mask_size = self.mask_size
         mask_ratio = self.mask_ratio
@@ -322,20 +323,11 @@ class Sonata(PointModel):
         view2_coord,
         view2_offset,
     ):
-        index2, distance = pointops.knn_query(
-            1,
-            view2_coord.float(),
-            view2_offset.int(),
-            view1_coord.float(),
-            view1_offset.int(),
+        index2, distance = nearest_neighbor(
+            view1_coord, view1_offset, view2_coord, view2_offset, fused=True
         )
-        index1 = torch.arange(
-            index2.shape[0], device=index2.device, dtype=torch.long
-        ).unsqueeze(-1)
-        index = torch.cat([index1, index2], dim=-1)[
-            distance.squeeze(-1) < self.match_max_r
-        ]
-        return index
+        index1 = torch.arange(len(index2), device=index2.device)
+        return torch.stack([index1, index2], dim=-1)[distance < self.match_max_r]
 
     @torch.no_grad()
     def roll_point(self, point):
@@ -363,6 +355,8 @@ class Sonata(PointModel):
         return point
 
     def forward(self, data_dict, return_point=False):
+        import torch_scatter
+
         if return_point:
             point = self.teacher.backbone(data_dict)
             for _ in range(self.up_cast_level):
