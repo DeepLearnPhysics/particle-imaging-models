@@ -587,7 +587,7 @@ class PandaV2Detector(PointModel):
             center_pos_k=center_pos_k,
             mlp_point_proj=mlp_point_proj,
         )
-        if zero_init_positions:  # the core was pretrained without either, so both start as no-ops
+        if zero_init_positions:  # the core's attention had no query or point positional terms, so both start as no-ops
             nn.init.zeros_(self.decoder.query_embed.weight)
             if self.decoder.pos_emb is not None:
                 nn.init.zeros_(self.decoder.pos_emb[-1].weight)
