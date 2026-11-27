@@ -44,7 +44,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
     Args:
         data_root (str | None): Root directory of the revision's HDF5 shards.
             When ``None``, falls back to the revision-specific
-            ``$PILARNET_DATA_ROOT_V3``/``_V3_EXTRA`` variable, then to
+            ``$PILARNET_DATA_ROOT_V2``/``_V3``/``_V3_EXTRA`` variable, then to
             ``~/.cache/pimm/pilarnet/<revision>``; raises if none exist.
             Defaults to ``None``.
         split (str | Sequence[str]): Split name(s) used to glob ``*<split>/*.h5``
@@ -60,18 +60,26 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         loop (int): Train-time epoch multiplier. Defaults to ``1``.
         ignore_index (int): Ignored-label value. Defaults to ``-1``.
         energy_threshold (float): Drop points with energy at or below this value
-            when positive. Defaults to ``0.0``.
+            when positive. Defaults to ``0.13``.
         min_points (int): Minimum points per event; smaller events are excluded
             from the index. Defaults to ``1024``.
+        max_points (int | None): Maximum points per event; larger events are
+            excluded from the index.
+            Defaults to ``None`` (no cap).
         max_len (int): Cap on event count before the loop multiplier (-1 = no
             cap). Defaults to ``-1``.
+        subset_seed (int | None): With ``max_len``, keep the events at positions
+            ``default_rng(subset_seed).permutation(N)[:max_len]`` of the index instead of the first
+            ``max_len`` so pretraining and downstream pools can share the draw.
+            Overlay donors come from the same events. Defaults to ``None`` (the first ``max_len``).
         remove_low_energy_scatters (bool): Drop the first (LED scatter) cluster
             and its points. Defaults to ``False``.
         old_pid_mapping (bool): Map LED PID to ``6`` instead of ``5``. Defaults
             to ``False``.
-        revision ({"v2", "v3", "v3_extra"}): v3-family schema. ``"v2"`` is
-            served as v3 with a warning. ``v3_extra`` additionally requires
-            momentum/lineage and interaction-vertex tables. Defaults to ``"v3"``.
+        revision ({"v2", "v3", "v3_extra"}): On-disk truth schema. ``v2``
+            uses the historical width-5 cluster-extra table; ``v3_extra``
+            additionally requires momentum/lineage and interaction-vertex
+            tables. Defaults to ``"v3"``.
         overlay_n_events (int | tuple[int, int]): Number (or inclusive range) of
             events to overlay into one point cloud; ``> 1`` enables overlay.
             Defaults to ``1``.
@@ -79,6 +87,16 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             Defaults to ``1.0``.
         overlay_allow_repeats (bool): Allow the same event to be sampled more
             than once when overlaying. Defaults to ``True``.
+        overlay_rotate_90 (bool): Rotate each overlaid event by random 90-degree
+            increments about the LAr detector centre. Defaults to ``True``.
+        overlay_dedup (bool): Deduplicate colliding voxels by semantic priority;
+            when ``False``, coincident points are left for ``GridSample`` to merge.
+            Defaults to ``True``.
+        overlay_within_subset (bool): Restrict overlay donors to ``max_len``
+            events. Defaults to ``False``; seeded subsets always stay closed.
+        overlay_max_instances (dict[str, int] | None): Largest number of
+            instances per key (e.g. ``instance_particle``) an overlaid event may
+            hold; donors that would exceed it are redrawn. Defaults to ``None``.
 
     Note:
         Loader settings (``batch_size``, ``num_worker``) live at the top level of
@@ -86,7 +104,9 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         between v1 and v3, so numbers from a v1-era run are not comparable to a
         v3 run on the same split name. Event overlay deduplicates
         colliding voxels by semantic priority (track > shower > Michel > delta >
-        LED) and rotates overlaid events by random 90-degree increments.
+        LED) and rotates overlaid events by random 90-degree increments, unless
+        ``overlay_dedup`` / ``overlay_rotate_90`` turn that off. Donors come from the
+        selected subset when ``overlay_within_subset`` is enabled.
 
     Example:
         .. code-block:: python
@@ -125,6 +145,12 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         overlay_n_events=1,
         overlay_prob=1.0,
         overlay_allow_repeats=True,
+        overlay_rotate_90=True,
+        overlay_dedup=True,
+        overlay_max_instances=None,
+        max_points=None,
+        subset_seed=None,
+        overlay_within_subset=False,
     ):
         super().__init__()
         revision = resolve_revision(revision)
@@ -172,10 +198,15 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         self.overlay_n_events = overlay_n_events
         self.overlay_prob = overlay_prob
         self.overlay_allow_repeats = overlay_allow_repeats
+        self.overlay_rotate_90 = overlay_rotate_90
+        self.overlay_dedup = overlay_dedup
+        self.overlay_max_instances = overlay_max_instances
+        self.overlay_within_subset = overlay_within_subset
 
         # PILArNet specific parameters
         self.energy_threshold = energy_threshold
         self.min_points = min_points
+        self.max_points = max_points
         self.remove_low_energy_scatters = remove_low_energy_scatters
         self.max_len = max_len
         # Get list of h5 files
@@ -186,6 +217,11 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
 
         # Build index for faster access
         self._build_index()
+        self.subset = None
+        if subset_seed is not None:
+            assert max_len > 0, "subset_seed draws max_len events"
+            total = int(self.cumulative_lengths[-1])
+            self.subset = np.random.default_rng(subset_seed).permutation(total)[:max_len]
 
         logger = get_root_logger()
         logger.info(
@@ -226,7 +262,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
                 points_file = h5_file.replace(".h5", "_points.npy")
                 if os.path.exists(points_file):
                     npoints = np.load(points_file)
-                    index = np.argwhere(npoints >= self.min_points).flatten()
+                    index = np.argwhere(self._kept(npoints)).flatten()
                 else:
                     # No points file, count on the fly
                     log.info(
@@ -239,7 +275,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
                             npoint = f['point'][i].size // 8
                             npoints.append(npoint)
                         npoints = np.array(npoints)
-                        index = np.argwhere(npoints >= self.min_points).flatten()
+                        index = np.argwhere(self._kept(npoints)).flatten()
                         self.file_events.append(npoints.shape[0])
                 if os.path.exists(points_file):
                     self.file_events.append(int(npoints.shape[0]))
@@ -255,6 +291,11 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         log.info(
             f"Found {self.cumulative_lengths[-1]} point clouds with at least {self.min_points} points"
         )
+
+    def _kept(self, npoints):
+        """Select events within the inclusive point-count limits."""
+        maximum = np.inf if self.max_points is None else self.max_points
+        return (npoints >= self.min_points) & (npoints <= maximum)
 
     def h5py_worker_init(self):
         """Initialize h5py files for each worker."""
@@ -280,6 +321,8 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         """
         if not self.initted:
             self.h5py_worker_init()
+        if self.subset is not None:
+            idx = int(self.subset[idx % len(self.subset)])
 
         # Find which h5 file and index the point cloud is in
         h5_idx = np.searchsorted(self.cumulative_lengths, idx, side="right")
@@ -324,6 +367,8 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         """Get name for the point cloud."""
         if not self.initted:
             self.h5py_worker_init()
+        if self.subset is not None:
+            idx = int(self.subset[idx % len(self.subset)])
 
         # Find which h5 file and index the point cloud is in
         h5_idx = np.searchsorted(self.cumulative_lengths, idx, side="right")
@@ -338,8 +383,11 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         return f"{h5_name}_{file_idx}"
 
     def _num_source_events(self):
-        """Count of distinct events (pre-``loop``); overlay samples from this."""
-        return int(self.cumulative_lengths[-1])
+        """Count of donor events, optionally restricted to the selected subset."""
+        total = int(self.cumulative_lengths[-1])
+        if self.max_len > 0 and (self.overlay_within_subset or self.subset is not None):
+            return min(self.max_len, total)
+        return total
 
     def prepare_train_data(self, idx):
         """Prepare training data with transforms."""

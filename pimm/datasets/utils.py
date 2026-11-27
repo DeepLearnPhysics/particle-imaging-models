@@ -37,7 +37,12 @@ def collate_fn(batch, mix_prob=0):
         batch[-1] = torch.cumsum(batch[-1], dim=0).int()
         return batch
     elif isinstance(batch[0], Mapping):
-        batch = {
+        custom = [
+            key
+            for key, value in batch[0].items()
+            if not key.startswith("_") and callable(getattr(value, "collate", None))
+        ]
+        collated = {
             key: (
                 collate_fn([d[key] for d in batch])
                 if "offset" not in key
@@ -48,9 +53,16 @@ def collate_fn(batch, mix_prob=0):
                 )
             )
             for key in batch[0]
-            if not key.startswith("_")  # skip non-tensor metadata
+            if not key.startswith("_") and key not in custom
         }
-        return batch
+        for key in custom:
+            if all(key in data for data in batch):
+                value = type(batch[0][key]).collate(
+                    [data[key] for data in batch], collated
+                )
+                if value is not None:
+                    collated[key] = value
+        return collated
     else:
         return default_collate(batch)
 

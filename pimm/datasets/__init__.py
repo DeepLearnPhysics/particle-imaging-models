@@ -17,11 +17,12 @@ from .stateful import (
 # Detector and physics datasets.
 from .pilarnet import (
     PILArNetH5Dataset,
-    PILArNetParquetDataset,
-    PILArNetParquetIterableDataset,
 )
 from .jaxtpc_dataset import JAXTPCDataset
 from .lucid_dataset import LUCiDDataset
+from .next_h5 import NEXTH5Dataset
+from .wand import WANDRingSitesDataset, WANDProbeDataset
+from .sphere_prior import SpherePriorDataset
 from . import transform  # register transform classes
 
 # Dataloader adapters.

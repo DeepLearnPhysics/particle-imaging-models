@@ -1,6 +1,6 @@
-"""Shared PILArNet v3/v3_extra event decoding.
+"""Shared PILArNet v2/v3/v3_extra event decoding.
 
-``decode_event`` turns one event's raw HDF5/parquet arrays into the flat,
+``decode_event`` turns one event's raw HDF5 arrays into the flat,
 point-aligned dictionary consumed by the pimm dataset and transform pipeline.
 The ``v3_extra`` schema preserves the v3 tables and adds particle momentum,
 lineage, and an explicit per-interaction vertex table.
@@ -9,8 +9,6 @@ lineage, and an explicit per-interaction vertex table.
 from __future__ import annotations
 
 import numpy as np
-
-from pimm.utils.logger import get_root_logger
 
 # Priority for voxel deduplication: track > shower > Michel > delta > LED.
 DEFAULT_LABEL_PRIORITY = {1: 0, 0: 1, 2: 2, 3: 3, 4: 4}
@@ -39,18 +37,106 @@ V3_EXTRA_KEYS = (
 
 
 def resolve_revision(revision: str) -> str:
-    """Normalize a configured revision to a supported v3-family layout."""
-    if revision in ("v3", "v3_extra"):
+    """Validate and preserve the configured on-disk schema revision."""
+    if revision in ("v2", "v3", "v3_extra"):
         return revision
-    if revision == "v2":
-        get_root_logger().warning(
-            "PILArNet revision='v2' requested; reading v3 instead."
-        )
-        return "v3"
     raise ValueError(
         f"PILArNet revision={revision!r} is not supported; "
-        "choose 'v3' or 'v3_extra'."
+        "choose 'v2', 'v3', or 'v3_extra'."
     )
+
+
+def _decode_v2_event(
+    point,
+    cluster,
+    cluster_extra,
+    *,
+    energy_threshold: float,
+    remove_low_energy_scatters: bool,
+    old_pid_mapping: bool,
+) -> dict:
+    """Decode the historical width-5 PILArNet v2 truth layout."""
+    data = np.asarray(point).reshape(-1, 8)[:, [0, 1, 2, 3]]
+    cluster_arr = np.asarray(cluster).reshape(-1, CLUSTER_WIDTH)
+    cluster_size, cluster_id, group_id, interaction_id, semantic_id, pid = (
+        cluster_arr[:, [0, 1, 2, 3, 4, 5]].T
+    )
+    cluster_size = np.asarray(cluster_size, dtype=np.int64)
+    n_clusters = cluster_arr.shape[0]
+
+    raw_extra = np.asarray(cluster_extra) if cluster_extra is not None else None
+    if raw_extra is None:
+        raise ValueError("PILArNet v2 requires a `cluster_extra` table; got None.")
+    extra = (
+        raw_extra.reshape(n_clusters, -1)
+        if n_clusters > 0
+        else np.empty((0, 5), dtype=np.float32)
+    )
+    if extra.shape[1] != 5:
+        raise ValueError(
+            "Expected cluster_extra width 5 for a v2 shard; "
+            f"got {extra.shape[1]}."
+        )
+    momentum, vtx_x, vtx_y, vtx_z = extra[:, [1, 2, 3, 4]].T
+    if n_clusters:  # the particle's momentum, from its leading cluster, not each fragment's (as in v3)
+        momentum = momentum[_leading_cluster_index(cluster_id, group_id, cluster_size)]
+
+    pid = pid.copy()
+    pid[pid == -1] = 6 if old_pid_mapping else 5
+
+    if remove_low_energy_scatters and n_clusters:
+        data = data[cluster_size[0] :]
+        cluster_size = cluster_size[1:]
+        semantic_id, group_id, interaction_id, pid = (
+            semantic_id[1:],
+            group_id[1:],
+            interaction_id[1:],
+            pid[1:],
+        )
+        momentum = momentum[1:]
+        vtx_x, vtx_y, vtx_z = vtx_x[1:], vtx_y[1:], vtx_z[1:]
+
+    def repeat(values):
+        return np.repeat(values, cluster_size, axis=0)
+
+    data_semantic_id = repeat(semantic_id)
+    data_group_id = repeat(group_id)
+    data_interaction_id = repeat(interaction_id)
+    data_pid = repeat(pid)
+    data_momentum = repeat(momentum)
+    data_vertex = np.stack(
+        [repeat(vtx_x), repeat(vtx_y), repeat(vtx_z)], axis=1
+    )
+
+    if len(data) != len(data_semantic_id):
+        raise ValueError(
+            "PILArNet cluster sizes do not match the point table: "
+            f"sum(cluster_size)={len(data_semantic_id)}, points={len(data)}."
+        )
+
+    if energy_threshold > 0:
+        keep = data[:, 3] > energy_threshold
+        data = data[keep]
+        data_semantic_id = data_semantic_id[keep]
+        data_group_id = data_group_id[keep]
+        data_interaction_id = data_interaction_id[keep]
+        data_pid = data_pid[keep]
+        data_momentum = data_momentum[keep]
+        data_vertex = data_vertex[keep]
+
+    particle_ids = data_group_id.astype(np.int32)
+    interaction_ids = data_interaction_id.astype(np.int32)
+    return {
+        "coord": data[:, :3].astype(np.float32),
+        "energy": data[:, 3].astype(np.float32)[:, None],
+        "momentum": data_momentum.astype(np.float32)[:, None],
+        "vertex": data_vertex.astype(np.float32),
+        "segment_motif": data_semantic_id.astype(np.int32)[:, None],
+        "segment_pid": data_pid.astype(np.int32)[:, None],
+        "instance_particle": map_instance_ids(particle_ids),
+        "instance_interaction": map_instance_ids(interaction_ids),
+        "segment_interaction": (interaction_ids[:, None] != -1).astype(np.int32),
+    }
 
 
 def _leading_cluster_index(cluster_id, group_id, cluster_size):
@@ -117,9 +203,10 @@ def decode_event(
     remove_low_energy_scatters: bool = False,
     old_pid_mapping: bool = False,
 ) -> dict:
-    """Decode one PILArNet v3-family event into point-aligned arrays.
+    """Decode one PILArNet event into point-aligned arrays.
 
-    The base v3 layout uses ``cluster_extra`` width 6:
+    The historical v2 layout uses ``cluster_extra`` width 5. The base v3
+    layout uses width 6:
     ``[mass_MeV, |p|_GeV, vtx_x, vtx_y, vtx_z, is_primary]``.
     ``v3_extra`` additionally stores a row-aligned ``cluster_extra_2`` width 5
     table ``[px, py, pz, parent_pdg, parent_track_id]`` and an
@@ -130,6 +217,15 @@ def decode_event(
     callers can use one stable output schema across both revisions.
     """
     revision = resolve_revision(revision)
+    if revision == "v2":
+        return _decode_v2_event(
+            point,
+            cluster,
+            cluster_extra,
+            energy_threshold=energy_threshold,
+            remove_low_energy_scatters=remove_low_energy_scatters,
+            old_pid_mapping=old_pid_mapping,
+        )
     data = np.asarray(point).reshape(-1, 8)[:, [0, 1, 2, 3]]
 
     cluster_arr = np.asarray(cluster).reshape(-1, CLUSTER_WIDTH)

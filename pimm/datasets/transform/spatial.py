@@ -1091,10 +1091,13 @@ class GridSample(object):
 
     Floors ``coord / grid_size`` to integer voxel indices, hashes them, and
     deduplicates points per voxel. In ``mode="train"`` it keeps one random point
-    per occupied voxel and subsamples every per-point key in ``index_valid_keys``
-    via ``index_operator``, returning a single dict. In ``mode="test"`` it
-    instead returns a list of fragment dicts that together cover all points
-    (one point per voxel per fragment), each carrying an ``index`` key.
+    per occupied voxel. In ``mode="deterministic"`` it keeps one reproducible
+    pseudo-random representative selected from the voxel hash and occupancy;
+    this mode consumes no RNG state and returns the same single-dict contract as
+    train mode. Every per-point key in ``index_valid_keys`` is subsampled via
+    ``index_operator``. In ``mode="test"`` it instead returns a list of fragment
+    dicts that together cover all points (one point per voxel per fragment),
+    each carrying an ``index`` key.
     Optionally aggregates selected keys per voxel (sum or min) and emits
     integer ``grid_coord`` for sparse convolutions. Requires ``coord``
     (asserted). Registered as ``GridSample`` -- use this string as the ``type``
@@ -1106,7 +1109,8 @@ class GridSample(object):
             to ``0.05``.
         hash_type (str): voxel hash, ``"fnv"`` (FNV64-1A) or otherwise the
             ravel/raster hash. Defaults to ``"fnv"``.
-        mode (str): ``"train"`` (one random point per voxel, single dict) or
+        mode (str): ``"train"`` (one random point per voxel),
+            ``"deterministic"`` (one stable hash-selected point per voxel), or
             ``"test"`` (list of covering fragments). Defaults to ``"train"``.
         return_inverse (bool): if ``True``, store an ``inverse`` array mapping
             each original point to its voxel. Defaults to ``False``.
@@ -1167,7 +1171,7 @@ class GridSample(object):
         """Configure voxel size, hash function, return keys, and reducers."""
         self.grid_size = grid_size
         self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
-        assert mode in ["train", "test"]
+        assert mode in ["train", "deterministic", "test"]
         self.mode = mode
         self.return_inverse = return_inverse
         self.return_grid_coord = return_grid_coord
@@ -1190,19 +1194,38 @@ class GridSample(object):
         idx_sort = np.argsort(key)
         key_sort = key[idx_sort]
         _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
-        if self.mode == "train":  # train mode
-            idx_select = (
-                np.cumsum(np.insert(count, 0, 0)[0:-1])
-                + np.random.randint(0, count.max(), count.size) % count
-            )
+        if self.mode in ("train", "deterministic"):
+            voxel_start = np.cumsum(np.insert(count, 0, 0)[0:-1])
+            if self.mode == "train":
+                voxel_offset = np.random.randint(0, count.max(), count.size) % count
+            else:
+                # Hash-selected representatives do not consume the global RNG.
+                voxel_hash = key_sort[voxel_start].astype(np.uint64, copy=False)
+                voxel_offset = np.remainder(
+                    voxel_hash, count.astype(np.uint64, copy=False)
+                ).astype(np.int64, copy=False)
+            idx_select = voxel_start + voxel_offset
             idx_unique = idx_sort[idx_select]
             if "sampled_index" in data_dict:
                 # for ScanNet data efficient, we need to make sure labeled point is sampled.
-                idx_unique = np.unique(
-                    np.append(idx_unique, data_dict["sampled_index"])
-                )
+                sampled_index = data_dict["sampled_index"]
+                if self.mode == "deterministic":
+                    sampled_index = np.asarray(sampled_index, dtype=np.int64).reshape(-1)
+                if self.mode == "deterministic" and sampled_index.size:
+                    # The lowest labeled index replaces its voxel's representative.
+                    voxel_of_point = np.empty(len(key), dtype=inverse.dtype)
+                    voxel_of_point[idx_sort] = inverse
+                    sampled_index = np.unique(sampled_index)
+                    sampled_voxel = voxel_of_point[sampled_index]
+                    order = np.lexsort((sampled_index, sampled_voxel))
+                    sampled_index = sampled_index[order]
+                    sampled_voxel = sampled_voxel[order]
+                    _, first = np.unique(sampled_voxel, return_index=True)
+                    idx_unique[sampled_voxel[first]] = sampled_index[first]
+                else:
+                    idx_unique = np.unique(np.append(idx_unique, sampled_index))
                 mask = np.zeros_like(data_dict["segment"]).astype(bool)
-                mask[data_dict["sampled_index"]] = True
+                mask[sampled_index] = True
                 data_dict["sampled_index"] = np.where(mask[idx_unique])[0]
             reduced = {}
             if self.sum_keys or self.min_keys:
@@ -1313,6 +1336,7 @@ class GridSample(object):
             hashed_arr *= np.uint64(1099511628211)
             hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
         return hashed_arr
+
 
 @TRANSFORMS.register_module()
 class SphereCrop(object):
