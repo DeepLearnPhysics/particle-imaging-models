@@ -1,6 +1,6 @@
 # First run
 
-Train a tiny semantic-segmentation model on 100 events of PILArNet-M-mini, then look at what pimm saved. You need a finished [installation](install.md), one NVIDIA GPU, and network access to Hugging Face.
+Train a tiny semantic-segmentation model on 100 events of PILArNet-M-mini, then look at what was saved. You need a finished [installation](install.md), one NVIDIA GPU, and network access to Hugging Face.
 
 The recipe, `tests/tiny_semseg`, is a one-epoch smoke test with a deliberately small model.
 
@@ -33,11 +33,11 @@ uv run pimm launch \
   data.val.data_root="$PWD/data/PILArNet-M-mini"
 ```
 
-Flags before the bare `--` configure the launcher. The `key=value` pairs after it override values in the training config. The dry run prints the resolved `torchrun` command and the run directory, then exits.
+Put launcher flags before the bare `--` and `key=value` overrides of the training config after it. Add `--dry-run` to print the resolved `torchrun` command and the run directory without running anything.
 
 ## 3. Train
 
-Run the same command without `--dry-run`. The launcher prints the run directory, for example `exp/tests/tiny-semseg-2026-07-14_14-30-00/`. Training has finished when `train.log` contains `Val result:` and the directory holds:
+Run the same command without `--dry-run`. The run directory is printed, for example `exp/tests/tiny-semseg-2026-07-14_14-30-00/`. Training has finished when `train.log` contains `Val result:` and the directory contains these files:
 
 ```text
 exp/tests/tiny-semseg-2026-07-14_14-30-00/
@@ -54,11 +54,11 @@ exp/tests/tiny-semseg-2026-07-14_14-30-00/
     └── model_best.pth
 ```
 
-The log notes that revision `v2` is read as `v3`: the recipe names `v2`, and the reader serves it with the v3 layout that the mini files use.
+The log has a note that revision `v2` is read as `v3`: the recipe's revision is `v2`, but the mini files have the v3 layout.
 
-With `--train.no-code-copy`, the run imports pimm straight from your checkout. Without it, pimm copies `pimm/` and `configs/` into the run's `code/` directory, and the run imports that copy.
+Pass `--train.no-code-copy` to import pimm straight from your checkout. Without the flag, `pimm/` and `configs/` are copied into the run's `code/` directory, and that copy is imported.
 
-## 4. Look at what ran
+## 4. Look at the saved run
 
 ```bash
 uv run python - <<'PY'
@@ -71,7 +71,7 @@ print("global batch:", cfg["batch_size"], "epochs:", cfg["epoch"])
 PY
 ```
 
-`resolved_config.json` is the config after inheritance and your overrides: what actually ran.
+`resolved_config.json` is the config that was actually run, after inheritance and your overrides.
 
 ## 5. Change one thing
 
@@ -85,11 +85,11 @@ For a change you want to keep, write a child config instead of a longer command;
 
 ## What happened
 
-1. The launcher merged `launch/defaults.yaml`, `launch/sites/local.yaml` and your flags, then started `torchrun`.
-2. `configs/tests/tiny_semseg.py` inherited `configs/_base_/default_runtime.py` and took your overrides.
-3. `PILArNetH5Dataset` read each event. The transforms normalized coordinates, log-scaled energy, kept one point per grid cell and copied `segment_motif` to `segment`.
-4. Collation packed four events into one batch and built `offset`.
-5. `DefaultSegmentorV2` with a two-stage `PT-v3m2` backbone returned a loss in training and logits in validation.
-6. Hooks timed the run, logged it, evaluated the validation split and saved checkpoints.
+1. `launch/defaults.yaml`, `launch/sites/local.yaml` and your flags were merged, then `torchrun` was started.
+2. Your overrides were applied to `configs/tests/tiny_semseg.py`, which inherits from `configs/_base_/default_runtime.py`.
+3. Each event was read with `PILArNetH5Dataset`. The transform steps were to normalize coordinates, log-scale energy, keep one point per grid cell and copy `segment_motif` to `segment`.
+4. Four events were packed into one batch, and `offset` was built for it.
+5. The model was `DefaultSegmentorV2` with a two-stage `PT-v3m2` backbone; its output was a loss in training and logits in validation.
+6. Everything else was a hook: timing, logging, evaluating the validation split and saving checkpoints.
 
-[How pimm works](how-pimm-works.md) covers each step.
+For more on each step, see [How pimm works](how-pimm-works.md).

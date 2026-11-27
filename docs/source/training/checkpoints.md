@@ -1,6 +1,6 @@
 # Checkpoints and resume
 
-During training, pimm saves checkpoints you can resume from; `pimm export` makes a separate copy for inference and fine-tuning.
+Checkpoints saved during training are for resuming; for inference and fine-tuning, make a separate copy with `pimm export`.
 
 ## What's saved
 
@@ -14,7 +14,7 @@ exp/<group>/<run>/model/
 └── iter_<step>.pth       optional weight snapshots
 ```
 
-Saves go to a temporary path and are renamed into place, so a checkpoint without `.complete` is unfinished. With `checkpoint_format="legacy"`, pimm writes a single `model_last.pth` instead of `last/`. If `MODEL_DIR` is set, `model/` is a symlink into that directory.
+Checkpoints are written to a temporary path and renamed into place, so a checkpoint without `.complete` is unfinished. Set `checkpoint_format="legacy"` to get a single `model_last.pth` instead of `last/`. If `MODEL_DIR` is set, `model/` is a symlink into that directory.
 
 ## Warm start and resume
 
@@ -32,13 +32,13 @@ Resume with the same config and run name, and without a timestamp:
 uv run pimm launch --train.config <same-config> --run.name <same-name> --run.no-timestamp --train.resume
 ```
 
-The launcher picks the newest complete checkpoint in `model/`. To see which one it will use:
+Training resumes from the newest complete checkpoint in `model/`. To see which checkpoint that is, run this command:
 
 ```bash
 uv run python -m pimm.utils.path latest-checkpoint exp/<group>/<run>/model
 ```
 
-`hf://` weights can't be resumed: exports carry no trainer state.
+You can't resume a run from `hf://` weights: exports contain no trainer state.
 
 ## Changing the number of GPUs
 
@@ -49,16 +49,16 @@ uv run python -m pimm.utils.path latest-checkpoint exp/<group>/<run>/model
 | different workers per GPU | restored | dropped; the saved epoch restarts |
 | `resume_strict_state=False` | best effort | dropped |
 
-When the position is dropped, the log warns that batches from the restarted epoch may be seen twice.
+When the position is dropped, the log contains a warning that batches from the restarted epoch may be seen twice.
 
 ## `model_best.pth`
 
-`CheckpointSaver` writes `model_best.pth` when the evaluator listed before it reports a better selection metric, such as mIoU for `SemSegEvaluator`. It holds weights only, so it serves evaluation and export, not resume.
+To get `model_best.pth`, list an evaluator before `CheckpointSaver` in `hooks`. The file is written each time the evaluator's selection metric improves, such as mIoU for `SemSegEvaluator`. `model_best.pth` contains weights only, so use it for evaluation and export, not to resume a run.
 
 ## Errors
 
 | Message | Meaning |
 |---|---|
-| `No weight found` | the weight path doesn't exist; the run stops rather than start from random weights |
+| `No weight found` | the weight path doesn't exist; training stops instead of starting from random weights |
 | `Incomplete checkpoint directory` | the checkpoint lacks weights, trainer state or `.complete`; use an older complete one |
 | resume from `hf://` rejected | exports have no trainer state; warm-start a new run instead |

@@ -10,7 +10,7 @@ point
 : Point positions, shape (N, 3) for 3D readers. Their frame and units come from the dataset and the transforms.
 
 `grid_coord`
-: Integer grid cells derived from `coord` by grid sampling. Sparse-convolution and serialized-attention models read them.
+: Integer grid cells derived from `coord` by grid sampling. They are used in sparse-convolution and serialized-attention models.
 
 `feat`
 : Model input features, shape (N, C), in the order of `Collect`'s `feat_keys`.
@@ -34,7 +34,7 @@ instance
 : The points of one particle or one interaction. Instance ids are unique within an event.
 
 backbone
-: The encoder that turns a point cloud into per-point features.
+: The encoder, with a point cloud as input and per-point features as output.
 
 head
 : The task-specific layers on top of a backbone.
@@ -55,10 +55,10 @@ registry
 : A mapping from a name in a config's `type` field to a Python class.
 
 experiment config
-: Python under `configs/` that says what to train.
+: Python under `configs/` for what to train.
 
 site profile
-: YAML under `launch/sites/` that says where and how to run.
+: YAML under `launch/sites/` for where and how to run.
 
 global batch size
 : Events per optimizer step, summed over all GPUs. pimm's `batch_size` is global.
@@ -70,4 +70,4 @@ DDP
 : PyTorch DistributedDataParallel, pimm's default for more than one GPU.
 
 export
-: A portable model directory with weights and a config, made by `pimm export`.
+: A portable model directory with weights and a config, made with `pimm export`.

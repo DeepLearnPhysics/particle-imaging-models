@@ -11,7 +11,7 @@ curl -sSL https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-mo
 ## Where to start
 
 [Run a released model](models/run.md)
-: Load Panda or PoLAr-MAE from Hugging Face and label the points of an event. No training needed.
+: Load Panda or PoLAr-MAE from Hugging Face and label the points of an event. No training is needed.
 
 [Train on PILArNet-M](get-started/first-run.md)
 : Install, train a tiny model on 100 events, then move to the full recipes.
@@ -23,12 +23,12 @@ curl -sSL https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-mo
 
 | Area | Contents |
 |---|---|
-| Models | Panda (self-distillation) and PoLAr-MAE (masked point modeling) pretraining; semantic segmentation, the Panda detector and PointGroup task models; Point Transformer v1–v3, SparseUNet, LitePT and Volt backbones |
-| Data | PILArNet-M (HDF5 and Parquet), JAXTPC, LUCiD water Cherenkov, and a generic `.npy` reader |
+| Models | Panda (self-distillation) and PoLAr-MAE (masked point modeling) pretraining; semantic segmentation and the Panda detector; Point Transformer v3, SparseUNet and LitePT backbones |
+| Data | PILArNet-M (HDF5), JAXTPC, LUCiD water Cherenkov, and a generic `.npy` reader |
 | Training | `torchrun` with DDP, an experimental FSDP2 path, Slurm through Submitit, and an experimental exex execution path |
-| Models out | Portable exports that `pimm.from_pretrained` loads from disk or Hugging Face |
+| Models out | Portable exports that you load from disk or Hugging Face with `pimm.from_pretrained` |
 
-This site documents pimm {{ version }} on the `main` branch. pimm is research software; its APIs and recipes change between versions.
+This site is the documentation for pimm {{ version }} on the `main` branch. pimm is research software; its APIs and recipes change between versions.
 
 ```{toctree}
 :hidden:

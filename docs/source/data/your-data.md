@@ -1,10 +1,10 @@
 # Bring your own data
 
-Write your events as `.npy` files and use `DefaultDataset`, with no new code; or write a reader class that reads your format directly.
+Write your events as `.npy` files and use `DefaultDataset`, with no new code; or write a reader class to read your format directly.
 
 ## Route 1: `.npy` files
 
-`DefaultDataset` reads one directory per event:
+For `DefaultDataset`, each event is one directory:
 
 ```text
 data/mydet/
@@ -17,7 +17,7 @@ data/mydet/
 └── val/
 ```
 
-It loads files named `coord`, `color`, `normal`, `strength`, `segment`, `instance` and `pose`, and ignores everything else. There is no `energy` file, so store energy as `strength` and copy it in the transform list.
+Files named `coord`, `color`, `normal`, `strength`, `segment`, `instance` and `pose` are loaded, and everything else is ignored. There is no `energy` file, so store energy as `strength` and copy it in the transform list.
 
 Make a few synthetic events to try the route:
 
@@ -37,7 +37,7 @@ for split, count in [("train", 8), ("val", 2)]:
         np.save(event / "segment.npy", rng.integers(0, 5, n))
 ```
 
-Point a config at it:
+Point a config at `data/mydet`:
 
 ```python
 # configs/my_study/mydet_semseg.py
@@ -64,7 +64,7 @@ data = dict(
 # for example copied from configs/tests/tiny_semseg.py.
 ```
 
-Change `center` and `scale` so that `NormalizeCoord` maps your detector volume into the unit ball, and set `LogTransform`'s range to your energy scale.
+Change `center` and `scale` in `NormalizeCoord` so that your detector volume is mapped into the unit ball, and set `LogTransform`'s range to your energy scale.
 
 Check one batch before you train:
 
@@ -81,7 +81,7 @@ for key, value in batch.items():
     print(key, tuple(value.shape))
 ```
 
-You should see `coord`, `grid_coord` and `segment` with one row per kept point, `feat` with four columns, and `offset` with two entries. Then train it like any recipe:
+You should see `coord`, `grid_coord` and `segment` with one row per kept point, `feat` with four columns, and `offset` with two entries. Then launch the config like any recipe:
 
 ```bash
 uv run pimm launch --train.config my_study/mydet_semseg --resources.nproc-per-node 1
@@ -89,7 +89,7 @@ uv run pimm launch --train.config my_study/mydet_semseg --resources.nproc-per-no
 
 ## Route 2: a reader class
 
-A reader is a registered `torch.utils.data.Dataset` whose `get_data` returns one event as a dict of NumPy arrays:
+A reader is a registered `torch.utils.data.Dataset` whose `get_data` output is one event, as a dict of NumPy arrays:
 
 ```python
 # pimm/datasets/my_detector.py
@@ -135,7 +135,7 @@ class MyDetectorDataset(Dataset):
         return len(self.index)
 ```
 
-The `coord_offsets`, `coord`, `energy` and `label` datasets stand in for your file's layout. HDF5 handles open on first use, inside each data-loader worker, rather than in `__init__`. Keep the index order fixed so a resumed run sees the same events.
+The `coord_offsets`, `coord`, `energy` and `label` datasets are placeholders for your file's layout. HDF5 handles are opened on first use, inside each data-loader worker, rather than in `__init__`. Keep the index order fixed so the same events are used in a resumed run.
 
 Register the class by importing it in `pimm/datasets/__init__.py`:
 
@@ -143,4 +143,4 @@ Register the class by importing it in `pimm/datasets/__init__.py`:
 from .my_detector import MyDetectorDataset
 ```
 
-Then use `type="MyDetectorDataset"` in a config. The `JAXTPCDataset` and `LUCiDDataset` sources in `pimm/datasets/` are fuller examples: they split reading into reader classes in `pimm/datasets/readers/`, each with `read_event(idx)`, a lazy `h5py_worker_init`, `__len__` and `close`.
+Then use `type="MyDetectorDataset"` in a config. The `JAXTPCDataset` and `LUCiDDataset` sources in `pimm/datasets/` are fuller examples, with reading split into reader classes in `pimm/datasets/readers/`, each with `read_event(idx)`, a lazy `h5py_worker_init`, `__len__` and `close`.

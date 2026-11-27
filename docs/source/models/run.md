@@ -1,6 +1,6 @@
 # Run a released model
 
-`pimm.from_pretrained` downloads an export, rebuilds the model, loads its weights, moves it to a device and returns it in eval mode.
+Call `pimm.from_pretrained` to download an export, rebuild the model, load its weights, and get the model back on a device in eval mode.
 
 ```python
 import pimm
@@ -8,14 +8,13 @@ import pimm
 model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")
 ```
 
-`device` defaults to `"cpu"`. Downloads go to the Hugging Face cache (`HF_HUB_CACHE`); pass `cache_dir=` to choose another directory and `revision=` to pin a branch, tag or commit.
+The default `device` is `"cpu"`. Downloads are stored in the Hugging Face cache (`HF_HUB_CACHE`); pass `cache_dir=` to choose another directory and `revision=` to pin a branch, tag or commit.
 
 ## Label one event
 
-This labels test event 0 of PILArNet-M-mini (see [First run](../get-started/first-run.md) for the download) with Panda Semantic. Panda needs CUDA.
+Here you label test event 0 of PILArNet-M-mini (see [First run](../get-started/first-run.md) for the download) with Panda Semantic. Panda needs CUDA.
 
 ```python
-import numpy as np
 import torch
 
 import pimm
@@ -28,16 +27,17 @@ model = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", device="cuda")
 transform = Compose([
     dict(type="NormalizeCoord", center=[384.0, 384.0, 384.0], scale=768.0 * 3**0.5 / 2),
     dict(type="LogTransform", min_val=0.01, max_val=20.0, keys=("energy",)),
-    dict(type="GridSample", grid_size=0.001, hash_type="fnv", mode="train", return_grid_coord=True),
+    dict(type="GridSample", grid_size=0.001, hash_type="fnv", mode="deterministic", return_grid_coord=True,
+         return_inverse=True),
     dict(type="ToTensor"),
-    dict(type="Collect", keys=("coord", "grid_coord"), feat_keys=("coord", "energy")),
+    dict(type="Collect", keys=("coord", "grid_coord", "inverse"), feat_keys=("coord", "energy"),
+         offset_keys_dict=dict(offset="coord", origin_offset="inverse")),
 ])
 
 events = PILArNetH5Dataset(data_root="data/PILArNet-M-mini", split="test",
                            revision="v3", transform=[], min_points=0)
 event = events.get_data(0)
 
-np.random.seed(0)
 sample = transform({"coord": event["coord"].copy(), "energy": event["energy"].copy()})
 batch = {k: v.to("cuda") if torch.is_tensor(v) else v for k, v in collate_fn([sample]).items()}
 
@@ -49,13 +49,13 @@ names = ["shower", "track", "Michel", "delta", "low-energy deposit"]
 print({names[i]: int((labels == i).sum()) for i in range(5)})
 ```
 
-To label several events at once, transform each one and pass the list to `collate_fn`; it concatenates them and builds `offset`. The labels refer to the points `GridSample` kept, in batch order.
+To label several events at once, transform each one and pass the list to `collate_fn` to concatenate the events and build `offset`. You get a label for every original point of each event, in input order; every point is given the prediction of its `GridSample` cell, through `inverse`.
 
 ## Outputs
 
-Semantic models return `seg_logits`, one row per point of the packed batch.
+The output of a semantic model is `seg_logits`, one row per original point, and `offset`, the cumulative point count at the end of each event. Panda Semantic needs `inverse` in the batch, as in the example above; without it, you get a `KeyError`.
 
-Panda Particle and Panda Interaction return raw query predictions. `model.postprocess` turns them into per-point assignments:
+The outputs of Panda Particle and Panda Interaction are raw query predictions. Call `model.postprocess` to turn these predictions into per-point assignments:
 
 ```python
 with torch.inference_mode():
@@ -67,23 +67,23 @@ prediction["confidences"]      # (N,)
 prediction["query_labels"]     # (N,) query that produced the point's instance, -1 for none
 ```
 
-Instance ids are unique across the batch. `postprocess` accepts `mask_threshold`, `conf_threshold` and `min_points`.
+Instance ids are unique across the batch. You can pass `mask_threshold`, `conf_threshold` and `min_points` to `postprocess`.
 
-Panda Base returns a `Point`; `point.feat` holds the features. PoLAr-MAE Pretrain returns its loss terms.
+The output of Panda Base is a `Point`, and `point.feat` contains the features. The outputs of PoLAr-MAE Pretrain are its loss terms.
 
-## What it loads
+## Sources
 
-| Source | Example | Architecture comes from |
+| Source | Example | Architecture read from |
 |---|---|---|
 | Hugging Face repository | `DeepLearnPhysics/Panda-Semantic` or `hf://DeepLearnPhysics/Panda-Semantic` | the repository's `config.json` |
 | Local export | `artifacts/my-model` | its `config.json` |
 | Run checkpoint | `exp/<group>/<run>/model/model_best.pth` | the run's config, or `config_path=` |
 
-A `trainer.dcp/` directory holds optimizer state, not a model; point at the checkpoint directory that contains `weights.pth`.
+A `trainer.dcp/` directory contains optimizer state, not a model; point at the checkpoint directory that contains `weights.pth`.
 
 ## Load part of a model
 
-`model_type` picks a nested model out of the config, and `prefix` keeps only the matching weights:
+Use `model_type` to pick a nested model out of the config and `prefix` to keep only the matching weights:
 
 ```python
 backbone = pimm.from_pretrained(
@@ -94,7 +94,7 @@ backbone = pimm.from_pretrained(
 )
 ```
 
-`model_config=` or `config_path=` supply an architecture, `key_mapping=` renames weights, and `filter_fn=` drops some. With `strict=False` and `return_metadata=True` you get the missing and unexpected keys:
+Pass `model_config=` or `config_path=` to supply an architecture, `key_mapping=` to rename weights, and `filter_fn=` to drop some of them. With `strict=False` and `return_metadata=True` you get the missing and unexpected keys:
 
 ```python
 model, meta = pimm.from_pretrained("DeepLearnPhysics/Panda-Semantic", strict=False, return_metadata=True)

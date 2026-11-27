@@ -1,8 +1,8 @@
 # Architecture
 
-Each part of pimm owns one job. Knowing which part owns what tells you where a change belongs.
+Each part of pimm has one job. If you know which part has which job, you know where a change belongs.
 
-| Component | Owns | Leaves to others |
+| Component | Responsibility | Left to others |
 |---|---|---|
 | dataset | finding events and decoding one into arrays | features, training |
 | transform | preprocessing, augmentation, label mapping, the final sample | file access, the training loop |
@@ -26,7 +26,7 @@ dataset.get_data(index)                  raw NumPy event
 
 ## Registries
 
-Models, datasets, transforms, losses, hooks, trainers, testers and schedulers register under a name that configs use as `type`:
+Models, datasets, transforms, losses, hooks, trainers, testers and schedulers are registered under a name, and you use that name as `type` in configs:
 
 ```python
 from pimm.models.builder import MODELS
@@ -37,7 +37,7 @@ class MyBackbone(nn.Module):
     ...
 ```
 
-The decorator runs when the module is imported, so a new module must be imported from its package's `__init__.py`. Configs saved by earlier runs refer to registered names, so a new architecture gets a new name rather than changing what an existing one builds.
+Registration happens when the module is imported, so import a new module from its package's `__init__.py`. Configs saved by earlier runs contain registered names, so give a new architecture a new name rather than changing the architecture behind an existing name.
 
 ## Choose the smallest change
 
@@ -46,7 +46,7 @@ The decorator runs when the module is imported, so a new module must be imported
 | different hyperparameters or a different combination of parts | a child config |
 | a weighted mix of existing losses | entries in the `criteria` list |
 | new loss math | a registered loss |
-| a new encoder that takes and returns a `Point` | a registered backbone |
+| a new encoder with a `Point` as input and output | a registered backbone |
 | new task outputs or forward structure | a top-level model |
 | a new file or truth format | a dataset |
 | new per-event preprocessing or augmentation | a transform |
