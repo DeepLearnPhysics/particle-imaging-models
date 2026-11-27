@@ -12,7 +12,6 @@ import numpy as np
 from collections import OrderedDict
 from datetime import datetime, timezone
 import torch
-import torch.distributed as dist
 from sklearn.metrics import adjusted_rand_score
 
 import pimm.utils.comm as comm
@@ -27,9 +26,6 @@ from pimm.datasets import build_dataset, collate_fn
 from pimm.models import build_model
 from pimm.utils.logger import get_root_logger
 from pimm.utils.registry import Registry
-from pimm.utils.misc import (
-    intersection_and_union_gpu,
-)
 from pimm.utils.checkpoints import (
     checkpoint_model_state_dict,
     exported_weights_file,
@@ -240,17 +236,6 @@ class SemSegTester(TesterBase):
             all_preds.append(pred.cpu())
             all_segments.append(segment.cpu())
 
-            intersection, union, target = intersection_and_union_gpu(
-                pred,
-                segment,
-                self.cfg.data.num_classes,
-                self.cfg.data.ignore_index,
-            )
-            if comm.get_world_size() > 1:
-                dist.all_reduce(intersection)
-                dist.all_reduce(union)
-                dist.all_reduce(target)
-
             self.logger.info(
                 "Test: [{iter}/{max_iter}]".format(iter=i + 1, max_iter=len(self.test_loader))
             )
@@ -273,6 +258,7 @@ class SemSegTester(TesterBase):
             all_preds,
             all_segments,
             num_classes,
+            ignore_index=self.cfg.data.ignore_index,
             macro_ignore_class_ids=self.macro_ignore_class_ids,
         )
         precision_class = metrics.precision_class
