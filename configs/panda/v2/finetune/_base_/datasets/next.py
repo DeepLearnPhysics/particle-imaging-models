@@ -72,18 +72,20 @@ dataset = dict(
     preload=True,
     index_cache_dir="exp/cache/next",
 )
+pool = 1000000  # the events the encoders were pretrained on; the test set is every train event after them
 data = dict(
     num_classes=2,
     names=["Bkg", "Signal"],
     train=dict(
         **dataset,
         split="train",
-        subset=(0, 0, 1000000),
+        subset=(0, 0, pool),
         max_per_source=(0, K // 2) if K <= 10000 else -1,
         max_len=K if K == 100000 else -1,
         transform=train_transform
     ),
     val=dict(**dataset, split="val", transform=eval_transform),
+    test=dict(**dataset, split="train", subset=(0, pool, None), transform=eval_transform),
 )
 data["train"]["preload"] = K != 416993
 batch_size_val = 16

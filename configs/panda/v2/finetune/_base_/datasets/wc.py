@@ -198,8 +198,7 @@ data = dict(
 data["train"].update(max_len={{_base_.K}}, transform=train_transform)
 data["val"]["transform"] = eval_transform
 
-evaluate = False
-# Use scripts/panda/eval/test_wc.py for muon-direction checkpoint scoring.
+evaluate = True
 hooks = [
     dict(
         type="WeightDecayExclusion",
@@ -237,12 +236,13 @@ hooks = [
         min_points=2,
         coord_scale=18.1,
         dedup_iou=1.0,
-        set_current_metric=False,
+        set_current_metric=True,
+        selection_metric="direction_mu_q68_deg",  # the paper's WC checkpoint rule
     ),
     dict(
         type="CheckpointSaver",
         save_freq={{_base_.check}},
-        evaluator_every_n_steps=None,
+        evaluator_every_n_steps={{_base_.check}},
         save_iter_checkpoints=False,
     ),
 ]

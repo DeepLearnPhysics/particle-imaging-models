@@ -155,7 +155,6 @@ data["val"]["transform"] = eval_transform
 data["test"]["transform"] = eval_transform
 
 evaluate = True
-# The native evaluator uses the same per-event GrapPA scorer as checkpoint selection.
 hooks = [
     dict(
         type="WeightDecayExclusion",

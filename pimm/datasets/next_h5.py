@@ -224,7 +224,7 @@ class NEXTH5Dataset(Dataset):
             ``data_root`` (override), and ``max_events``. A bare string is a
             name with ``label = list position``.
         split (str): ``"train"`` uses all events except the holdout;
-            ``"holdout"`` / ``"val"`` / ``"test"`` use the holdout events;
+            ``"holdout"`` / ``"val"`` use the holdout events;
             ``"all"`` uses everything. Defaults to ``"train"``.
         holdout_events_per_config (int | None): Events reserved per source
             before the train/holdout split. Defaults to ``0``.
@@ -290,7 +290,7 @@ class NEXTH5Dataset(Dataset):
             >>> #   config_id (1,), name, split
     """
 
-    _HOLDOUT_SPLITS = {"holdout", "val", "test"}
+    _HOLDOUT_SPLITS = {"holdout", "val"}
 
     def __init__(
         self,
