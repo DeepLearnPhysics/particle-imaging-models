@@ -280,7 +280,7 @@ def test_last_step_checkpoint_waits_for_epoch_metrics(backend, monkeypatch):
         def __init__(self, trainer):
             self.trainer = trainer
 
-        def save_iteration_checkpoint(self, **kwargs):
+        def save_epoch_checkpoint(self, **kwargs):
             saves.append(self.trainer.writer.checkpoint_state())
 
     monkeypatch.setattr(checkpoint_hooks, "CheckpointManager", FakeCheckpointManager)
@@ -296,7 +296,7 @@ def test_last_step_checkpoint_waits_for_epoch_metrics(backend, monkeypatch):
         logger=SimpleNamespace(info=lambda *a: None),
         best_metric_value=float("-inf"),
     )
-    hook = checkpoint_hooks.CheckpointSaverIteration(save_freq=2)
+    hook = checkpoint_hooks.CheckpointSaver(save_freq=2, save_iter_checkpoints=False)
     hook.trainer = owner
     hook.before_train()
     writer.add_scalar("train/loss", 1.0, 2)
@@ -308,7 +308,8 @@ def test_last_step_checkpoint_waits_for_epoch_metrics(backend, monkeypatch):
     assert saves[0]["next_step"] == 3
 
 
-def test_all_resume_checkpoint_savers_capture_wandb_state(monkeypatch):
+@pytest.mark.parametrize("checkpoint_format", [None, "standard", "legacy"])
+def test_checkpoint_saver_captures_wandb_state(monkeypatch, checkpoint_format):
     calls = []
 
     def build_payload(trainer, **kwargs):
@@ -316,11 +317,12 @@ def test_all_resume_checkpoint_savers_capture_wandb_state(monkeypatch):
         return {}
 
     monkeypatch.setattr(checkpoints, "build_checkpoint_payload", build_payload)
-    manager = checkpoints.CheckpointManager(SimpleNamespace(cfg={}))
+    cfg = {} if checkpoint_format is None else {"checkpoint_format": checkpoint_format}
+    manager = checkpoints.CheckpointManager(SimpleNamespace(cfg=cfg))
+    assert manager._checkpoint_format() == (checkpoint_format or "standard")
     monkeypatch.setattr(manager, "_write_checkpoint", lambda *a, **kw: None)
     manager.save_epoch_checkpoint()
-    manager.save_iteration_checkpoint()
-    assert calls == [{"distributed_rng": True, "initialize_logger": True}] * 2
+    assert calls == [{"distributed_rng": True, "initialize_logger": True}]
 
 
 @pytest.mark.parametrize("legacy", [False, True])

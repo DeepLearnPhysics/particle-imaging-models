@@ -110,12 +110,12 @@ def test_slurm_and_history_are_independent(cfg, interactive):
 
 
 def test_remote_host_and_storage_come_from_pimm(cfg):
-    cfg["submit"]["host"] = "nersc"
-    cfg["submit"]["folder"] = "/pscratch/me/exex"
+    cfg["submit"]["host"] = "login.cluster.example"
+    cfg["submit"]["folder"] = "/shared/me/exex"
     _, config, _, executor, *_ = _exex._plan(cfg)
-    assert config.cluster_settings(executor.cluster).hostname == "nersc"
-    assert config.cluster_settings(executor.cluster).storage_root == "/pscratch/me/exex"
-    assert executor.workdir_root == "/pscratch/me/exex/work"
+    assert config.cluster_settings(executor.cluster).hostname == "login.cluster.example"
+    assert config.cluster_settings(executor.cluster).storage_root == "/shared/me/exex"
+    assert executor.workdir_root == "/shared/me/exex/work"
 
 
 def test_shifter_preserves_runtime_gpu_library_paths(cfg):
@@ -158,13 +158,25 @@ def test_runtime_bootstrap_expands_attempt_path_after_arguments(cfg, tmp_path):
     ]
 
 
-def test_gate_does_not_require_an_optional_checkpoint_saver(monkeypatch, cfg):
-    monkeypatch.setenv("PIMM_USE_EXEX", "1")
-    cfg["train"]["options"].clear()
+@pytest.mark.parametrize("exex", ["0", "1"])
+@pytest.mark.parametrize("mode", ["single", "multirank", "chained", "fsdp2"])
+@pytest.mark.parametrize("checkpoint_format", [None, "legacy"])
+def test_launch_preserves_training_options_without_a_checkpoint_hook(
+    monkeypatch, cfg, exex, mode, checkpoint_format
+):
+    monkeypatch.setenv("PIMM_USE_EXEX", exex)
+    cfg["resources"]["nproc_per_node"] = 2 if mode == "multirank" else 1
+    cfg["chain"]["jobs"] = 2 if mode == "chained" else 1
+    options = {"epoch": 3}
+    if mode == "fsdp2":
+        options["parallel.strategy"] = "fsdp2"
+    if checkpoint_format is not None:
+        options["checkpoint_format"] = checkpoint_format
+    cfg["train"]["options"] = options.copy()
     result = finalize_config(
         cfg, launch_timestamp=cfg["timestamp"], require_config=True
     )
-    assert "hooks.CheckpointSaverIteration.backend" not in result["train"]["options"]
+    assert result["train"]["options"] == options
 
 
 def test_dry_run_does_not_stage_or_submit(cfg, monkeypatch, capsys):
@@ -184,6 +196,7 @@ def test_dry_run_does_not_stage_or_submit(cfg, monkeypatch, capsys):
         ("chain", "resume_first", True, "--train.weight"),
         ("watchdog", "interval_min", 1, "no watchdog"),
         ("submit", "secret_env", {"TOKEN": "secret"}, "secret_env"),
+        ("watchdog", "qos", "watchdog", "no watchdog"),
     ],
 )
 def test_unsupported_settings_fail_before_submission(cfg, section, key, value, message):
