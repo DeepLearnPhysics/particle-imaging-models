@@ -45,13 +45,14 @@ def download(
     revision: str | None = None,
     output_dir: Path | None = None,
 ) -> None:
-    """Download a dataset, or some of its splits, to OUTPUT_DIR (default: $PIMM_DATA_ROOT/NAME, else ~/.cache/pimm/datasets/NAME).
+    """Download a dataset, or some of its splits, to OUTPUT_DIR, which is $PIMM_DATA_ROOT/NAME or else
+    ~/.cache/pimm/datasets/NAME unless you set it.
 
     Args:
         name: A dataset from `pimm datasets list`.
-        split: Splits to download (default: all).
-        revision: The revision, for datasets that have several (default: the first listed).
-        output_dir: Where the files go.
+        split: Splits to download; leave it out for every split.
+        revision: The revision, for datasets that have several; leave it out for the first one listed.
+        output_dir: Where the files go; leave it out for the default above.
     """
     entry = CATALOG[name]
     revisions = entry.get("revisions")
