@@ -145,7 +145,7 @@ class GenericMultiTaskDecoder(nn.Module):
         act_layer=nn.GELU,
         upcast_attention=False,
         pos_emb=True,
-        center_pos_k=False,
+        center_pos_k=True,
         mlp_point_proj=False,
     ):
         nn.Module.__init__(self)
@@ -516,7 +516,7 @@ class PandaV2Detector(PointModel):
         act_layer=nn.GELU,
         upcast_attention=False,
         pos_emb=True,
-        center_pos_k=False,
+        center_pos_k=True,
         use_stuff_head=False,
         stuff_classes=None,
         mlp_point_proj=False,

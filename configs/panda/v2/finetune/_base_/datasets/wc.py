@@ -57,7 +57,6 @@ model = dict(
         ),
         use_stuff_head=(False,),
         stuff_classes=dict(particle=[]),
-        center_pos_k=True,
         backbone=dict(in_channels=29, grid_size=0.03),
     ),
 )

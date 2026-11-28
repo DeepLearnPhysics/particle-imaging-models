@@ -9,7 +9,6 @@ save_path = f"exp/finetune/transfer/wc_from_{source}" + "/k" + __env.get("K", "1
 model = dict(
     freeze_batchnorm=False,
     trainable_keywords=("decoder", "backbone.stem"),
-    model=dict(center_pos_k=False),
 )
 amp_dtype = "bfloat16"
 sync_bn = True
