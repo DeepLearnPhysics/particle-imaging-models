@@ -66,8 +66,23 @@ panda_transform = Compose([
 | `panda/v1/panseg/pt-v3m2-ft-pid-{dec,fft,scratch}` | the particle detector |
 | `panda/v1/panseg/pt-v3m2-ft-vtx-{dec,fft,scratch}` | the interaction detector |
 | `panda/v1/panseg/pt-v3m2-ft-{pid,vtx}-fft-detector` | the whole detector, starting from the released Particle or Interaction weights pinned in the recipe |
+| `panda/v2/{pilarnet-m,tpcpp-10m,wand-sk-like,next-aiss}/pretrain-panda-v2m1-0-base` | the V2 encoder, from scratch, with `panda-ssl-v2m1` self-distillation on that dataset |
+| `panda/v2/sphere-prior/pretrain-panda-v2m1-0-decoder` | the `panda-detector-v2m1` decoder without an encoder, on synthetic sphere-prior events |
+| `panda/v2/{pilarnet-m,tpcpp-10m,wand-sk-like}/instance-panda-v2m1-0a-lora` | the detector's decoder, starting from the decoder core in `hf://DeepLearnPhysics/Panda-V2-Decoder`, and LoRA adapters on the encoder |
+| `panda/v2/{pilarnet-m,tpcpp-10m,wand-sk-like}/instance-panda-v2m1-0b-frozen` | the detector's decoder on a frozen encoder |
+| `panda/v2/{pilarnet-m,tpcpp-10m,wand-sk-like}/instance-panda-v2m1-0c-scratch` | the whole detector, from a randomly initialized encoder |
+| `panda/v2/{pilarnet-m,tpcpp-10m,wand-sk-like}/instance-panda-v2m1-1{a,b}-transfer-{lora,frozen}` | as `0a` and `0b`, on the encoder pretrained on the dataset named by `source`; the encoder's stem is also trained and its batch-norm statistics are updated |
+| `panda/v2/{pilarnet-m,tpcpp-10m}/semseg-panda-v2m1-0a-lora` | MLP semantic heads and LoRA adapters on the encoder: 8 joint semantic and particle classes on `pilarnet-m`, particle and noise classes on `tpcpp-10m` |
+| `panda/v2/{pilarnet-m,tpcpp-10m}/semseg-panda-v2m1-0b-frozen` | linear and MLP semantic heads on a frozen encoder: 5 semantic classes on `pilarnet-m`, particle and noise classes on `tpcpp-10m` |
+| `panda/v2/{pilarnet-m,tpcpp-10m}/semseg-panda-v2m1-0c-scratch` | the whole semantic model, from a randomly initialized encoder |
+| `panda/v2/wand-sk-like/kinematics-panda-v2m1-0b-frozen` | linear and MLP probes of the vertex, direction and momentum of single electrons and muons, on a frozen encoder |
+| `panda/v2/next-aiss/cls-panda-v2m1-0a-lora` | a signal-versus-background event classification head and LoRA adapters on the encoder |
+| `panda/v2/next-aiss/cls-panda-v2m1-1{a,b}-transfer-{lora,frozen}` | the classification head, the encoder's stem and, in `1a`, LoRA adapters, on the encoder pretrained on the dataset named by `source`; batch-norm statistics are updated |
+| `panda/v2/next-aiss/cls-sparse-resnet-0-base` | a sparse ResNet event classifier, from scratch, as a baseline |
 
 To fine-tune the semantic and detector recipes from `Panda-Base`, pass `--train.weight hf://DeepLearnPhysics/Panda-Base`; see [Fine-tune](fine-tune.md). The model in the detector recipes is `panda-detector-v1m1`, with the same parameter layout as the released V1 state dictionaries.
+
+Each V2 recipe that trains on labels sets its number of labeled training events in `num_train_events` at the top of the file, and its schedule length and evaluation interval follow from that number. The V2 recipes that start from a pretrained encoder load it from `weights/<dataset>.pth`.
 
 ## Cite
 
