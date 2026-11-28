@@ -1,6 +1,6 @@
+<div align="center">
 
-
-![pimm logo](https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-models/main/assets/logo.svg)
+<img src="https://raw.githubusercontent.com/DeepLearnPhysics/particle-imaging-models/main/assets/logo.svg" alt="pimm logo" height="72">
 
 # particle imaging models
 
@@ -8,6 +8,8 @@
 [First run](https://deeplearnphysics.org/particle-imaging-models/stable/get-started/first-run.html) ·
 [Models](https://deeplearnphysics.org/particle-imaging-models/stable/models/index.html) ·
 [Recipe catalog](https://deeplearnphysics.org/particle-imaging-models/stable/reference/recipes.html)
+
+</div>
 
 
 
