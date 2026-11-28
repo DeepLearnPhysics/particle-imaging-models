@@ -22,7 +22,7 @@ support the event-level linear-probe evaluators.
 
 Coordinates and energies are on a totally different scale than PILArNet-M, so
 configs MUST re-derive ``NormalizeCoord`` / ``GridSample`` / ``LogTransform``
-(see ``configs/panda/pretrain/next.py``).
+(see ``configs/panda/v2/next-aiss/pretrain-panda-v2m1-0-base.py``).
 """
 
 from __future__ import annotations

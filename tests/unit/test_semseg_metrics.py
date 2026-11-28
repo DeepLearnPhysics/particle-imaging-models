@@ -19,9 +19,9 @@ def test_ignored_points_are_not_scored():
     assert metrics.all_acc == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("detector", ["lartpc", "sphenix", "wc", "next"])
-def test_pretraining_batches_split_over_four_gpus(detector):
-    cfg = Config.fromfile(str(ROOT / "configs" / "panda" / "v2" / "pretrain" / f"{detector}.py"))
+@pytest.mark.parametrize("dataset", ["pilarnet-m", "tpcpp-10m", "wand-sk-like", "next-aiss"])
+def test_pretraining_batches_split_over_four_gpus(dataset):
+    cfg = Config.fromfile(str(ROOT / "configs" / "panda" / "v2" / dataset / "pretrain-panda-v2m1-0-base.py"))
     for key in ("batch_size", "batch_size_val"):
         value = cfg.get(key)
         assert value is None or value % 4 == 0, f"{key}={value}"
