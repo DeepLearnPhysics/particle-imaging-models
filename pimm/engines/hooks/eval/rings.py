@@ -217,11 +217,11 @@ class RingPanopticEvaluator(HookBase):
         if self.trainer.cfg.evaluate and self.every_n_steps == 0:
             self.eval()
 
-    def _particle_regression_metrics(self, matched_pids, momentum_frac, vertex_m):
-        """Summarize matched true-electron/muon residuals only (vertex distances in metres)."""
-        if not (len(matched_pids) == len(momentum_frac) == len(vertex_m)):
+    def _particle_regression_metrics(self, matched_pids, momentum_frac, vertex_m, direction_deg):
+        """Summarize matched true-electron/muon residuals only (vertex distances in metres, directions in degrees)."""
+        if not (len(matched_pids) == len(momentum_frac) == len(vertex_m) == len(direction_deg)):
             raise ValueError(
-                "matched PID, momentum, and vertex residual lists must align"
+                "matched PID, momentum, vertex and direction residual lists must align"
             )
 
         metrics = {}
@@ -241,6 +241,7 @@ class RingPanopticEvaluator(HookBase):
                     f"vertex_{particle}_q68_m": vertex_q68,
                     f"momentum_{particle}_frac_median": _nanmedian(particle_momentum),
                     f"momentum_{particle}_frac_q68": _q68(particle_momentum),
+                    f"direction_{particle}_q68_deg": _q68([direction_deg[idx] for idx in select]),
                 }
             )
         return metrics
@@ -458,7 +459,7 @@ class RingPanopticEvaluator(HookBase):
             "vertex_l2_norm": _nanmean(vtx_m) / self.coord_scale,
             "vertex_l2_m": _nanmean(vtx_m),
         }
-        metrics.update(self._particle_regression_metrics(matched_pids, m_frac, vtx_m))
+        metrics.update(self._particle_regression_metrics(matched_pids, m_frac, vtx_m, dir_deg))
 
         self.trainer.logger.info(
             "[ring] GT=%d Pred=%d TP=%d | P=%.3f R=%.3f F1=%.3f IoU=%.3f | "
@@ -505,12 +506,11 @@ class RingPanopticEvaluator(HookBase):
                     self.trainer.writer.add_scalar(f"{self.prefix}/{k}", v, step)
 
         if self.set_current_metric:
-            self.trainer.comm_info["current_metric_value"] = metrics[
-                self.selection_metric
-            ]
-            self.trainer.comm_info["current_metric_name"] = (
-                f"{self.prefix}/{self.selection_metric}"
-            )
+            value, name = metrics[self.selection_metric], self.selection_metric
+            if "_q68" in name:  # an error, lower is better; the checkpoint saver keeps the highest value
+                value, name = -value, f"neg_{name}"
+            self.trainer.comm_info["current_metric_value"] = value
+            self.trainer.comm_info["current_metric_name"] = f"{self.prefix}/{name}"
 
         self.trainer.logger.info(
             "<<<<<<<<<<<<<<<<< End Ring Panoptic Evaluation <<<<<<<<<<<<<<<<<"

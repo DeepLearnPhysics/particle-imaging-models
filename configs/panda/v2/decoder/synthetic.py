@@ -49,7 +49,6 @@ model = dict(
     criteria=[
         dict(
             type="FastUnifiedInstanceLoss",
-            # Set consistent_matching=True to use the paper objective.
             consistent_matching=False,
             overlap=True,
             query_heads=[],

@@ -124,10 +124,11 @@ def make_dataset(config, split, data_root=None, cache_dir=None, max_events=None,
     from pimm.datasets import build_dataset
 
     spec = copy.deepcopy(dict(config.data.val))
+    pool = config.data.train.subset[2]
     if split == "pool":
-        spec.update(split="train", subset=(0, 0, 1_000_000))
+        spec.update(split="train", subset=(0, 0, pool))
     elif split == "test":
-        spec.update(split="train", subset=(0, 1_000_000, None))
+        spec.update(split="train", subset=(0, pool, None))
     elif split == "all":
         spec.update(split="all", subset=None, holdout_events_per_config=0)
     else:

@@ -6,7 +6,8 @@ batch_size_val = None  # one validation event per GPU
 num_worker = 32  # Total across four ranks: eight workers per rank.
 gradient_accumulation_steps = 1
 epoch = eval_epoch = 20
-schedule_total_steps = 208334
+schedule_total_steps = 208334  # 1M events, 20 epochs, batch 96
+# A K-event pool keeps this schedule, as in the paper: data.train.max_len=K data.train.loop=1000000//K.
 # H5 loaders run complete epochs; an exact step-limited stream is unavailable.
 enable_amp = True
 amp_dtype = "bfloat16"

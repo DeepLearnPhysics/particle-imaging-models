@@ -3,6 +3,7 @@ weight = "weights/sphenix.pth"
 encoder = dict(in_channels=4, grid_size=0.003)
 model = dict(
     model=dict(
+        zero_init_positions=True,  # with the decoder core loaded below
         labels=("particle",),
         num_queries=(64,),
         num_classes=(5,),
@@ -182,8 +183,7 @@ data["train"].update(max_len={{_base_.K}}, transform=train_transform)
 data["val"]["transform"] = eval_transform
 data["test"]["transform"] = eval_transform
 
-evaluate = False
-# Use scripts/panda/eval/test_sphenix.py for validation checkpoint scoring.
+evaluate = True
 hooks = [
     dict(
         type="WeightDecayExclusion",
@@ -204,7 +204,7 @@ hooks = [
     ),
     dict(
         type="CheckpointLoader",
-        source="weights/decoder_core_sphenix.pth",
+        source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
         replacements={"decoder.": "model.decoder."},
         strict=False,
     ),
@@ -225,12 +225,12 @@ hooks = [
         require_class_for_match=False,
         class_names=dict(particle=["other", "pion", "kaon", "proton", "electron"]),
         panoptic_selection=True,
-        set_current_metric=False,
+        set_current_metric=True,
     ),
     dict(
         type="CheckpointSaver",
         save_freq={{_base_.check}},
-        evaluator_every_n_steps=None,
+        evaluator_every_n_steps={{_base_.check}},
         save_iter_checkpoints=False,
     ),
 ]

@@ -6,6 +6,7 @@ encoder = dict(in_channels=29, grid_size=0.03)
 model = dict(
     model=dict(
         decoding="wc",
+        zero_init_positions=True,  # with the decoder core loaded below
         labels=("particle",),
         num_queries=(32,),
         num_classes=(8,),
@@ -56,7 +57,6 @@ model = dict(
         ),
         use_stuff_head=(False,),
         stuff_classes=dict(particle=[]),
-        center_pos_k=True,
         backbone=dict(in_channels=29, grid_size=0.03),
     ),
 )
@@ -198,8 +198,7 @@ data = dict(
 data["train"].update(max_len={{_base_.K}}, transform=train_transform)
 data["val"]["transform"] = eval_transform
 
-evaluate = False
-# Use scripts/panda/eval/test_wc.py for muon-direction checkpoint scoring.
+evaluate = True
 hooks = [
     dict(
         type="WeightDecayExclusion",
@@ -220,7 +219,7 @@ hooks = [
     ),
     dict(
         type="CheckpointLoader",
-        source="weights/decoder_core_wc.pth",
+        source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
         replacements={"decoder.": "model.decoder."},
         strict=False,
     ),
@@ -237,12 +236,13 @@ hooks = [
         min_points=2,
         coord_scale=18.1,
         dedup_iou=1.0,
-        set_current_metric=False,
+        set_current_metric=True,
+        selection_metric="direction_mu_q68_deg",  # the paper's WC checkpoint rule
     ),
     dict(
         type="CheckpointSaver",
         save_freq={{_base_.check}},
-        evaluator_every_n_steps=None,
+        evaluator_every_n_steps={{_base_.check}},
         save_iter_checkpoints=False,
     ),
 ]

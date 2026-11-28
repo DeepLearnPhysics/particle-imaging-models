@@ -54,11 +54,13 @@ def test_particle_regression_q68_is_scoped_to_true_electrons_and_muons():
     matched_pids = [0, 2, 1, 0, 2, 1, 0, 2]
     vertex_m = [1.0, 4.0, 100.0, 2.0, 5.0, 200.0, 3.0, 6.0]
     momentum_frac = [0.1, 0.4, 9.0, 0.2, 0.5, 8.0, 0.3, 0.6]
+    direction_deg = [10.0, 40.0, 90.0, 20.0, 50.0, 80.0, 30.0, 60.0]
 
     metrics = evaluator._particle_regression_metrics(
         matched_pids,
         momentum_frac,
         vertex_m,
+        direction_deg,
     )
 
     assert np.isclose(metrics["vertex_e_q68_m"], np.quantile([1, 2, 3], 0.68))
@@ -70,11 +72,14 @@ def test_particle_regression_q68_is_scoped_to_true_electrons_and_muons():
     assert np.isclose(
         metrics["momentum_mu_frac_q68"], np.quantile([0.4, 0.5, 0.6], 0.68)
     )
+    assert np.isclose(metrics["direction_e_q68_deg"], np.quantile([10, 20, 30], 0.68))
+    assert np.isclose(metrics["direction_mu_q68_deg"], np.quantile([40, 50, 60], 0.68))
     reordered = RingPanopticEvaluator(coord_scale=10.0, particle_classes=(2, 0))
     reordered_metrics = reordered._particle_regression_metrics(
         [2 if pid == 0 else 0 if pid == 2 else pid for pid in matched_pids],
         momentum_frac,
         vertex_m,
+        direction_deg,
     )
     assert reordered_metrics == metrics
 

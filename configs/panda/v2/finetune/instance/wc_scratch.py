@@ -6,7 +6,6 @@ amp_dtype = "float16"
 model = dict(
     target_modules=[],
     trainable_keywords=("decoder", "backbone"),
-    model=dict(center_pos_k=True),
 )
 param_dicts = None
 scheduler = dict(max_lr=[0.0003])
