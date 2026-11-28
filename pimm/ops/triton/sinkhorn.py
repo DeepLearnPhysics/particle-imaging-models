@@ -1,6 +1,6 @@
 """Tiled bf16 Sinkhorn distillation with fp32 reductions and no dense score tables.
 
-Why this exists: Panda V2 self-distillation (``pimm/models/panda/pretrain/panda_ssl_v2m1.py``, ``fused_sinkhorn``)
+Why this exists: Panda V2 self-distillation (``pimm/models/panda_v2/panda_ssl_v2m1.py``, ``fused_sinkhorn``)
 balances the teacher's point-to-prototype scores with Sinkhorn-Knopp and trains the student on a cross-entropy against
 them, over many points and prototypes. The PyTorch path (``pimm.ops.sinkhorn_distillation_loss`` with ``fused=False``)
 materializes the fp32 ``[points, prototypes]`` teacher and student score tables and the assignment table, so its memory

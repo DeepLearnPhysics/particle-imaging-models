@@ -22,7 +22,7 @@ class SonataPreparation:
     """
 
     def __init__(self, model):
-        from pimm.models.panda.pretrain.panda_ssl_v2m1 import self_distillation_settings
+        from pimm.models.panda_v2.panda_ssl_v2m1 import self_distillation_settings
 
         settings = self_distillation_settings(model)
         self.settings = dict(
@@ -174,7 +174,7 @@ def _view_sites(coord, origin, offset, grid_size, settings):
     """
     import torch_scatter
 
-    from pimm.models.panda.encoder.panda_encoder_v2m1 import pool
+    from pimm.models.panda_v2.panda_encoder_v2m1 import pool
 
     coord = np.asarray(coord)
     ends = torch.as_tensor(offset).long()

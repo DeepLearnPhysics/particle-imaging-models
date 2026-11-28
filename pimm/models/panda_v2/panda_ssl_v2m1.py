@@ -27,7 +27,7 @@ from torch.nn.init import trunc_normal_
 from pimm.models.utils.structure import Point
 from pimm.models.builder import MODELS, build_model
 from pimm.models.modules import PointModel
-from pimm.models.panda.encoder.panda_encoder_v2m1 import PandaV2Encoder
+from pimm.models.panda_v2.panda_encoder_v2m1 import PandaV2Encoder
 from pimm.models.utils.checkpoint import recompute_activation
 from pimm.utils.comm import get_world_size
 from pimm.utils.config import resolve_arguments

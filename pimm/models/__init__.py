@@ -18,6 +18,6 @@ from .sonata import *
 from .polarmae import *
 
 # Panda V2
-from .panda import *
+from .panda_v2 import *
 from .classifier import *
 from .next import KekicSparseResNet

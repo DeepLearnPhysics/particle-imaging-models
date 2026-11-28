@@ -172,7 +172,7 @@ class FastUnifiedSingleLayerLoss(nn.Module):
         self.panda_v2 = bool(panda_v2)
         matcher = PublicHungarianMatcher
         if self.panda_v2:
-            from pimm.models.panda.detector.matcher import FastHungarianMatcher
+            from pimm.models.panda_v2.detector_utils.matcher import FastHungarianMatcher
 
             matcher = FastHungarianMatcher
         self.matcher = matcher(

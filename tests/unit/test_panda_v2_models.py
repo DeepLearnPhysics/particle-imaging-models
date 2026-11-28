@@ -47,7 +47,7 @@ def test_panda_v2_registry_preserves_public_detector():
 def test_encoder_size_arguments_control_multiscale_features(torch_attention):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    from pimm.models.panda.encoder import PandaV2Encoder
+    from pimm.models.panda_v2 import PandaV2Encoder
 
     model = (
         PandaV2Encoder(
@@ -121,7 +121,7 @@ def test_self_distillation_trains_on_prepared_batches(
     from pimm.datasets import collate_fn
     from pimm.datasets.transform.preparation import SonataPreparation, _view_sites
     from pimm.distributed import move_batch_to_device
-    from pimm.models.panda.pretrain import PandaV2SelfDistillation
+    from pimm.models.panda_v2 import PandaV2SelfDistillation
 
     channels = (12, 24, 48, 72)
     config = dict(
@@ -260,7 +260,7 @@ def test_varlen_attention_fallback_isolates_events_and_gradients():
 
 
 def test_panoptic_decoding_accepts_half_precision_regression():
-    from pimm.models.panda.detector.postprocess import postprocess_panoptic
+    from pimm.models.panda_v2.detector_utils.postprocess import postprocess_panoptic
 
     masks = torch.tensor([[4.0, 4.0, -4.0, -4.0], [-4.0, -4.0, 4.0, 4.0]])
     classes = torch.tensor([[10.0, -10.0, -10.0], [-10.0, 10.0, -10.0]])
@@ -273,7 +273,7 @@ def test_panoptic_decoding_accepts_half_precision_regression():
 
 
 def test_detector_injects_specs_into_consistent_matching_loss():
-    from pimm.models.panda.detector.panda_detector_v2m1 import PandaV2Detector
+    from pimm.models.panda_v2.panda_detector_v2m1 import PandaV2Detector
 
     model = PandaV2Detector(
         full_in_channels=4,
@@ -292,7 +292,7 @@ def test_detector_injects_specs_into_consistent_matching_loss():
 
 
 def test_detector_without_backbone_trains_and_predicts_spherical_caps(torch_attention):
-    from pimm.models.panda.detector.panda_detector_v2m1 import PandaV2Detector
+    from pimm.models.panda_v2.panda_detector_v2m1 import PandaV2Detector
 
     model = PandaV2Detector(
         full_in_channels=8,
@@ -375,7 +375,7 @@ def test_checkpoint_loader_additional_source_preserves_other_parameters(tmp_path
 
 
 def test_detector_autocast_preserves_float32_mask_logits(torch_attention):
-    from pimm.models.panda.detector.panda_detector_v2m1 import PandaV2Detector
+    from pimm.models.panda_v2.panda_detector_v2m1 import PandaV2Detector
 
     model = PandaV2Detector(
         full_in_channels=4,
@@ -403,7 +403,7 @@ def test_torch_attention_backend_matches_flash_without_calling_it(monkeypatch):
     )
     import pimm.ops.attention as attention
     import pimm.ops.triton.window_attention as window
-    from pimm.models.panda.detector.panda_detector_v2m1 import PandaV2Detector
+    from pimm.models.panda_v2.panda_detector_v2m1 import PandaV2Detector
     from pimm.ops import set_attention_backend
 
     torch.manual_seed(0)

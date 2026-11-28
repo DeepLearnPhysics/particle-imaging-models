@@ -7,7 +7,7 @@ import torch
 
 from pimm.datasets import collate_fn
 from pimm.datasets.transform.preparation import SonataPreparation
-from pimm.models.panda.pretrain.panda_ssl_v2m1 import PandaV2SelfDistillation
+from pimm.models.panda_v2.panda_ssl_v2m1 import PandaV2SelfDistillation
 
 MODEL = dict(
     backbone=dict(type="panda-encoder-v2m1"),
