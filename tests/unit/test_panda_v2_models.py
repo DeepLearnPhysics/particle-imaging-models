@@ -283,7 +283,7 @@ def test_detector_injects_specs_into_consistent_matching_loss():
         num_classes=2,
         overlap=True,
         backbone={"type": torch.nn.Identity},
-        criteria=[{"type": "ConsistentMatchingInstanceLoss"}],
+        criteria=[{"type": "FastUnifiedInstanceLoss", "consistent_matching": True}],
     )
     loss = model.criteria_by_label["particle"].criteria[0]
     assert (

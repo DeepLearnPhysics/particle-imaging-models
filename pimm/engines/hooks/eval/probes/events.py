@@ -15,7 +15,7 @@ from torch.utils.data import Subset
 import pimm.utils.comm as comm
 from pimm.distributed import unwrap_model
 from pimm.engines.hooks.builder import HOOKS
-from pimm.engines.hooks.default import HookBase, get_writer_step
+from pimm.engines.hooks.default import HookBase, get_writer_step, unsharded_val_loader
 from pimm.observability import structured_logger as sl
 
 _evaluation_groups = WeakKeyDictionary()
@@ -330,7 +330,6 @@ class EventLinearProbeEvaluator(HookBase):
         self.seeds = tuple(int(seed) for seed in seeds)
         self.feature_sampling = feature_sampling
         self._validated = False
-        self._full_loader = None
         if self.out_of_fold:
             if not self.seeds:
                 raise ValueError("seeds must name at least one fold seed")
@@ -746,20 +745,8 @@ class EventLinearProbeEvaluator(HookBase):
         return self.class_names or getattr(data, "names", None)
 
     def _eval_loader(self):
-        """Return the full held-out loader on rank zero without distributed sharding."""
-        if not self.out_of_fold:
-            return self.trainer.val_loader
-        if self._full_loader is None:
-            base = self.trainer.val_loader
-            self._full_loader = torch.utils.data.DataLoader(
-                base.dataset,
-                batch_size=base.batch_size,
-                shuffle=False,
-                num_workers=0,
-                pin_memory=True,
-                collate_fn=base.collate_fn,
-            )
-        return self._full_loader
+        """The whole held-out set, on rank zero without distributed sharding."""
+        return unsharded_val_loader(self.trainer)
 
     @sl.log_trace_span("evaluation.event_linear_probe")
     @rank_zero_evaluation

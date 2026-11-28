@@ -500,7 +500,7 @@ def main():
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--data-root", type=Path)
-    parser.add_argument("--wc-config", choices=("config_01", "multi_primary"), default="config_01")
+    parser.add_argument("--wc-config", choices=("config_01", "multi_primary"), default="multi_primary")
     parser.add_argument("--split", choices=("val", "test"), default="test")
     parser.add_argument("--first-event", type=int, default=0)
     parser.add_argument("--max-events", type=int, help="Number of events to score")

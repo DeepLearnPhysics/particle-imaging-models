@@ -94,7 +94,7 @@
           "abs_tolerance": 0.02
         },
         "class_f1_macro": {
-          "value": 0.5981893402106169,
+          "value": 0.9914207275223061,
           "abs_tolerance": 0.03
         },
         "ari_mean": {

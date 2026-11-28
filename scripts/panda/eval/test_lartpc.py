@@ -184,8 +184,6 @@ def main(detector="lartpc"):
     if task == "semantic" and hook is None:
         parser.error("Semantic config needs PointClassificationEvaluator head and class-name mappings")
     cfg = copy.deepcopy(cfg)
-    if detector == "sphenix":
-        cfg.data[args.split].update(min_points=0, max_points=3200)
     if task == "semantic" and detector == "lartpc" and list(hook["names"]["segment"]) == JOINT8:
         preserve_hits(cfg.data[args.split], segment_motif="origin_segment_motif")
     limit = None if args.max_events is None else args.start + args.max_events

@@ -188,7 +188,7 @@ data = dict(
                 type="GridSample",
                 grid_size=0.0008617168196860086,
                 hash_type="fnv",
-                mode="train",
+                mode="deterministic",
                 sum_keys=["energy"],
             ),
             dict(

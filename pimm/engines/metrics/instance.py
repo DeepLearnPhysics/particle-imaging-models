@@ -29,7 +29,7 @@ def eval_instances(
     class_names=("photon", "electron", "muon", "pion", "proton"),
     iou_thresh=0.5,
     require_class_for_match=False,  # True means panoptic-style class-aware matching
-    pid_tables=None,  # None preserves automatic table detection; False requires per-point PIDs
+    pid_tables=False,  # True: gt_pid / pr_pid are tables indexed by instance id
 ):
     """
     Returns:
@@ -43,7 +43,7 @@ def eval_instances(
     K = len(class_names)
     N = gt_inst.shape[0]
     assert pr_inst.shape[0] == N
-    if pid_tables is False and (gt_pid.shape[0] != N or pr_pid.shape[0] != N):
+    if not pid_tables and (gt_pid.shape[0] != N or pr_pid.shape[0] != N):
         raise ValueError("per-point PIDs must have one entry per point; pass pid_tables=True for per-instance tables")
 
     # Filter out background and invalid PIDs (bg_id=-1, pid=5)
@@ -69,8 +69,7 @@ def eval_instances(
     # build per-instance PID from arrays
     def build_inst_pid_map(inst_ids_present, inst_ids_per_point, pid_array):
         inst_ids_present = list(map(int, inst_ids_present))
-        m = max(inst_ids_present, default=-1) + 1
-        if pid_tables or (pid_tables is None and pid_array.ndim == 1 and pid_array.shape[0] >= m and m > 0):
+        if pid_tables:
             return {i: int(pid_array[i]) for i in inst_ids_present if i < len(pid_array) and 0 <= int(pid_array[i]) < K}
 
         # per-point PIDs: take the mode for each instance

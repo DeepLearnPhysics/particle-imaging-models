@@ -10,6 +10,16 @@ import weakref
 from .builder import HOOKS
 
 
+def unsharded_val_loader(trainer):
+    """The whole validation set in file order, for evaluators that run on rank 0 alone: the trainer's val_loader
+    gives each rank only its distributed shard."""
+    import torch
+
+    base = trainer.val_loader
+    return torch.utils.data.DataLoader(base.dataset, batch_size=base.batch_size, shuffle=False,
+                                       num_workers=base.num_workers, pin_memory=True, collate_fn=base.collate_fn)
+
+
 def get_writer_step(trainer):
     """Return the local step; the writer applies any configured offset."""
     info = getattr(trainer, "comm_info", {})

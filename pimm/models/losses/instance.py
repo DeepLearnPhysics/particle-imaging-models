@@ -350,6 +350,8 @@ class FastUnifiedSingleLayerLoss(nn.Module):
         return focal_per_pair, dice
 
     def build_targets(self, pred, input_dict):
+        if "pred_logits" in pred and self.segment_key not in input_dict:
+            raise KeyError(f"the model predicts classes but the batch has no {self.segment_key!r} to train them on")
         pred_masks_list = pred["pred_masks"]
         if self.fused:
             return self._batched_targets(pred_masks_list, input_dict)
@@ -989,12 +991,3 @@ class FastUnifiedSingleLayerLoss(nn.Module):
             components[name] = value / max(num_batches_with_head[name], 1)
         return loss, components
 
-
-@LOSSES.register_module()
-class ConsistentMatchingInstanceLoss(FastUnifiedInstanceLoss):
-    """Panda V2 instance loss with one assignment shared by all decoder layers."""
-
-    def __init__(self, query_heads=None, **kwargs):
-        kwargs.setdefault("panda_v2", True)
-        kwargs["consistent_matching"] = True
-        super().__init__(query_heads=query_heads or [], **kwargs)

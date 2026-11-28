@@ -372,7 +372,6 @@ class InstanceSegTester(TesterBase):
         iou_thresh=0.5,
         require_class_for_match=False,
         ari_include_unassigned=False,
-        pid_tables=None,
     ):
         super().__init__(cfg, model, test_loader, verbose)
         self.stuff_threshold = float(stuff_threshold)
@@ -380,7 +379,6 @@ class InstanceSegTester(TesterBase):
         self.iou_thresh = float(iou_thresh)
         self.require_class_for_match = bool(require_class_for_match)
         self.ari_include_unassigned = bool(ari_include_unassigned)
-        self.pid_tables = pid_tables
         self.class_names = tuple(class_names or [])
         self.stuff_classes = tuple(sorted(stuff_classes or ()))
 
@@ -400,7 +398,6 @@ class InstanceSegTester(TesterBase):
 
         all_stats = []
         ari_scores = []
-        momentum_stats = []
 
         for input_dict in self.test_loader:
             assert (
@@ -416,25 +413,20 @@ class InstanceSegTester(TesterBase):
 
             point = output_dict.get("point")
             if point is None:
-                self.logger.warning("InstanceSegTester: missing point data")
-                continue
+                raise KeyError("InstanceSegTester: the model returned no point data")
 
             gt_instance = point.instance
             if gt_instance is None:
-                self.logger.warning("InstanceSegTester: missing instance labels")
-                continue
+                raise KeyError("InstanceSegTester: the batch has no instance labels")
 
             gt_segment = getattr(point, "segment", None)
             if gt_segment is None:
-                self.logger.warning("InstanceSegTester: missing PID labels")
-                continue
+                raise KeyError("InstanceSegTester: the batch has no PID labels")
 
             pred_masks_list = output_dict.get("pred_masks")
             pred_logits_list = output_dict.get("pred_logits")
-            pred_momentum_list = output_dict.get("pred_momentum")
             if not pred_masks_list or pred_logits_list is None:
-                self.logger.warning("InstanceSegTester: missing predictions")
-                continue
+                raise KeyError("InstanceSegTester: the model returned no masks or class logits")
 
             model = unwrap_model(self.model)
 
@@ -453,7 +445,6 @@ class InstanceSegTester(TesterBase):
                     "pred_logits": pred_logits_list,
                     "stuff_probs": stuff_probs,
                     "point_counts": point_counts,
-                    "pred_momentum": pred_momentum_list,
                 }
             )
 
@@ -465,10 +456,6 @@ class InstanceSegTester(TesterBase):
 
             pred_instance_labels = results["instance_labels"].cpu()
             pred_pid_labels = results["class_labels"].cpu()
-
-            pred_instance_momentum = None
-            if "pred_momentum" in results:
-                pred_instance_momentum = results["pred_momentum"].cpu()
 
             gt_inst = gt_instance.squeeze(-1).cpu().numpy().astype(np.int64)
             gt_pid = gt_segment.squeeze(-1).cpu().numpy().astype(np.int64)
@@ -483,29 +470,8 @@ class InstanceSegTester(TesterBase):
                 class_names=class_names,
                 iou_thresh=self.iou_thresh,
                 require_class_for_match=self.require_class_for_match,
-                pid_tables=self.pid_tables,
             )
             all_stats.append(stats)
-
-            momentum_gt = input_dict.get("momentum")
-            if pred_instance_momentum is not None and momentum_gt is not None:
-                counts = offset2bincount(point.offset)
-                counts_list = counts.cpu().tolist()
-
-                criterion = model.criteria.criteria[0].criterion
-
-                mom_stats = self._eval_momentum(
-                    stats["matches"],
-                    pred_instance_momentum,
-                    momentum_gt,
-                    gt_instance,
-                    counts_list,
-                    criterion,
-                    num_classes=self.cfg.data.num_classes,
-                    pred_instance_labels=pr_inst,
-                )
-                if mom_stats is not None:
-                    momentum_stats.append(mom_stats)
 
             led_mask = pr_inst != -1
             if self.ari_include_unassigned:
@@ -518,18 +484,15 @@ class InstanceSegTester(TesterBase):
                 ari_scores.append(float("nan"))
 
         if comm.get_world_size() > 1:
-            gathered = comm.gather((all_stats, ari_scores, momentum_stats), dst=0)
+            gathered = comm.gather((all_stats, ari_scores), dst=0)
             if comm.get_rank() == 0:
                 merged_stats = []
                 merged_ari = []
-                merged_momentum = []
-                for stats_chunk, ari_chunk, momentum_chunk in gathered:
+                for stats_chunk, ari_chunk in gathered:
                     merged_stats.extend(stats_chunk)
                     merged_ari.extend(ari_chunk)
-                    merged_momentum.extend(momentum_chunk)
                 all_stats = merged_stats
                 ari_scores = merged_ari
-                momentum_stats = merged_momentum
             else:
                 self.model.train()
                 return
@@ -597,11 +560,6 @@ class InstanceSegTester(TesterBase):
                 )
             )
 
-        momentum_aggregated = None
-        if momentum_stats:
-            momentum_aggregated = self._aggregate_momentum_results(momentum_stats, class_names)
-            self._log_momentum_metrics(momentum_aggregated, class_names)
-
         summary = {
             "det_precision": float(det_prec),
             "det_recall": float(det_rec),
@@ -621,15 +579,6 @@ class InstanceSegTester(TesterBase):
         }
         if self.require_class_for_match and "pq" in aggregated:
             summary.update({key.lower(): float(value) for key, value in aggregated["pq"].items()})
-        if momentum_aggregated is not None:
-            overall = momentum_aggregated["overall"]
-            summary.update(
-                {
-                    "momentum_mae": float(overall["mae"]),
-                    "momentum_rmse": float(overall["rmse"]),
-                    "momentum_count": int(overall["count"]),
-                }
-            )
 
         per_class = []
         for cls_idx, class_name in enumerate(class_names):
@@ -648,7 +597,6 @@ class InstanceSegTester(TesterBase):
             {
                 "summary": summary,
                 "aggregated": aggregated,
-                "momentum": momentum_aggregated,
             },
             [{"row_type": "summary", **summary}]
             + [{"row_type": "per_class", **row} for row in per_class],
@@ -658,180 +606,3 @@ class InstanceSegTester(TesterBase):
             "<<<<<<<<<<<<<<<<< End Panoptic/Instance Segmentation Test <<<<<<<<<<<<<<<<<"
         )
         self.model.train()
-
-    def _eval_momentum(
-        self,
-        matches,
-        pred_instance_momentum,
-        momentum_gt,
-        gt_instance,
-        counts,
-        criterion,
-        num_classes,
-        pred_instance_labels,
-    ):
-        """Evaluate momentum regression per class for matched instances."""
-        try:
-            b = 0
-            mom_gt_b = criterion._get_batch_tensor(
-                momentum_gt, b, counts, torch.device("cpu"), None
-            )
-
-            inst_b = gt_instance.squeeze(-1)
-            if inst_b.dim() == 0:
-                inst_b = inst_b.unsqueeze(0)
-            if inst_b.dim() == 2 and inst_b.shape[1] == 1:
-                inst_b = inst_b.squeeze(1)
-            inst_b = inst_b.cpu()
-
-            unique_gt_ids = torch.unique(inst_b)
-            unique_gt_ids = unique_gt_ids[unique_gt_ids >= 0]
-            gt_mom_map = {}
-            for gt_id in unique_gt_ids:
-                mask = inst_b == gt_id
-                if mask.any():
-                    gt_mom_map[gt_id.item()] = mom_gt_b[mask].float().mean().item()
-
-            if isinstance(pred_instance_labels, np.ndarray):
-                pred_inst_t = torch.from_numpy(pred_instance_labels)
-            else:
-                pred_inst_t = pred_instance_labels
-
-            sorted_ids, sort_idx = torch.sort(pred_inst_t)
-            unique_ids_sorted, counts_sorted = torch.unique_consecutive(sorted_ids, return_counts=True)
-
-            cumsum_counts = torch.cat([torch.tensor([0]), counts_sorted.cumsum(0)[:-1]])
-            first_indices = sort_idx[cumsum_counts]
-            mom_values = pred_instance_momentum[first_indices]
-
-            pr_mom_map = {
-                uid.item(): val.item()
-                for uid, val in zip(unique_ids_sorted, mom_values)
-                if uid.item() >= 0
-            }
-
-            matched_preds = []
-            for m in matches:
-                pid = m["pred_id"]
-                gid = m["gt_id"]
-                pred_cls = m["pred_cls"]
-
-                if pid in pr_mom_map and gid in gt_mom_map:
-                    matched_preds.append(
-                        {"pred": pr_mom_map[pid], "gt": gt_mom_map[gid], "cls": pred_cls}
-                    )
-
-            if not matched_preds:
-                return None
-
-            all_p = np.array([x["pred"] for x in matched_preds])
-            all_g = np.array([x["gt"] for x in matched_preds])
-            all_c = np.array([x["cls"] for x in matched_preds])
-            all_e = all_p - all_g
-
-            class_stats = {}
-            for cls_idx in range(num_classes):
-                cls_mask = all_c == cls_idx
-                if not np.any(cls_mask):
-                    continue
-
-                cls_errors = all_e[cls_mask]
-                cls_mae = float(np.mean(np.abs(cls_errors)))
-                cls_rmse = float(np.sqrt(np.mean(cls_errors ** 2)))
-                cls_count = int(np.sum(cls_mask))
-
-                class_stats[cls_idx] = {
-                    "mae": cls_mae,
-                    "rmse": cls_rmse,
-                    "count": cls_count,
-                }
-
-            overall_mae = float(np.mean(np.abs(all_e)))
-            overall_rmse = float(np.sqrt(np.mean(all_e ** 2)))
-
-            return {
-                "per_class": class_stats,
-                "overall": {
-                    "mae": overall_mae,
-                    "rmse": overall_rmse,
-                    "count": len(all_e),
-                },
-            }
-
-        except Exception as e:
-            self.logger.warning(f"Error evaluating momentum: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return None
-
-    def _aggregate_momentum_results(self, momentum_stats_list, class_names):
-        """Aggregate momentum evaluation results across batches."""
-        num_classes = len(class_names)
-
-        class_mae = {i: [] for i in range(num_classes)}
-        class_rmse = {i: [] for i in range(num_classes)}
-        class_count = {i: 0 for i in range(num_classes)}
-
-        overall_mae = []
-        overall_rmse = []
-        overall_count = 0
-
-        for stats in momentum_stats_list:
-            if stats is None:
-                continue
-
-            for cls_idx, cls_stats in stats["per_class"].items():
-                if cls_idx < num_classes:
-                    class_mae[cls_idx].append(cls_stats["mae"])
-                    class_rmse[cls_idx].append(cls_stats["rmse"])
-                    class_count[cls_idx] += cls_stats["count"]
-
-            overall_mae.append(stats["overall"]["mae"])
-            overall_rmse.append(stats["overall"]["rmse"])
-            overall_count += stats["overall"]["count"]
-
-        aggregated_per_class = {}
-        for cls_idx in range(num_classes):
-            if len(class_mae[cls_idx]) > 0:
-                aggregated_per_class[cls_idx] = {
-                    "mae": float(np.mean(class_mae[cls_idx])),
-                    "rmse": float(np.mean(class_rmse[cls_idx])),
-                    "count": class_count[cls_idx],
-                }
-
-        aggregated_overall = {
-            "mae": float(np.mean(overall_mae)) if overall_mae else 0.0,
-            "rmse": float(np.mean(overall_rmse)) if overall_rmse else 0.0,
-            "count": overall_count,
-        }
-
-        return {
-            "per_class": aggregated_per_class,
-            "overall": aggregated_overall,
-        }
-
-    def _log_momentum_metrics(self, momentum_aggregated, class_names):
-        """Log momentum regression metrics."""
-        self.logger.info("Momentum Regression Metrics:")
-
-        overall = momentum_aggregated["overall"]
-        self.logger.info(
-            "Overall: MAE={:.4f} RMSE={:.4f} Count={}".format(
-                overall["mae"], overall["rmse"], overall["count"]
-            )
-        )
-
-        per_class = momentum_aggregated["per_class"]
-        if per_class:
-            self.logger.info("Per-class metrics:")
-            for cls_idx in sorted(per_class.keys()):
-                cls_name = (
-                    class_names[cls_idx] if cls_idx < len(class_names) else f"class_{cls_idx}"
-                )
-                cls_stats = per_class[cls_idx]
-                self.logger.info(
-                    "  {}: MAE={:.4f} RMSE={:.4f} Count={}".format(
-                        cls_name, cls_stats["mae"], cls_stats["rmse"], cls_stats["count"]
-                    )
-                )

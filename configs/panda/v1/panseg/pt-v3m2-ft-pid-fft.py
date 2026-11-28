@@ -290,5 +290,4 @@ test = dict(
     class_names=data["names"][:-1],  # exclude led (stuff) class
     stuff_classes=[5],
     require_class_for_match=False,
-    labels=("particle",),
 )

@@ -97,19 +97,10 @@ def test_pid_representation_is_explicit_only_when_requested():
     instances = np.array([0, 0, 1, 1])
     labels = np.array([0, 0, 1, 1])
     args = (instances, instances, labels, labels)
-    default = eval_instances(*args, class_names=("a", "b"))
     tables = eval_instances(*args, class_names=("a", "b"), pid_tables=True)
-    points = eval_instances(*args, class_names=("a", "b"), pid_tables=False)
-    np.testing.assert_array_equal(
-        default["classification_on_matched"]["confusion"],
-        tables["classification_on_matched"]["confusion"],
-    )
-    np.testing.assert_array_equal(
-        default["classification_on_matched"]["support"], [2, 0]
-    )
-    np.testing.assert_array_equal(
-        points["classification_on_matched"]["support"], [1, 1]
-    )
+    points = eval_instances(*args, class_names=("a", "b"))  # per-point PIDs by default
+    np.testing.assert_array_equal(tables["classification_on_matched"]["support"], [2, 0])
+    np.testing.assert_array_equal(points["classification_on_matched"]["support"], [1, 1])
     with pytest.raises(ValueError, match="pid_tables=True"):
         eval_instances(
             instances, instances, np.array([0, 1]), np.array([0, 1]), pid_tables=False

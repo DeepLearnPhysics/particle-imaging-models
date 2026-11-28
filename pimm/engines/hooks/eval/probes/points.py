@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from pimm.models.losses import build_criteria
 import pimm.utils.comm as comm
 from pimm.distributed import unwrap_model
-from pimm.engines.hooks.default import HookBase, get_writer_step
+from pimm.engines.hooks.default import HookBase, get_writer_step, unsharded_val_loader
 from pimm.engines.hooks.builder import HOOKS
 from pimm.observability import structured_logger as sl
 
@@ -655,7 +655,7 @@ class PretrainEvaluator(HookBase):
         event_count = 0
         total_events_needed = self.max_train_events + self.max_test_events
 
-        for i, input_dict in enumerate(self.trainer.val_loader):
+        for i, input_dict in enumerate(unsharded_val_loader(self.trainer)):
             self.trainer.logger.info(f"Processing batch {i}")
             batch_features, batch_labels_dict = self._process_batch_with_offsets(
                 input_dict

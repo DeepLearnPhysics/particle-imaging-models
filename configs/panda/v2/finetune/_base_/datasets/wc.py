@@ -56,7 +56,6 @@ model = dict(
             ),
         ),
         use_stuff_head=(False,),
-        stuff_classes=dict(particle=[]),
         backbone=dict(in_channels=29, grid_size=0.03),
     ),
 )
@@ -178,7 +177,6 @@ data = dict(
         coord_scale=18.1,
         grid_size=0.03,
         split="train",
-        overlay_prob=0.5 if K <= 1000 else 0.0,
         all_train_events=True,
         random_rotation=dict(z=0.8, x=0.8, y=0.8),
         random_flip=0.5,
@@ -231,7 +229,7 @@ hooks = [
         type="RingPanopticEvaluator",
         every_n_steps={{_base_.check}},
         iou_thresh=0.5,
-        conf_threshold=0.3,
+        conf_threshold=0.65,  # the paper's WC decoding rule (scripts/panda/eval/test_wc.py)
         mask_threshold=0.5,
         min_points=2,
         coord_scale=18.1,
