@@ -11,13 +11,13 @@ from .point_transformer_v3 import *
 from .litept import *
 
 # Instance Segmentation
-from .panda_detector import *
+from .panda_v1 import *
 
 # Pretraining
 from .sonata import *
 from .polarmae import *
 
 # Panda V2
-from .panda import *
+from .panda_v2 import *
 from .classifier import *
 from .next import KekicSparseResNet

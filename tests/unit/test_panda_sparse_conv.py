@@ -20,7 +20,7 @@ def test_spconv_keeps_other_input_widths():
 @pytest.mark.parametrize("deterministic", [False, True])
 def test_encoder_keeps_fallback_hooks(monkeypatch, deterministic):
     from types import SimpleNamespace
-    from pimm.models.panda.encoder.panda_encoder_v2m1 import SparseConv
+    from pimm.models.panda_v2.panda_encoder_v2m1 import SparseConv
 
     conv = SparseConv(4, 54, 5, algo=ConvAlgo.Native, fused=True)
     sparse = SimpleNamespace(features=torch.randn(3, 4))

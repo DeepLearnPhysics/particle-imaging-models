@@ -1,6 +1,6 @@
 """Masked variable-length attention with FP32 softmax accumulation.
 
-Why this exists: the Panda V2 detector's decoder (``pimm/models/panda/detector/layers.py``) uses masked
+Why this exists: the Panda V2 detector's decoder (``pimm/models/panda_v2/detector_utils/layers.py``) uses masked
 cross-attention: each event's queries attend to that event's points, with an additive mask taken from the previous
 block's mask prediction. FlashAttention's variable-length kernels accept no additive mask, and PyTorch's fallback
 (``pimm.ops.varlen_attention`` with ``fused=False``) pads every event to the longest one and builds a dense mask, so its

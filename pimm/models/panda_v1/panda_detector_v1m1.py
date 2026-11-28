@@ -17,8 +17,8 @@ from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
 from pimm.utils.comm import reduce_scalar_outputs_for_logging
 
-from .layers import Block, MLP
-from .postprocess import postprocess_batch, postprocess_overlap_batch
+from .detector_utils.layers import Block, MLP
+from .detector_utils.postprocess import postprocess_batch, postprocess_overlap_batch
 
 _PREDICTIONS = ("seg_logits", "pred_logits", "pred_masks")
 

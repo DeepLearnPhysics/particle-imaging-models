@@ -17,8 +17,8 @@ from pimm.models.utils.misc import offset2bincount
 from pimm.models.utils.structure import Point
 from pimm.utils.comm import reduce_scalar_outputs_for_logging
 
-from .layers import MLP, Block
-from .postprocess import postprocess_batch, postprocess_overlap_batch
+from .detector_utils.layers import MLP, Block
+from .detector_utils.postprocess import postprocess_batch, postprocess_overlap_batch
 
 PLACEMENTS = [
     (x, y, z) for x in (0, 1) for y in (0, 1) for z in (0, 1)

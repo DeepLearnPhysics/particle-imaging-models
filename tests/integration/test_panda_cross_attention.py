@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-import pimm.models.panda_detector.layers as panda_layers
+import pimm.models.panda_v1.detector_utils.layers as panda_layers
 
 pytestmark = pytest.mark.gpu
 

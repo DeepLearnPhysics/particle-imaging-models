@@ -1,6 +1,6 @@
 """Triton Hilbert codes: Skilling's transpose algorithm, bit interleave and Gray decode, one point per lane.
 
-The Panda V2 encoder (``pimm/models/panda/encoder/panda_encoder_v2m1.py``) serializes every batch along Hilbert curves.
+The Panda V2 encoder (``pimm/models/panda_v2/panda_encoder_v2m1.py``) serializes every batch along Hilbert curves.
 The PyTorch encoder in ``pimm.models.utils.serialization`` runs several elementwise operations per bit and axis, each
 a kernel launch over all points, and the optional CUDA extension that replaces it needs a separate build. This kernel
 computes each code in one launch, bit for bit equal to the PyTorch encoder.

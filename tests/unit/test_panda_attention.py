@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from pimm.models.panda.encoder.panda_encoder_v2m1 import window_indices
+from pimm.models.panda_v2.panda_encoder_v2m1 import window_indices
 
 
 @pytest.mark.parametrize("size", [1024, 512, 700])
