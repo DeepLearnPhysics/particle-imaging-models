@@ -187,13 +187,9 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         self.max_points = max_points
         self.remove_low_energy_scatters = remove_low_energy_scatters
         self.max_len = max_len
-        # Get list of h5 files
-        self.h5_files = self.get_h5_files()
-        assert len(self.h5_files) > 0, "No h5 files found"
+        self.files = self.get_files()
+        assert len(self.files) > 0, f"No {split} files found under {self.data_root}"
         self.initted = False
-        self.file_events = []
-
-        # Build index for faster access
         self._build_index()
         self.subset = None
         if subset_seed is not None:
@@ -203,14 +199,13 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
 
         logger = get_root_logger()
         logger.info(
-            "Total number of samples in PILArNet {} set: {} x {}.".format(
-                self.cumulative_lengths[-1], self.loop, split
-            )
+            f"Total number of samples in {type(self).__name__} {split} set: "
+            f"{self.cumulative_lengths[-1]} x {self.loop}."
         )
         if self._overlay_enabled():
             logger.info(f"Event overlay enabled: n_events={self.overlay_n_events}, prob={self.overlay_prob}")
 
-    def get_h5_files(self):
+    def get_files(self):
         """Get list of h5 files based on the split."""
         if isinstance(self.split, str):
             split_pattern = f"*{self.split}/*.h5"
@@ -227,43 +222,24 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         return sorted(h5_files)
 
     def _build_index(self):
-        """Build an index of valid point clouds for faster access."""
+        """Index the events of every file within the point-count limits."""
         log = get_root_logger()
-        log.info("Building index for PILArNetH5Dataset")
-
-        self.cumulative_lengths = []
-        self.indices = []
-
-        for h5_file in self.h5_files:
-            # Check if points count file exists
-            points_file = h5_file.replace(".h5", "_points.npy")
-            if os.path.exists(points_file):
-                npoints = np.load(points_file)
-                index = np.argwhere(self._kept(npoints)).flatten()
-            else:
-                # No points file, count on the fly
-                log.info(
-                    f"No points count file for {h5_file}, counting points on the fly"
-                )
-                with h5py.File(h5_file, "r", libver="latest", swmr=True) as f:
-                    # Get all point counts
-                    npoints = []
-                    for i in range(f['point'].shape[0]):
-                        npoint = f['point'][i].size // 8
-                        npoints.append(npoint)
-                    npoints = np.array(npoints)
-                    index = np.argwhere(self._kept(npoints)).flatten()
-                    self.file_events.append(npoints.shape[0])
-            if os.path.exists(points_file):
-                self.file_events.append(int(npoints.shape[0]))
-
-            self.cumulative_lengths.append(index.shape[0])
-            self.indices.append(index)
-
-        self.cumulative_lengths = np.cumsum(self.cumulative_lengths)
+        log.info(f"Building index for {type(self).__name__}")
+        self.event_sizes = [self._event_sizes(path) for path in self.files]
+        self.indices = [np.flatnonzero(self._kept(sizes)) for sizes in self.event_sizes]
+        self.cumulative_lengths = np.cumsum([len(index) for index in self.indices])
         log.info(
             f"Found {self.cumulative_lengths[-1]} point clouds with at least {self.min_points} points"
         )
+
+    def _event_sizes(self, h5_file):
+        """Points per event of ``h5_file``, from its ``_points.npy`` file when present."""
+        points_file = h5_file.replace(".h5", "_points.npy")
+        if os.path.exists(points_file):
+            return np.load(points_file)
+        get_root_logger().info(f"No points count file for {h5_file}, counting points on the fly")
+        with h5py.File(h5_file, "r", libver="latest", swmr=True) as f:
+            return np.array([f["point"][i].size // 8 for i in range(f["point"].shape[0])])
 
     def _kept(self, npoints):
         """Select events within the inclusive point-count limits."""
@@ -273,7 +249,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
     def h5py_worker_init(self):
         """Initialize h5py files for each worker."""
         self.h5data = []
-        for h5_file in self.h5_files:
+        for h5_file in self.files:
             self.h5data.append(h5py.File(h5_file, mode="r", libver="latest", swmr=True))
         self.initted = True
 
@@ -294,18 +270,8 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         """
         if not self.initted:
             self.h5py_worker_init()
-        if self.subset is not None:
-            idx = int(self.subset[idx % len(self.subset)])
-
-        # Find which h5 file and index the point cloud is in
-        h5_idx = np.searchsorted(self.cumulative_lengths, idx, side="right")
-        if h5_idx > 0:
-            idx_in_file = idx - self.cumulative_lengths[h5_idx - 1]
-        else:
-            idx_in_file = idx
-
+        h5_idx, file_idx = self._locate(idx)
         h5_file = self.h5data[h5_idx]
-        file_idx = self.indices[h5_idx][idx_in_file]
 
         # load raw arrays for this event and decode into a flat data_dict
         data_dict = decode_event(
@@ -329,31 +295,23 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         )
 
         # add metadata
-        h5_name = os.path.basename(self.h5_files[h5_idx])
-        data_dict["name"] = f"{h5_name}_{file_idx}"
+        data_dict["name"] = self.get_data_name(idx)
         data_dict["split"] = self.split if isinstance(self.split, str) else "custom"
         data_dict["revision"] = self.revision
 
         return data_dict
 
-    def get_data_name(self, idx):
-        """Get name for the point cloud."""
-        if not self.initted:
-            self.h5py_worker_init()
+    def _locate(self, idx):
+        """File number and in-file event number of item ``idx``."""
         if self.subset is not None:
             idx = int(self.subset[idx % len(self.subset)])
+        k = int(np.searchsorted(self.cumulative_lengths, idx, side="right"))
+        return k, int(self.indices[k][idx - (self.cumulative_lengths[k - 1] if k else 0)])
 
-        # Find which h5 file and index the point cloud is in
-        h5_idx = np.searchsorted(self.cumulative_lengths, idx, side="right")
-        if h5_idx > 0:
-            idx_in_file = idx - self.cumulative_lengths[h5_idx - 1]
-        else:
-            idx_in_file = idx
-
-        h5_name = os.path.basename(self.h5_files[h5_idx])
-        file_idx = self.indices[h5_idx][idx_in_file]
-
-        return f"{h5_name}_{file_idx}"
+    def get_data_name(self, idx):
+        """Get name for the point cloud."""
+        k, file_idx = self._locate(idx)
+        return f"{os.path.basename(self.files[k])}_{file_idx}"
 
     def _num_source_events(self):
         """Count of donor events: the selected ``max_len`` events."""

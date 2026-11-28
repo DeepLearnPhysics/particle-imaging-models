@@ -5,6 +5,7 @@ Each reader is a registered dataset class; you select one in a config with `type
 | Dataset `type` | Detector | Source |
 |---|---|---|
 | `PILArNetH5Dataset` | LArTPC, PILArNet-M simulation | HDF5 shards |
+| `TPCpp10MDataset` | sPHENIX TPC, TPCpp-10M simulation | the release's `.npz` files |
 | `JAXTPCDataset` | LArTPC, JAXTPC simulation | HDF5: 3D deposits, 2D wire signals, correspondence, labels |
 | `LUCiDDataset` | water Cherenkov, LUCiD simulation | HDF5: PMT response and 3D track segments |
 | `DefaultDataset` | any | one directory of `.npy` files per event |
@@ -31,6 +32,24 @@ The supported revisions are `v3` (the default) and `v3_extra`; `v3_extra` also h
 | `energy_threshold` | `0.13` | points at or below this energy are dropped |
 | `remove_low_energy_scatters` | `False` | the low-energy-deposit cluster is dropped |
 | `overlay_n_events` | `1` | number of events overlaid into one point cloud |
+
+## TPCpp-10M
+
+`TPCpp10MDataset` reads TPCpp-10M, simulated proton-proton collisions in an sPHENIX-like Time Projection Chamber ([Li et al., 2025](https://doi.org/10.5281/zenodo.16970029), CC BY 4.0), from the files of the original release. Download the release from Zenodo, or its Hugging Face mirror, into `data/tpcpp-10m`, the `data_root` of the `configs/panda/v2/tpcpp-10m` recipes:
+
+```bash
+uv run hf download DeepLearnPhysics/tpcpp-10m --repo-type dataset --local-dir data/tpcpp-10m   # about 119 GB
+```
+
+The labeled splits are read from their `.npz` files as they are. The unlabeled shards are compressed, so before pretraining you write their points uncompressed once, which lets the dataset memory-map them:
+
+```bash
+uv run python -m pimm.datasets.preprocessing.tpcpp10m data/tpcpp-10m --workers 8   # about 139 GB more
+```
+
+This writes `unlabeled/spacepoints_NNN.data.npy` next to each `spacepoints_NNN.npz`; an interrupted run can be restarted. Reading the `unlabeled` split without these files raises an error naming the command.
+
+The splits are the release's: `train`, `validation` and `test` hold 70,000, 13,000 and 7,000 labeled events, and `unlabeled` holds 10,000,000. Items have the keys of `PILArNetH5Dataset` with `revision="v2"`: `segment_pid` holds the particle class (0 other, 1 pion, 2 kaon, 3 proton, 4 electron; 5 for unlabeled events), `instance_particle` the track, and `segment_motif` is 4 for noise points and 1 otherwise. The options are `min_points`, `max_points`, `max_len`, `subset_seed`, `loop` and the event overlay, as in `PILArNetH5Dataset`.
 
 ## JAXTPC
 

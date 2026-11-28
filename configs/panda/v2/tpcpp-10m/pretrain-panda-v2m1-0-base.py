@@ -8,7 +8,7 @@ gradient_accumulation_steps = 1
 epoch = eval_epoch = 20
 schedule_total_steps = 208334  # 1M events, 20 epochs, batch 96
 # A smaller pool of N events keeps this schedule, as in the paper: data.train.max_len=N data.train.loop=1000000//N.
-# H5 loaders run complete epochs; an exact step-limited stream is unavailable.
+# The loader runs complete epochs; an exact step-limited stream is unavailable.
 enable_amp = True
 amp_dtype = "bfloat16"
 matmul_precision = "high"
@@ -87,13 +87,10 @@ data = dict(
     names=["other", "pion", "kaon", "proton", "electron"],
     ignore_index=-1,
     train=dict(
-        type="PILArNetH5Dataset",
-        revision="v2",
-        split="train",
-        data_root="data/tpcpp-10m-unlabeled",
+        type="TPCpp10MDataset",
+        split="unlabeled",
+        data_root="data/tpcpp-10m",
         min_points=1024,
-        energy_threshold=0.0,
-        remove_low_energy_scatters=False,
         max_len=1000000,
         loop=1,
         transform=[
@@ -224,13 +221,10 @@ data = dict(
         subset_seed=0,
     ),
     val=dict(
-        type="PILArNetH5Dataset",
-        revision="v2",
-        split="val",
+        type="TPCpp10MDataset",
+        split="validation",
         data_root="data/tpcpp-10m",
         min_points=1024,
-        energy_threshold=0.0,
-        remove_low_energy_scatters=False,
         max_len=10000,
         loop=1,
         test_mode=False,
