@@ -80,8 +80,6 @@ class InstanceSegmentationEvaluator(HookBase):
             (per label). Defaults to ``None``.
         segment_key (str | dict | None): Override input key for GT semantic
             labels (per label). Defaults to ``None``.
-        segment_fallback_key (str | dict | None): Fallback semantic key used
-            when ``segment_key`` is absent. Defaults to ``None``.
         log_ari (bool): Compute and log mean ARI over events. Defaults to True.
         ari_include_unassigned (bool): Score missed hits as singleton clusters. Defaults to False.
         panoptic_selection (bool): Select checkpoints by the harmonic mean of
@@ -123,7 +121,6 @@ class InstanceSegmentationEvaluator(HookBase):
         set_current_metric=True,
         instance_key=None,
         segment_key=None,
-        segment_fallback_key=None,
         log_ari=True,
         ari_include_unassigned=False,
         panoptic_selection=False,
@@ -149,7 +146,6 @@ class InstanceSegmentationEvaluator(HookBase):
         self.set_current_metric = bool(set_current_metric)
         self.instance_key = instance_key
         self.segment_key = segment_key
-        self.segment_fallback_key = segment_fallback_key
         self.log_ari = bool(log_ari)
         self.ari_include_unassigned = bool(ari_include_unassigned)
         self.panoptic_selection = bool(panoptic_selection)
@@ -247,11 +243,6 @@ class InstanceSegmentationEvaluator(HookBase):
             or self._spec_value(spec, "segment_key")
             or f"segment_{label}"
         )
-        fallback_key = self._select_for_label(
-            self.segment_fallback_key, label, None
-        ) or self._spec_value(spec, "segment_fallback_key")
-        if segment_key not in input_dict and fallback_key in input_dict:
-            segment_key = fallback_key
         return instance_key, segment_key
 
     def _get_label_predictions(self, output_dict, label):

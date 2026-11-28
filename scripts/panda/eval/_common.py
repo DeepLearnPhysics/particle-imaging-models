@@ -69,18 +69,6 @@ def load_model(cfg, checkpoint, device="cuda", overlays=(), disable_flash=False)
     return model
 
 
-def preserve_hits(spec, **keys):
-    transforms = spec["transform"]
-    index = next(i for i, t in enumerate(transforms) if t["type"] == "Copy")
-    copied = transforms[index]["keys_dict"]
-    taken = {k: v for k, v in keys.items() if copied.get(k, v) != v}
-    copied.update({k: v for k, v in keys.items() if k not in taken})
-    if taken:
-        transforms.insert(index + 1, dict(type="Copy", keys_dict=taken))
-    collect = next(t for t in transforms if t["type"] == "Collect")
-    collect["keys"] = tuple(dict.fromkeys((*collect["keys"], *keys.values())))
-
-
 def make_dataset(cfg, split="test", data_root=None, max_events=None):
     from pimm.datasets import build_dataset
 

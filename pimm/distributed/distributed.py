@@ -39,7 +39,7 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
 
 def get_parallel_cfg(cfg: Any) -> Any:
     """Return the parallel/distributed config block."""
-    return _cfg_get(cfg, "parallel", _cfg_get(cfg, "distributed", {}))
+    return _cfg_get(cfg, "parallel", {})
 
 
 def create_parallel_context(cfg: Any = None) -> ParallelContext:
@@ -172,12 +172,9 @@ def prepare_model(model: nn.Module, cfg: Any, context: ParallelContext) -> nn.Mo
         if context.device.type == "cuda":
             ddp_kwargs["device_ids"] = [context.device.index]
             ddp_kwargs["output_device"] = context.device.index
-        try:
-            return DistributedDataParallel(
-                model, static_graph=not getattr(model, "split_backward", False), **ddp_kwargs
-            )
-        except TypeError:
-            return DistributedDataParallel(model, **ddp_kwargs)
+        return DistributedDataParallel(
+            model, static_graph=not getattr(model, "split_backward", False), **ddp_kwargs
+        )
     if strategy == "fsdp2":
         return _fsdp2_wrap(model, parallel_cfg, context)
     raise ValueError(f"Unsupported parallel.strategy: {strategy}")

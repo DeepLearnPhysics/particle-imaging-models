@@ -19,7 +19,7 @@ class SemSegEvaluator(HookBase):
     """Evaluate point-wise semantic segmentation on the validation loader.
 
     Runs the model over ``trainer.val_loader``, argmaxes the semantic logits
-    (``seg_logits`` or ``sem_logits``), and accumulates per-class
+    (``seg_logits``), and accumulates per-class
     intersection/union/target counts (all-reduced across ranks). It reports
     mIoU, mAcc, allAcc and macro precision/recall/F1 plus a per-class table,
     and publishes ``mIoU`` as the checkpoint-selection metric via
@@ -113,14 +113,7 @@ class SemSegEvaluator(HookBase):
                     input_dict[key] = input_dict[key].cuda(non_blocking=True)
             with torch.no_grad():
                 output_dict = self.trainer.model(input_dict)
-            if "seg_logits" in output_dict:
-                output = output_dict["seg_logits"]
-            elif "sem_logits" in output_dict:
-                output = output_dict["sem_logits"]
-            else:
-                raise KeyError(
-                    "No semantic logits found in model output (expected 'seg_logits' or 'sem_logits')."
-                )
+            output = output_dict["seg_logits"]
             loss = output_dict["loss"]
             pred = output.max(1)[1]
             segment = output_dict["segment"].squeeze(-1)

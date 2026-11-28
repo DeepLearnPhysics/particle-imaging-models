@@ -139,7 +139,6 @@ data = dict(
         transform=transform,
         overlay_n_events=2,
         overlay_prob=0.5,
-        overlay_within_subset=True,
         overlay_rotate_90=False,
         overlay_dedup=False,
     ),

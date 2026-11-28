@@ -221,14 +221,7 @@ class SemSegTester(TesterBase):
             with torch.no_grad():
                 output_dict = self.model(input_dict)
 
-            if "seg_logits" in output_dict:
-                output = output_dict["seg_logits"]
-            elif "sem_logits" in output_dict:
-                output = output_dict["sem_logits"]
-            else:
-                raise KeyError(
-                    "No semantic logits found in model output (expected 'seg_logits' or 'sem_logits')."
-                )
+            output = output_dict["seg_logits"]
 
             pred = output.max(1)[1]
             segment = output_dict["segment"].squeeze(-1)
