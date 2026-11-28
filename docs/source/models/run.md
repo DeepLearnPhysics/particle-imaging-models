@@ -35,7 +35,7 @@ transform = Compose([
 ])
 
 events = PILArNetH5Dataset(data_root="data/PILArNet-M-mini", split="test",
-                           revision="v3", transform=[], min_points=0)
+                           revision="v3", transform=[])
 event = events.get_data(0)
 
 sample = transform({"coord": event["coord"].copy(), "energy": event["energy"].copy()})
