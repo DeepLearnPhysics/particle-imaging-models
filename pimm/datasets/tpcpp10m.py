@@ -6,6 +6,7 @@ import os
 import numpy as np
 
 from .builder import DATASETS
+from .catalog import resolve_data_root
 from .pilarnet.h5 import PILArNetH5Dataset
 
 FOLDERS = {
@@ -42,7 +43,8 @@ class TPCpp10MDataset(PILArNetH5Dataset):
     A labeled event's points are ordered by a stable sort on track id, so each track's points are contiguous.
 
     Args:
-        data_root (str): The release's root folder. Defaults to ``"data/tpcpp-10m"``.
+        data_root (str): The release's root folder; when it does not exist, ``$PIMM_DATA_ROOT/tpcpp-10m``, then
+            ``~/.cache/pimm/datasets/tpcpp-10m``. Defaults to ``"data/tpcpp-10m"``.
         split ({"train", "validation", "test", "unlabeled"}): Release split. Defaults to ``"train"``.
         transform (list[dict] | None): Transform configs; ``None`` uses
             :func:`~pimm.datasets.pilarnet.default_transform`. Defaults to ``None``.
@@ -75,6 +77,7 @@ class TPCpp10MDataset(PILArNetH5Dataset):
         overlay_dedup=False,
         overlay_max_instances=None,
     ):
+        data_root = resolve_data_root("tpcpp-10m", data_root)
         self.folder = os.path.join(data_root, FOLDERS[split])
         super().__init__(
             data_root=data_root,

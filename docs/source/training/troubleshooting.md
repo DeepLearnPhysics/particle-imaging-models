@@ -15,8 +15,8 @@ Find the symptom, run the check, apply the fix.
 
 ## Data
 
-`PILArNet data root not found`
-: Set `data_root` in the config, export `PILARNET_DATA_ROOT_V3`, or download into `~/.cache/pimm/pilarnet/v3`. On a cluster, put the variable in the site profile's `env:` so that it is set on compute nodes.
+`... is in none of ...; download it with ...`
+: Set `data_root` in the config, export `PIMM_DATA_ROOT`, or run the `pimm datasets download` command that the error prints. On a cluster, put the variable in the site profile's `env:` so that it is set on compute nodes.
 
 `PILArNet revision='v1' is not supported`
 : The recipe is set to revision `v1`. Override each split to `v3`, for example `data.train.revision=v3 data.val.revision=v3`.

@@ -68,7 +68,7 @@ container:
   runtime: none
 
 env:
-  PILARNET_DATA_ROOT_V3: /shared/data/pilarnet/v3
+  PIMM_DATA_ROOT: /shared/data/pimm
   HDF5_USE_FILE_LOCKING: "FALSE"
 ```
 

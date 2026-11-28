@@ -29,6 +29,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from .builder import DATASETS
+from .catalog import resolve_data_root
 from .pilarnet.overlay import PILArNetOverlayMixin
 from .transform import Compose
 from .transform.spatial import GridSample
@@ -518,7 +519,8 @@ class WANDRingSitesDataset(PILArNetOverlayMixin, _RingTruth):
     ``ring_direction``, ``ring_vertex`` (max_rings, 3) and ``name``.
 
     Args:
-        data_root (str): a WAND_SK_v4-layout dataset.
+        data_root (str): a WAND_SK_v4-layout dataset; when it does not exist, ``$PIMM_DATA_ROOT/wand-sk-like``, then
+            ``~/.cache/pimm/datasets/wand-sk-like``.
         split (str): ``"train"`` (the encoder's pool), ``"val"`` or ``"test"``. Defaults to
             ``"train"``.
         all_train_events (bool): ``"train"`` lists every event of the split's files, not only the encoder's
@@ -566,6 +568,7 @@ class WANDRingSitesDataset(PILArNetOverlayMixin, _RingTruth):
             raise NotImplementedError(
                 "WANDRingSitesDataset scores whole events; there is no fragmented test mode"
             )
+        data_root = self.data_root = resolve_data_root("wand-sk-like", data_root)
         base = os.path.join(data_root, split, config)
         assert subset_seed is None or split == "train", "subset_seed draws train events"
         order = 0 if subset_seed is None else int(subset_seed)
@@ -763,7 +766,7 @@ class WANDProbeDataset(WANDRingSitesDataset):
             self.probe_label[:, t] = (
                 (species == task["species"][0]) if task["kind"] == "pid" else 0
             )
-        index = np.load(os.path.join(data_root, "metadata", "event_index.npz"))
+        index = np.load(os.path.join(self.data_root, "metadata", "event_index.npz"))
         assert (
             index["hit_pmts"][rows] > 0
         ).all(), "an event without hits would be resampled"

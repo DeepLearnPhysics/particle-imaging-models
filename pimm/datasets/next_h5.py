@@ -42,6 +42,7 @@ from torch.utils.data import Dataset
 from pimm.utils.logger import get_root_logger
 
 from .builder import DATASETS
+from .catalog import resolve_data_root
 from .transform import Compose
 
 HITS_TABLE_KEY = "MC/hits/table"
@@ -217,7 +218,8 @@ class NEXTH5Dataset(Dataset):
 
     Args:
         data_root (str): Directory containing the extracted ``<part>/`` folders
-            (e.g. ``.../next/extracted`` holding ``0nubb_part_8/``, ``Bi_part_10/``).
+            (e.g. ``0nubb_part_8/``, ``Bi_part_10/``); when it does not exist,
+            ``$PIMM_DATA_ROOT/next-aiss``, then ``~/.cache/pimm/datasets/next-aiss``.
         configs (Sequence): Source names or mappings. Mapping entries may set
             ``name``, ``label``, ``pattern`` (glob of part
             directories under ``data_root``; defaults to ``"<name>*"``),
@@ -322,7 +324,7 @@ class NEXTH5Dataset(Dataset):
         if not configs:
             raise ValueError("configs must contain at least one NEXT source")
 
-        self.data_root = data_root
+        self.data_root = resolve_data_root("next-aiss", data_root)
         self.config_specs = [
             self._normalize_config_spec(cfg, default_label=i)
             for i, cfg in enumerate(configs)

@@ -22,7 +22,6 @@ TIMEOUT = 300
 def _env(pilarnet_mini_root):
     return {
         "HF_HUB_DISABLE_XET": "1",
-        "PILARNET_DATA_ROOT_V2": str(pilarnet_mini_root),
         "UV_PROJECT_ENVIRONMENT": os.environ.get(
             "UV_PROJECT_ENVIRONMENT",
             sys.prefix,
