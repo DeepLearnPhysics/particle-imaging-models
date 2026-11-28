@@ -60,7 +60,7 @@ The splits are the release's: `train`, `validation` and `test` hold 70,000, 13,0
 | 2D self-supervised | `("resp",)` | `coord` (M, 2), all wire planes merged, with `plane_id` |
 | Everything | `("seg", "resp", "corr", "labl")` | 3D `coord` plus `resp_coord` and `corr_coord` |
 
-Without `corr`, no labels are produced from `resp` and `labl`: wire signals are mapped to tracks only through the correspondence. Other options are `label_key` (`"particle"`, `"cluster"` or `"interaction"`), `volume` and `min_deposits`. In the committed recipe `detector/semseg/semseg-pt-v3m2-jaxtpc-5cls`, set the data root with `JAXTPC_DATA_ROOT`.
+Without `corr`, no labels are produced from `resp` and `labl`: wire signals are mapped to tracks only through the correspondence. Other options are `label_key` (`"particle"`, `"cluster"` or `"interaction"`), `volume` and `min_deposits`.
 
 With 2D coordinates, use `GridSample`, `ToTensor`, `Copy`, `Collect`, `RandomDropout`, `ShufflePoint`, `RandomJitter`, `RandomScale`, `RandomFlip` and `PositiveShift`. `RandomRotate`, `NormalizeCoord` and `SphereCrop` require three dimensions.
 

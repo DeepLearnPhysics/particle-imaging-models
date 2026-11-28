@@ -14,7 +14,6 @@ Run `uv run pimm ls` to print every recipe, or `uv run pimm ls panda semseg` to 
 | Panda interaction detector | `panda/v1/panseg/pt-v3m2-ft-vtx-fft` |
 | Pretrain PoLAr-MAE | `polarmae/pretrain-polarmae-pilarnet` |
 | PoLAr-MAE semantic segmentation | `polarmae/semseg/semseg-polarmae-pilarnet-fft` |
-| JAXTPC semantic segmentation | `detector/semseg/semseg-pt-v3m2-jaxtpc-5cls` |
 
 To fine-tune with a recipe, pass the starting weights with `--train.weight`; see [Fine-tune](../models/fine-tune.md).
 
