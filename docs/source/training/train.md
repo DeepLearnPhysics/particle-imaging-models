@@ -27,11 +27,10 @@ uv run pimm launch \
   --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
   --resources.nproc-per-node 1 \
   --run.name sonata-smoke \
-  -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False \
-     data.train.revision=v3 data.val.revision=v3
+  -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False
 ```
 
-This command requires PILArNet-M v3 on disk (see [Supported detectors](../data/datasets.md#pilarnet-m)). Run the command once with `--dry-run` first. When the run finishes, you'll find `model/last/.complete` in the run directory.
+This command requires PILArNet-M v3_extra on disk (see [Supported detectors](../data/datasets.md#pilarnet-m)). Run the command once with `--dry-run` first. When the run finishes, you'll find `model/last/.complete` in the run directory.
 
 ## Keep a variant as a child config
 

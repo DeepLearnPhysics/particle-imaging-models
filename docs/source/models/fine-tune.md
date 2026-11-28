@@ -9,11 +9,8 @@ uv run pimm launch \
   --train.config panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft \
   --train.weight hf://DeepLearnPhysics/Panda-Base \
   --resources.nproc-per-node 1 \
-  --run.name panda-semseg \
-  -- data.train.revision=v3 data.val.revision=v3 data.test.revision=v3
+  --run.name panda-semseg
 ```
-
-The recipe's PILArNet-M revision is `v1`, so you override it with `v3`, a supported revision.
 
 At startup, the log has a `CheckpointLoader` report: the number of loaded parameters and the missing and unexpected keys. Panda Base has no decoder or head, so those keys are listed as missing. If zero parameters are loaded through a mapping, the run is stopped.
 

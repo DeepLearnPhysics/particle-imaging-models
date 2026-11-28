@@ -18,13 +18,13 @@ Here you find the Panda detector `panda-detector-v1m1` (`panda_detector_v1m1.py`
 Follow [Install](../../../docs/source/get-started/install.md), installing pimm from a clone, since the recipes live in `configs/`.
 
 #### 2. Dataset
-We train on [PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M). We run the detector recipes on revision `v3`. We wrote the pretraining and semantic recipes for revision `v1`, which pimm no longer reads, so you run them on `v3` by adding `-- data.train.revision=v3 data.val.revision=v3` (and `data.test.revision=v3` for the semantic recipes) to the commands below. For downloading each revision, see [Supported detectors](../../../docs/source/data/datasets.md#pilarnet-m).
+We train on [PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M). The recipes now read revision `v3_extra`, whose splits differ from the ones the V1 paper used, so you will not reproduce V1's numbers exactly. For downloading it, see [Supported detectors](../../../docs/source/data/datasets.md#pilarnet-m).
 
 #### 3. Pretraining
 ```bash
-uv run pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask -- data.train.revision=v3 data.val.revision=v3
+uv run pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask
 
-# (or) the same with the PT-v3m8 backbone, already on v3
+# (or) the same with the PT-v3m8 backbone
 uv run pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask-v3m8
 ```
 
@@ -32,8 +32,7 @@ uv run pimm launch --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarne
 Pass the encoder with `--train.weight`, either ours or the checkpoint of your own pretraining run:
 ```bash
 # semantic segmentation: -lin (head), -dec (decoder and head), -fft (everything)
-uv run pimm launch --train.config panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft --train.weight hf://DeepLearnPhysics/Panda-Base \
-  -- data.train.revision=v3 data.val.revision=v3 data.test.revision=v3
+uv run pimm launch --train.config panda/v1/semseg/semseg-pt-v3m2-pilarnet-ft-5cls-fft --train.weight hf://DeepLearnPhysics/Panda-Base
 
 # particles (pid) and interactions (vtx): -dec (decoder and heads), -fft (everything)
 uv run pimm launch --train.config panda/v1/panseg/pt-v3m2-ft-pid-fft --train.weight hf://DeepLearnPhysics/Panda-Base
