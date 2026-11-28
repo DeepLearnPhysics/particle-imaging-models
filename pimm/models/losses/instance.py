@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
 from pimm.models.losses.builder import LOSSES
-from pimm.models.panda_detector.matcher_fast import (
+from pimm.models.panda_v1.detector_utils.matcher_fast import (
     FastHungarianMatcher as PublicHungarianMatcher,
     build_target_cache,
     get_target_masks,

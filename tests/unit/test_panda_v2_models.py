@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from pimm.models.builder import MODELS
 from pimm.models.losses.instance import FastUnifiedInstanceLoss
-from pimm.models.panda_detector.panda_detector_v1m1 import PandaV1Detector
+from pimm.models.panda_v1.panda_detector_v1m1 import PandaV1Detector
 from pimm.models.utils.structure import Point
 
 

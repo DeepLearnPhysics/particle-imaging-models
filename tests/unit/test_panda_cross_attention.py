@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from pimm.models.panda_detector.layers import Block, CrossAttentionLayer
+from pimm.models.panda_v1.detector_utils.layers import Block, CrossAttentionLayer
 
 
 @pytest.mark.parametrize("enable_flash", [False, True])

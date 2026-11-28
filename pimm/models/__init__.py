@@ -11,7 +11,7 @@ from .point_transformer_v3 import *
 from .litept import *
 
 # Instance Segmentation
-from .panda_detector import *
+from .panda_v1 import *
 
 # Pretraining
 from .sonata import *
