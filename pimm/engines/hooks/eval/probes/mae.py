@@ -3,7 +3,7 @@ import torch
 
 import pimm.utils.comm as comm
 from pimm.engines.hooks.builder import HOOKS
-from pimm.engines.hooks.default import HookBase, get_writer_step
+from pimm.engines.hooks.default import HookBase, get_writer_step, unsharded_val_loader
 from pimm.observability import structured_logger as sl
 
 
@@ -11,7 +11,7 @@ from pimm.observability import structured_logger as sl
 class MAEEvaluator(HookBase):
     """Validation hook for masked-autoencoder (MAE) pretraining.
 
-    Runs the MAE model over ``trainer.val_loader`` on rank 0 only (other ranks
+    Runs the MAE model over the whole validation set on rank 0 only (other ranks
     synchronize), averaging the reconstruction losses (total, coordinate,
     feature) and the actual mask ratio over the valid batches (batches whose
     ``loss == 0`` from empty masks are skipped). On the first batch it can log
@@ -110,7 +110,7 @@ class MAEEvaluator(HookBase):
         num_batches = 0
         num_valid = 0
 
-        loader = self.trainer.val_loader
+        loader = unsharded_val_loader(self.trainer)
         for i, input_dict in enumerate(loader):
             if self.max_batches is not None and i >= self.max_batches:
                 break

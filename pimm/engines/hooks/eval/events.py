@@ -13,7 +13,7 @@ import torch
 import pimm.utils.comm as comm
 from pimm.distributed import unwrap_model
 from pimm.engines.hooks.builder import HOOKS
-from pimm.engines.hooks.default import HookBase, get_writer_step
+from pimm.engines.hooks.default import HookBase, get_writer_step, unsharded_val_loader
 from pimm.observability import structured_logger as sl
 
 
@@ -114,7 +114,7 @@ class EventClassificationEvaluator(HookBase):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         preds, scores, labels = [], [], []
-        for input_dict in self.trainer.val_loader:
+        for input_dict in unsharded_val_loader(self.trainer):
             for k, v in list(input_dict.items()):
                 if isinstance(v, torch.Tensor):
                     input_dict[k] = v.to(device, non_blocking=True)
@@ -135,12 +135,6 @@ class EventClassificationEvaluator(HookBase):
 
         y_pred = torch.cat(preds).numpy()
         y_true = torch.cat(labels).numpy()
-        if y_true.size != len(
-            self.trainer.val_loader.dataset
-        ):  # a sharded (multi-GPU) val loader: rank 0's part only
-            self.trainer.logger.warning(
-                f"Event cls scored {y_true.size} of {len(self.trainer.val_loader.dataset)} val events"
-            )
         names = self.class_names or getattr(self.trainer.cfg.data, "names", None)
         num_classes = max(
             int(y_true.max()) + 1 if y_true.size else 1,

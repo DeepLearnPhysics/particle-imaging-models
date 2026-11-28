@@ -47,7 +47,7 @@ hooks = [
     dict(type="ModelHook"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
-    dict(type="SemSegEvaluator", selection_metric="mF1", reset_metrics_each_eval=True),
+    dict(type="SemSegEvaluator", selection_metric="mF1"),
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="FinalEvaluator", test_last=False),
 ]

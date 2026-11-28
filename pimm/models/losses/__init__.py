@@ -14,4 +14,4 @@ from .misc import (
 )
 from .lovasz import LovaszLoss
 
-from .instance import FastUnifiedInstanceLoss, ConsistentMatchingInstanceLoss
+from .instance import FastUnifiedInstanceLoss

@@ -215,7 +215,6 @@ hooks = [
     dict(
         type="InstanceSegmentationEvaluator",
         ari_include_unassigned=True,
-        pid_tables=False,
         every_n_steps={{_base_.check}},
         labels=("particle",),
         primary_label="particle",

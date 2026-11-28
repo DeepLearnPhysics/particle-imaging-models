@@ -33,8 +33,7 @@ class InstanceSegmentationEvaluator(HookBase):
     by mask IoU. For each configured label it reports detection
     precision/recall/F1 and mean matched IoU, FP/FN counts, macro
     classification precision/recall/F1 on matched instances, mean Adjusted Rand
-    Index (ARI), and, when momentum predictions and targets are present,
-    per-class momentum regression MAE/RMSE. Supports a single default label
+    Index (ARI). Supports a single default label
     (``labels=(None,)``) or multiple auxiliary labels via
     ``outputs_by_label``. Results are gathered to rank 0 on multi-GPU. The
     primary label's detection F1 is published as the checkpoint-selection metric
@@ -85,15 +84,12 @@ class InstanceSegmentationEvaluator(HookBase):
             when ``segment_key`` is absent. Defaults to ``None``.
         log_ari (bool): Compute and log mean ARI over events. Defaults to True.
         ari_include_unassigned (bool): Score missed hits as singleton clusters. Defaults to False.
-        pid_tables (bool | None): Explicit PID representation; None keeps public table detection.
         panoptic_selection (bool): Select checkpoints by the harmonic mean of
             all-point ARI and macro PQ with a noise class. Defaults to False.
 
     Note:
         Requires validation batch size 1 (asserted). The selection metric is
         instance detection F1 of the primary label (higher is better).
-        Momentum regression metrics are only computed when the model exposes a
-        regression criterion and the batch carries a ``momentum`` target.
 
     Example:
         Add to ``cfg.hooks`` (validation batch size MUST be 1); it scores
@@ -130,7 +126,6 @@ class InstanceSegmentationEvaluator(HookBase):
         segment_fallback_key=None,
         log_ari=True,
         ari_include_unassigned=False,
-        pid_tables=None,
         panoptic_selection=False,
     ):
         """Configure label-specific instance metrics and logging behavior."""
@@ -157,7 +152,6 @@ class InstanceSegmentationEvaluator(HookBase):
         self.segment_fallback_key = segment_fallback_key
         self.log_ari = bool(log_ari)
         self.ari_include_unassigned = bool(ari_include_unassigned)
-        self.pid_tables = pid_tables
         self.panoptic_selection = bool(panoptic_selection)
         self.class_names = class_names
         self.stuff_classes = stuff_classes
@@ -316,7 +310,7 @@ class InstanceSegmentationEvaluator(HookBase):
 
     @sl.log_trace_span("evaluation.instance_segmentation")
     def eval(self):
-        """Evaluate instance masks, class labels, ARI, and momentum metrics."""
+        """Evaluate instance masks, class labels and ARI."""
         sl.add_step_tag("evaluation")
         label_msg = ", ".join(self._label_name(label) for label in self.labels)
         self.trainer.logger.info(
@@ -327,7 +321,6 @@ class InstanceSegmentationEvaluator(HookBase):
 
         all_stats_by_label = {label: [] for label in self.labels}
         ari_scores_by_label = {label: [] for label in self.labels}
-        momentum_stats_by_label = {label: [] for label in self.labels}
         panoptic_rows = []
 
         for input_dict in self.trainer.val_loader:
@@ -344,10 +337,7 @@ class InstanceSegmentationEvaluator(HookBase):
 
             point = output_dict.get("point")
             if point is None:
-                self.trainer.logger.warning(
-                    "InstanceSegmentationEvaluator: missing point data"
-                )
-                continue
+                raise KeyError("InstanceSegmentationEvaluator: the model returned no point data")
 
             point_counts = output_dict.get("point_counts")
             if point_counts is None:
@@ -358,22 +348,13 @@ class InstanceSegmentationEvaluator(HookBase):
                     input_dict, point, model, label
                 )
                 label_name = self._label_name(label)
-                if gt_instance is None:
-                    self.trainer.logger.warning(
-                        f"InstanceSegmentationEvaluator[{label_name}]: missing instance labels"
-                    )
-                    continue
-                if gt_segment is None:
-                    self.trainer.logger.warning(
-                        f"InstanceSegmentationEvaluator[{label_name}]: missing semantic labels"
-                    )
-                    continue
+                if gt_instance is None or gt_segment is None:
+                    raise KeyError(f"InstanceSegmentationEvaluator[{label_name}]: the batch has no instance or semantic labels")
 
                 task_output = self._get_label_predictions(output_dict, label)
                 if task_output is not None:
                     pred_masks_list = task_output.get("pred_masks")
                     pred_logits_list = task_output.get("pred_logits")
-                    pred_momentum_list = task_output.get("pred_momentum")
                     post_input = {
                         "outputs_by_label": output_dict["outputs_by_label"],
                         "point_counts": point_counts,
@@ -381,7 +362,6 @@ class InstanceSegmentationEvaluator(HookBase):
                 else:
                     pred_masks_list = output_dict.get("pred_masks")
                     pred_logits_list = output_dict.get("pred_logits")
-                    pred_momentum_list = output_dict.get("pred_momentum")
                     stuff_probs = (
                         point.outputs.get("stuff_probs")
                         if hasattr(point, "outputs")
@@ -392,14 +372,10 @@ class InstanceSegmentationEvaluator(HookBase):
                         "pred_logits": pred_logits_list,
                         "stuff_probs": stuff_probs,
                         "point_counts": point_counts,
-                        "pred_momentum": pred_momentum_list,
                     }
 
                 if not pred_masks_list or pred_logits_list is None:
-                    self.trainer.logger.warning(
-                        f"InstanceSegmentationEvaluator[{label_name}]: missing predictions"
-                    )
-                    continue
+                    raise KeyError(f"InstanceSegmentationEvaluator[{label_name}]: the model returned no masks or class logits")
 
                 post_kwargs = dict(
                     stuff_threshold=self.stuff_threshold,
@@ -411,10 +387,6 @@ class InstanceSegmentationEvaluator(HookBase):
 
                 pred_instance_labels = results["instance_labels"].cpu()
                 pred_pid_labels = results["class_labels"].cpu()
-
-                pred_instance_momentum = None
-                if "pred_momentum" in results:
-                    pred_instance_momentum = results["pred_momentum"].cpu()
 
                 gt_inst = (
                     gt_instance.detach().reshape(-1).cpu().numpy().astype(np.int64)
@@ -432,33 +404,8 @@ class InstanceSegmentationEvaluator(HookBase):
                     class_names=class_names,
                     iou_thresh=self.iou_thresh,
                     require_class_for_match=self.require_class_for_match,
-                    pid_tables=self.pid_tables,
                 )
                 all_stats_by_label[label].append(stats)
-
-                # evaluate momentum regression if available
-                momentum_gt = input_dict.get("momentum")
-                if pred_instance_momentum is not None and momentum_gt is not None:
-                    counts = offset2bincount(point.offset)
-                    counts_list = counts.cpu().tolist()
-                    criterion = None
-                    criteria = getattr(model, "criteria", None)
-                    if criteria is not None and getattr(criteria, "criteria", None):
-                        criterion = getattr(criteria.criteria[0], "criterion", None)
-
-                    if criterion is not None:
-                        mom_stats = self._eval_momentum(
-                            stats["matches"],
-                            pred_instance_momentum,
-                            momentum_gt,
-                            gt_instance,
-                            counts_list,
-                            criterion,
-                            num_classes=len(class_names),
-                            pred_instance_labels=pr_inst,
-                        )
-                        if mom_stats is not None:
-                            momentum_stats_by_label[label].append(mom_stats)
 
                 if self.log_ari and self.ari_include_unassigned:
                     ari_scores_by_label[label].append(instance_ari(gt_inst, pr_inst))
@@ -499,7 +446,6 @@ class InstanceSegmentationEvaluator(HookBase):
                 (
                     all_stats_by_label,
                     ari_scores_by_label,
-                    momentum_stats_by_label,
                     panoptic_rows,
                 ),
                 dst=0,
@@ -507,28 +453,23 @@ class InstanceSegmentationEvaluator(HookBase):
             if comm.get_rank() == 0:
                 merged_stats = {label: [] for label in self.labels}
                 merged_ari = {label: [] for label in self.labels}
-                merged_momentum = {label: [] for label in self.labels}
                 panoptic_rows = []
-                for stats_chunk, ari_chunk, momentum_chunk, panoptic_chunk in gathered:
+                for stats_chunk, ari_chunk, panoptic_chunk in gathered:
                     for label in self.labels:
                         merged_stats[label].extend(stats_chunk.get(label, []))
                         merged_ari[label].extend(ari_chunk.get(label, []))
-                        merged_momentum[label].extend(momentum_chunk.get(label, []))
                     panoptic_rows.extend(panoptic_chunk)
                 all_stats_by_label = merged_stats
                 ari_scores_by_label = merged_ari
-                momentum_stats_by_label = merged_momentum
             else:
                 all_stats_by_label = {label: [] for label in self.labels}
                 ari_scores_by_label = {label: [] for label in self.labels}
-                momentum_stats_by_label = {label: [] for label in self.labels}
 
         if comm.get_world_size() > 1 and comm.get_rank() != 0:
             self.trainer.model.train()
             return
 
         logged_any = False
-        current_metric_set = False
         det_f1_by_label = {}
         for label in self.labels:
             all_stats = all_stats_by_label[label]
@@ -601,13 +542,6 @@ class InstanceSegmentationEvaluator(HookBase):
                 else:
                     self.trainer.logger.info("[{}] ARI mean=n/a".format(label_name))
 
-            momentum_stats = momentum_stats_by_label[label]
-            if momentum_stats:
-                momentum_aggregated = self._aggregate_momentum_results(
-                    momentum_stats, class_names
-                )
-                self._log_momentum_metrics(momentum_aggregated, class_names)
-
             if self.trainer.writer is not None:
                 step = get_writer_step(self.trainer)
                 self.trainer.writer.add_scalar(
@@ -656,17 +590,6 @@ class InstanceSegmentationEvaluator(HookBase):
                 self.trainer.comm_info["current_metric_value"] = det_f1
                 self.trainer.comm_info["current_metric_name"] = self._metric_key(
                     label, "ins_det_f1"
-                )
-                current_metric_set = True
-            elif (
-                self.selection_reduction is None
-                and not self.panoptic_selection
-                and self.set_current_metric
-                and not current_metric_set
-            ):
-                self.trainer.comm_info.setdefault("current_metric_value", det_f1)
-                self.trainer.comm_info.setdefault(
-                    "current_metric_name", self._metric_key(label, "ins_det_f1")
                 )
             logged_any = True
 
@@ -741,240 +664,3 @@ class InstanceSegmentationEvaluator(HookBase):
             "<<<<<<<<<<<<<<<<< End Instance Segmentation Evaluation <<<<<<<<<<<<<<<<<"
         )
         self.trainer.model.train()
-
-    def _eval_momentum(
-        self,
-        matches,
-        pred_instance_momentum,
-        momentum_gt,
-        gt_instance,
-        counts,
-        criterion,
-        num_classes,
-        pred_instance_labels,
-    ):
-        """Evaluate momentum regression per class for matched instances."""
-        try:
-            b = 0
-            # get batch momentum ground truth
-            mom_gt_b = criterion._get_batch_tensor(
-                momentum_gt, b, counts, torch.device("cpu"), None
-            )
-
-            # get inverse mapping from points to instances
-            inst_b = gt_instance.squeeze(-1)
-            if inst_b.dim() == 0:
-                inst_b = inst_b.unsqueeze(0)
-            if inst_b.dim() == 2 and inst_b.shape[1] == 1:
-                inst_b = inst_b.squeeze(1)
-            inst_b = inst_b.cpu()
-
-            # Map GT ID -> Momentum
-            unique_gt_ids = torch.unique(inst_b)
-            unique_gt_ids = unique_gt_ids[unique_gt_ids >= 0]
-            gt_mom_map = {}
-            for gt_id in unique_gt_ids:
-                mask = inst_b == gt_id
-                if mask.any():
-                    gt_mom_map[gt_id.item()] = mom_gt_b[mask].float().mean().item()
-
-            # Map Pred ID -> Momentum
-            if isinstance(pred_instance_labels, np.ndarray):
-                pred_inst_t = torch.from_numpy(pred_instance_labels)
-            else:
-                pred_inst_t = pred_instance_labels
-
-            # Sort points by instance ID
-            sorted_ids, sort_idx = torch.sort(pred_inst_t)
-            # Get unique IDs and their first occurrence index in the sorted array
-            unique_ids_sorted, counts_sorted = torch.unique_consecutive(
-                sorted_ids, return_counts=True
-            )
-
-            # Compute start indices
-            cumsum_counts = torch.cat([torch.tensor([0]), counts_sorted.cumsum(0)[:-1]])
-
-            # Extract values at first indices
-            first_indices = sort_idx[cumsum_counts]
-            mom_values = pred_instance_momentum[first_indices]
-
-            # Build map
-            pr_mom_map = {
-                uid.item(): val.item()
-                for uid, val in zip(unique_ids_sorted, mom_values)
-                if uid.item() >= 0
-            }
-
-            matched_preds = []
-
-            # Iterate matches
-            for m in matches:
-                pid = m["pred_id"]
-                gid = m["gt_id"]
-                pred_cls = m["pred_cls"]  # used for per-class stats
-
-                if pid in pr_mom_map and gid in gt_mom_map:
-                    matched_preds.append(
-                        {
-                            "pred": pr_mom_map[pid],
-                            "gt": gt_mom_map[gid],
-                            "cls": pred_cls,
-                        }
-                    )
-
-            if not matched_preds:
-                return None
-
-            # Compute stats
-            all_p = np.array([x["pred"] for x in matched_preds])
-            all_g = np.array([x["gt"] for x in matched_preds])
-            all_c = np.array([x["cls"] for x in matched_preds])
-            all_e = all_p - all_g
-
-            # Collect stats per class
-            class_stats = {}
-            for cls_idx in range(num_classes):
-                cls_mask = all_c == cls_idx
-                if not np.any(cls_mask):
-                    continue
-
-                cls_errors = all_e[cls_mask]
-                cls_mae = float(np.mean(np.abs(cls_errors)))
-                cls_rmse = float(np.sqrt(np.mean(cls_errors**2)))
-                cls_count = int(np.sum(cls_mask))
-
-                class_stats[cls_idx] = {
-                    "mae": cls_mae,
-                    "rmse": cls_rmse,
-                    "count": cls_count,
-                }
-
-            # Overall
-            overall_mae = float(np.mean(np.abs(all_e)))
-            overall_rmse = float(np.sqrt(np.mean(all_e**2)))
-
-            return {
-                "per_class": class_stats,
-                "overall": {
-                    "mae": overall_mae,
-                    "rmse": overall_rmse,
-                    "count": len(all_e),
-                },
-            }
-
-        except Exception as e:
-            self.trainer.logger.warning(f"Error evaluating momentum: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return None
-
-    def _aggregate_momentum_results(self, momentum_stats_list, class_names):
-        """Aggregate momentum evaluation results across batches."""
-        num_classes = len(class_names)
-
-        # initialize per-class accumulators
-        class_mae = {i: [] for i in range(num_classes)}
-        class_rmse = {i: [] for i in range(num_classes)}
-        class_count = {i: 0 for i in range(num_classes)}
-
-        # overall accumulators
-        overall_mae = []
-        overall_rmse = []
-        overall_count = 0
-
-        for stats in momentum_stats_list:
-            if stats is None:
-                continue
-
-            # accumulate per-class stats
-            for cls_idx, cls_stats in stats["per_class"].items():
-                if cls_idx < num_classes:
-                    class_mae[cls_idx].append(cls_stats["mae"])
-                    class_rmse[cls_idx].append(cls_stats["rmse"])
-                    class_count[cls_idx] += cls_stats["count"]
-
-            # accumulate overall stats
-            overall_mae.append(stats["overall"]["mae"])
-            overall_rmse.append(stats["overall"]["rmse"])
-            overall_count += stats["overall"]["count"]
-
-        # compute aggregated per-class metrics
-        aggregated_per_class = {}
-        for cls_idx in range(num_classes):
-            if len(class_mae[cls_idx]) > 0:
-                aggregated_per_class[cls_idx] = {
-                    "mae": float(np.mean(class_mae[cls_idx])),
-                    "rmse": float(np.mean(class_rmse[cls_idx])),
-                    "count": class_count[cls_idx],
-                }
-
-        # compute aggregated overall metrics
-        aggregated_overall = {
-            "mae": float(np.mean(overall_mae)) if overall_mae else 0.0,
-            "rmse": float(np.mean(overall_rmse)) if overall_rmse else 0.0,
-            "count": overall_count,
-        }
-
-        return {
-            "per_class": aggregated_per_class,
-            "overall": aggregated_overall,
-        }
-
-    def _log_momentum_metrics(self, momentum_aggregated, class_names):
-        """Log momentum regression metrics."""
-        self.trainer.logger.info("Momentum Regression Metrics:")
-
-        # overall metrics
-        overall = momentum_aggregated["overall"]
-        self.trainer.logger.info(
-            "Overall: MAE={:.4f} RMSE={:.4f} Count={}".format(
-                overall["mae"], overall["rmse"], overall["count"]
-            )
-        )
-
-        # per-class metrics
-        per_class = momentum_aggregated["per_class"]
-        if per_class:
-            self.trainer.logger.info("Per-class metrics:")
-            for cls_idx in sorted(per_class.keys()):
-                cls_name = (
-                    class_names[cls_idx]
-                    if cls_idx < len(class_names)
-                    else f"class_{cls_idx}"
-                )
-                cls_stats = per_class[cls_idx]
-                self.trainer.logger.info(
-                    "  {}: MAE={:.4f} RMSE={:.4f} Count={}".format(
-                        cls_name,
-                        cls_stats["mae"],
-                        cls_stats["rmse"],
-                        cls_stats["count"],
-                    )
-                )
-
-        # log to tensorboard if available
-        if self.trainer.writer is not None:
-            step = get_writer_step(self.trainer)
-            overall = momentum_aggregated["overall"]
-            self.trainer.writer.add_scalar(
-                "val/momentum_overall_mae", overall["mae"], step
-            )
-            self.trainer.writer.add_scalar(
-                "val/momentum_overall_rmse", overall["rmse"], step
-            )
-
-            per_class = momentum_aggregated["per_class"]
-            for cls_idx in sorted(per_class.keys()):
-                cls_name = (
-                    class_names[cls_idx]
-                    if cls_idx < len(class_names)
-                    else f"class_{cls_idx}"
-                )
-                cls_stats = per_class[cls_idx]
-                self.trainer.writer.add_scalar(
-                    f"val/momentum_{cls_name}_mae", cls_stats["mae"], step
-                )
-                self.trainer.writer.add_scalar(
-                    f"val/momentum_{cls_name}_rmse", cls_stats["rmse"], step
-                )

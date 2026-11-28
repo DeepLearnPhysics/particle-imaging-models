@@ -11,6 +11,5 @@ test = dict(
     _delete_=True,
     type="InstanceSegTester",
     ari_include_unassigned=True,
-    pid_tables=False,
 )
 data = dict(test=dict(split="test", max_len=-1, test_mode=False, max_points=3200))

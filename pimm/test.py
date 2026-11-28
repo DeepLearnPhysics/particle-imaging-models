@@ -24,7 +24,7 @@ from pimm.utils import comm
 def main_worker(cfg):
     """Build and run the configured tester after config normalization."""
     cfg = default_setup(cfg)
-    tester = TESTERS.build(dict(type=cfg.test.type, cfg=cfg))
+    tester = TESTERS.build(dict(cfg.test, cfg=cfg))
     tester.test()
 
 

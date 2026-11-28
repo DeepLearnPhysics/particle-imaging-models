@@ -67,7 +67,7 @@ class FinalEvaluator(HookBase):
         torch.cuda.empty_cache()
         cfg = self.trainer.cfg
         tester = TESTERS.build(
-            dict(type=cfg.test.type, cfg=cfg, model=self.trainer.model)
+            dict(cfg.test, cfg=cfg, model=self.trainer.model)
         )
         if self.test_last:
             self.trainer.logger.info("=> Testing on model_last ...")

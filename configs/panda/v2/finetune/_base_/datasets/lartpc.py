@@ -27,7 +27,6 @@ model = dict(
             ),
         ),
         use_stuff_head=(True, True),
-        stuff_classes=dict(interaction=[0], particle=[5]),
         backbone=dict(in_channels=4, grid_size=0.001),
     ),
 )
@@ -187,7 +186,6 @@ hooks = [
     dict(
         type="InstanceSegmentationEvaluator",
         ari_include_unassigned=True,
-        pid_tables=False,
         every_n_steps={{_base_.check}},
         labels=("interaction", "particle"),
         primary_label="particle",

@@ -3,7 +3,6 @@ from os import environ as __env
 
 K = int(__env.get("K", "1000"))
 weight = None
-amp_dtype = "bfloat16" if K == 1000 else "float16"
 model = dict(
     target_modules=[],
     trainable_keywords=("decoder", "backbone"),

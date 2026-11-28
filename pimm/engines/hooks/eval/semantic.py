@@ -67,7 +67,6 @@ class SemSegEvaluator(HookBase):
         every_n_steps=0,
         macro_ignore_class_ids=None,
         selection_metric="mIoU",
-        reset_metrics_each_eval=False,
     ):
         """Configure evaluation cadence and macro masking."""
         self.write_cls_iou = write_cls_iou
@@ -75,7 +74,6 @@ class SemSegEvaluator(HookBase):
         self.macro_ignore_class_ids = tuple(sorted(set(macro_ignore_class_ids or [])))
         assert selection_metric in ("mIoU", "mF1"), selection_metric
         self.selection_metric = selection_metric
-        self.reset_metrics_each_eval = bool(reset_metrics_each_eval)
 
     def after_step(self):
         """Run semantic evaluation on the configured step cadence."""
@@ -145,10 +143,6 @@ class SemSegEvaluator(HookBase):
                 union.cpu().numpy(),
                 target.cpu().numpy(),
             )
-            self.trainer.storage.put_scalar("val_intersection", intersection)
-            self.trainer.storage.put_scalar("val_union", union)
-            self.trainer.storage.put_scalar("val_target", target)
-            self.trainer.storage.put_scalar("val_loss", loss.item())
             intersection_total = intersection_total + intersection
             union_total = union_total + union
             target_total = target_total + target
@@ -173,11 +167,6 @@ class SemSegEvaluator(HookBase):
         num_classes = self.trainer.cfg.data.num_classes
         loss_avg = float(np.mean(losses))
         intersection, union, target = intersection_total, union_total, target_total
-        if not self.reset_metrics_each_eval:
-            loss_avg = self.trainer.storage.history("val_loss").avg
-            intersection = self.trainer.storage.history("val_intersection").total
-            union = self.trainer.storage.history("val_union").total
-            target = self.trainer.storage.history("val_target").total
         metrics = compute_semseg_metrics(
             all_preds,
             all_segments,

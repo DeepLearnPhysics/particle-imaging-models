@@ -517,7 +517,7 @@ class PandaV2Detector(PointModel):
         upcast_attention=False,
         pos_emb=True,
         center_pos_k=True,
-        use_stuff_head=False,
+        use_stuff_head=None,
         stuff_classes=None,
         mlp_point_proj=False,
         stuff_threshold=0.5,
@@ -628,10 +628,7 @@ class PandaV2Detector(PointModel):
         def _inject(cfg):
             cfg = deepcopy(cfg)
             if isinstance(cfg, dict):
-                if cfg.get("type") in (
-                    "FastUnifiedInstanceLoss",
-                    "ConsistentMatchingInstanceLoss",
-                ):
+                if cfg.get("type") == "FastUnifiedInstanceLoss":
                     cfg.setdefault("panda_v2", True)
                     cfg.setdefault("query_heads", spec.get("query_heads"))
                     cfg.setdefault("overlap", spec.get("overlap", False))
@@ -650,7 +647,7 @@ class PandaV2Detector(PointModel):
         num_queries=None,
         num_classes=None,
         stuff_classes=None,
-        use_stuff_head=True,
+        use_stuff_head=None,
         loss_weights=None,
         overlap=None,
     ):
@@ -669,8 +666,12 @@ class PandaV2Detector(PointModel):
             stuff = cls._select_stuff_classes(
                 stuff_classes, labels, label, idx, spec.get("stuff_classes", [])
             )
-            task_use_stuff = cls._select_value(use_stuff_head, labels, label, idx, True)
-            loss_weight = cls._select_value(loss_weights, labels, label, idx, 1.0)
+            task_use_stuff = cls._select_value(
+                use_stuff_head, labels, label, idx, spec.get("use_stuff_head", False)
+            )
+            loss_weight = cls._select_value(
+                loss_weights, labels, label, idx, spec.get("loss_weight", 1.0)
+            )
             label_overlap = cls._select_value(
                 overlap, labels, label, idx, spec.get("overlap", False)
             )

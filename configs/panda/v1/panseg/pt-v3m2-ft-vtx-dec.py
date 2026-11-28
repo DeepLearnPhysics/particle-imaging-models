@@ -273,5 +273,4 @@ test = dict(
     class_names=["thing"],
     stuff_classes=[0],
     require_class_for_match=False,
-    labels=("interaction",),
 )

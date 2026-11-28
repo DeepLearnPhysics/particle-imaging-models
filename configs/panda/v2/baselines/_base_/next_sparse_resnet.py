@@ -74,9 +74,9 @@ model = dict(
 )
 batch_size = min(1024, K)
 batch_size_val = 256
-enable_amp = K < 416993
-amp_dtype = "float16" if enable_amp else "bfloat16"
-num_worker = 24 if enable_amp else 12
+enable_amp = True
+amp_dtype = "float16"
+num_worker = 24
 epoch = eval_epoch = {100: 2000, 1000: 1000, 10000: 300, 100000: 50, 416993: 246}[K]
 optimizer = dict(type="Adam", fused=True, lr=0.0001, weight_decay=0.0001)
 scheduler = dict(type="MultiStepLR", milestones=[], gamma=1.0)
