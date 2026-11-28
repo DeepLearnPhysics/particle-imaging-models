@@ -136,11 +136,6 @@ class LoRAAdapter(nn.Module):
         # 2) inject LoRA into every targeted attention projection
         self._adapted = self._inject_lora()
 
-        # Frozen backbones can opt into gradients for injected adapters.
-        enable_adapter_grad = getattr(self.model, "enable_adapter_grad", None)
-        if callable(enable_adapter_grad):
-            enable_adapter_grad()
-
         # 3) re-enable any explicitly whitelisted modules (e.g. the readout head)
         if self.trainable_keywords:
             for name, p in self.model.named_parameters():

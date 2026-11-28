@@ -7,7 +7,7 @@ random ``get_data(idx)`` access, so it is identical for every
 readers -- both mix in :class:`PILArNetOverlayMixin`.
 
 A host class must provide:
-    - ``overlay_n_events`` / ``overlay_prob`` / ``overlay_allow_repeats`` attrs,
+    - ``overlay_n_events`` / ``overlay_prob`` attrs,
     - ``revision`` attr,
     - ``get_data(idx)`` returning one event's ``data_dict``,
     - ``_num_source_events()`` -> count of distinct events (pre-``loop``).
@@ -62,10 +62,7 @@ class PILArNetOverlayMixin:
     def _draw_donor(self, pool, counts, instance_keys, host_name):
         """Draw a distinct donor whose instances fit the cap, or return ``None``."""
         for _ in range(10):
-            try:
-                extra = self.get_data(random.randint(0, pool - 1))
-            except Exception:
-                continue
+            extra = self.get_data(random.randint(0, pool - 1))
             if host_name is not None and extra.get("name") == host_name:
                 continue
             extra_counts = self._instance_counts(extra, instance_keys)
@@ -176,25 +173,13 @@ class PILArNetOverlayMixin:
         # valid regardless of the loop multiplier.
         pool = self._num_source_events()
         additional_dicts = []
-        if getattr(self, "overlay_max_instances", None) is not None:
-            counts = self._instance_counts(data_dict, instance_keys)
-            for _ in range(n_events - 1):
-                extra, extra_counts = self._draw_donor(pool, counts, instance_keys, data_dict.get("name"))
-                if extra is None:
-                    break
-                additional_dicts.append(extra)
-                counts = {key: counts[key] + extra_counts[key] for key in instance_keys}
-        else:
-            if self.overlay_allow_repeats:
-                indices = [random.randint(0, pool - 1) for _ in range(n_events - 1)]
-            else:
-                indices = random.sample(range(pool), min(n_events - 1, pool))
-            for idx in indices:
-                try:
-                    extra = self.get_data(idx)
-                    additional_dicts.append(extra)
-                except Exception:
-                    continue
+        counts = self._instance_counts(data_dict, instance_keys)
+        for _ in range(n_events - 1):
+            extra, extra_counts = self._draw_donor(pool, counts, instance_keys, data_dict.get("name"))
+            if extra is None:
+                break
+            additional_dicts.append(extra)
+            counts = {key: counts[key] + extra_counts[key] for key in instance_keys}
 
         if not additional_dicts:
             return data_dict
@@ -226,29 +211,28 @@ class PILArNetOverlayMixin:
                 extra["coord"] = self._apply_random_90_rotation(
                     extra["coord"], center=detector_center, rotations=rotations
                 )
-                if self.revision in ("v3", "v3_extra"):
-                    for position_key in ("vertex", "interaction_vertex"):
-                        if position_key not in extra:
-                            continue
-                        valid = ~(extra[position_key] == -1).all(axis=1)
-                        extra[position_key][valid] = self._apply_random_90_rotation(
-                            extra[position_key][valid],
-                            center=detector_center,
-                            rotations=rotations,
-                        )
-                    for vector_key in ("momentum_vector", "momentum_vec"):
-                        if vector_key not in extra:
-                            continue
-                        valid = ~(extra[vector_key] == -1).all(axis=1)
-                        extra[vector_key][valid] = self._apply_random_90_rotation(
-                            extra[vector_key][valid],
-                            center=np.zeros(3, dtype=np.float32),
-                            rotations=rotations,
-                        )
-                    if "momentum_vector" in extra:
-                        extra["px"] = extra["momentum_vector"][:, 0:1]
-                        extra["py"] = extra["momentum_vector"][:, 1:2]
-                        extra["pz"] = extra["momentum_vector"][:, 2:3]
+                for position_key in ("vertex", "interaction_vertex"):
+                    if position_key not in extra:
+                        continue
+                    valid = ~(extra[position_key] == -1).all(axis=1)
+                    extra[position_key][valid] = self._apply_random_90_rotation(
+                        extra[position_key][valid],
+                        center=detector_center,
+                        rotations=rotations,
+                    )
+                for vector_key in ("momentum_vector", "momentum_vec"):
+                    if vector_key not in extra:
+                        continue
+                    valid = ~(extra[vector_key] == -1).all(axis=1)
+                    extra[vector_key][valid] = self._apply_random_90_rotation(
+                        extra[vector_key][valid],
+                        center=np.zeros(3, dtype=np.float32),
+                        rotations=rotations,
+                    )
+                if "momentum_vector" in extra:
+                    extra["px"] = extra["momentum_vector"][:, 0:1]
+                    extra["py"] = extra["momentum_vector"][:, 1:2]
+                    extra["pz"] = extra["momentum_vector"][:, 2:3]
 
             # concatenate arrays
             for key in concat_keys:

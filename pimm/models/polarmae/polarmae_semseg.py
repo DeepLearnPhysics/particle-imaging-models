@@ -239,15 +239,9 @@ class PoLArMAESemSeg(PointModel):
         seg_logits, _ = batched_to_packed(logits, lengths)
 
         # 12. Loss
-        num_classes = seg_logits.shape[-1]
         result = dict(seg_logits=seg_logits)
         if "segment" in data_dict:
-            segment = data_dict["segment"]
-            # Remap out-of-range labels to ignore_index (-1)
-            if segment.max() >= num_classes:
-                segment = segment.clone()
-                segment[segment >= num_classes] = -1
-            loss = self.criteria(seg_logits, segment)
+            loss = self.criteria(seg_logits, data_dict["segment"])
             result["loss"] = loss
         if not self.training:  # the points are the original points
             result["offset"] = offset

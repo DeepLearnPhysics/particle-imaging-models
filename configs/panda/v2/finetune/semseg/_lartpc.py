@@ -65,13 +65,13 @@ transform = [
 eval_transform = [
     transform[0],
     transform[7],
-    dict(type="Copy", keys_dict=dict(segment="origin_segment")),
+    dict(type="Copy", keys_dict=dict(segment="origin_segment", segment_motif="origin_segment_motif")),
     dict(transform[5], mode="deterministic", return_inverse=True),
     transform[6],
     dict(type="ToTensor"),
     dict(
         type="Collect",
-        keys=("coord", "grid_coord", "segment", "origin_segment", "inverse"),
+        keys=("coord", "grid_coord", "segment", "origin_segment", "origin_segment_motif", "inverse"),
         feat_keys=("coord", "energy"),
         offset_keys_dict=dict(offset="coord", origin_offset="inverse"),
     ),
@@ -97,7 +97,6 @@ data = dict(
         transform=transform,
         overlay_n_events=2,
         overlay_prob=0.5,
-        overlay_within_subset=True,
         overlay_rotate_90=False,
         overlay_dedup=False,
     ),

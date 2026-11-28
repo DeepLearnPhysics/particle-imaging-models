@@ -73,12 +73,6 @@ def test_scored_points_gives_each_stored_hit_its_own_truth_and_its_voxels_predic
     assert (
         pred[voxel][0] == pred[voxel][1] and pred[voxel][3] == pred[voxel][4]
     )  # hits of a voxel share its prediction
-    del batch["inverse"]  # no voxel map: the voxels are scored, as before
-    gt, gt_cls, voxel = scored_points(batch, *keys)
-    assert (
-        gt.tolist() == batch["instance_particle"].tolist()
-        and pred[voxel].tolist() == pred.tolist()
-    )
 
 
 def test_fm4npp_ari_is_sklearns_over_every_point_with_noise_and_unassigned_each_one_cluster():

@@ -2,7 +2,6 @@
 
 import glob
 import os
-from copy import deepcopy
 from pathlib import Path
 from typing import Literal
 
@@ -13,7 +12,7 @@ from torch.utils.data import Dataset
 from pimm.utils.logger import get_root_logger
 
 from ..builder import DATASETS
-from ..transform import TRANSFORMS, Compose
+from ..transform import Compose
 from .decode import decode_event, resolve_revision
 from .overlay import PILArNetOverlayMixin
 from .default import default_transform
@@ -53,10 +52,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             ``Compose``). ``None`` (the default) uses
             :func:`~pimm.datasets.pilarnet.default_transform`; ``[]`` means no
             preprocessing. Defaults to ``None``.
-        test_mode (bool): Emit voxelized/augmented test fragments and force
-            ``loop = 1``. Defaults to ``False``.
-        test_cfg (object): Test config (``voxelize``, ``crop``, ``post_transform``,
-            ``aug_transform``); required when ``test_mode``. Defaults to ``None``.
+        test_mode (bool): Unsupported; must be ``False``. Defaults to ``False``.
         loop (int): Train-time epoch multiplier. Defaults to ``1``.
         ignore_index (int): Ignored-label value. Defaults to ``-1``.
         energy_threshold (float): Drop points with energy at or below this value
@@ -85,15 +81,11 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             Defaults to ``1``.
         overlay_prob (float): Probability of applying overlay to a given sample.
             Defaults to ``1.0``.
-        overlay_allow_repeats (bool): Allow the same event to be sampled more
-            than once when overlaying. Defaults to ``True``.
         overlay_rotate_90 (bool): Rotate each overlaid event by random 90-degree
             increments about the LAr detector centre. Defaults to ``True``.
         overlay_dedup (bool): Deduplicate colliding voxels by semantic priority;
             when ``False``, coincident points are left for ``GridSample`` to merge.
             Defaults to ``True``.
-        overlay_within_subset (bool): Restrict overlay donors to ``max_len``
-            events. Defaults to ``False``; seeded subsets always stay closed.
         overlay_max_instances (dict[str, int] | None): Largest number of
             instances per key (e.g. ``instance_particle``) an overlaid event may
             hold; donors that would exceed it are redrawn. Defaults to ``None``.
@@ -106,7 +98,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         colliding voxels by semantic priority (track > shower > Michel > delta >
         LED) and rotates overlaid events by random 90-degree increments, unless
         ``overlay_dedup`` / ``overlay_rotate_90`` turn that off. Donors come from the
-        selected subset when ``overlay_within_subset`` is enabled.
+        selected ``max_len`` events.
 
     Example:
         .. code-block:: python
@@ -132,7 +124,6 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         split="train",
         transform=None,
         test_mode=False,
-        test_cfg=None,
         loop=1,
         ignore_index=-1,
         energy_threshold=0.13,
@@ -144,13 +135,11 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         # event overlay parameters
         overlay_n_events=1,
         overlay_prob=1.0,
-        overlay_allow_repeats=True,
         overlay_rotate_90=True,
         overlay_dedup=True,
         overlay_max_instances=None,
         max_points=None,
         subset_seed=None,
-        overlay_within_subset=False,
     ):
         super().__init__()
         revision = resolve_revision(revision)
@@ -179,29 +168,18 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         self.transform = Compose(
             default_transform() if transform is None else transform
         )
-        self.test_mode = test_mode
-        self.test_cfg = test_cfg if test_mode else None
-        self.loop = loop if not test_mode else 1
+        assert not test_mode, "PILArNetH5Dataset has no test mode"
+        self.loop = loop
         self.ignore_index = ignore_index
         self.old_pid_mapping = old_pid_mapping
 
         self.revision = revision
-        if test_mode:
-            self.test_voxelize = TRANSFORMS.build(self.test_cfg.voxelize)
-            self.test_crop = (
-                TRANSFORMS.build(self.test_cfg.crop) if self.test_cfg.crop else None
-            )
-            self.post_transform = Compose(self.test_cfg.post_transform)
-            self.aug_transform = [Compose(aug) for aug in self.test_cfg.aug_transform]
-
         # event overlay parameters
         self.overlay_n_events = overlay_n_events
         self.overlay_prob = overlay_prob
-        self.overlay_allow_repeats = overlay_allow_repeats
         self.overlay_rotate_90 = overlay_rotate_90
         self.overlay_dedup = overlay_dedup
         self.overlay_max_instances = overlay_max_instances
-        self.overlay_within_subset = overlay_within_subset
 
         # PILArNet specific parameters
         self.energy_threshold = energy_threshold
@@ -229,7 +207,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
                 self.cumulative_lengths[-1], self.loop, split
             )
         )
-        if self.overlay_n_events > 1 or (isinstance(self.overlay_n_events, (tuple, list)) and self.overlay_n_events[1] > 1):
+        if self._overlay_enabled():
             logger.info(f"Event overlay enabled: n_events={self.overlay_n_events}, prob={self.overlay_prob}")
 
     def get_h5_files(self):
@@ -257,32 +235,27 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         self.indices = []
 
         for h5_file in self.h5_files:
-            try:
-                # Check if points count file exists
-                points_file = h5_file.replace(".h5", "_points.npy")
-                if os.path.exists(points_file):
-                    npoints = np.load(points_file)
+            # Check if points count file exists
+            points_file = h5_file.replace(".h5", "_points.npy")
+            if os.path.exists(points_file):
+                npoints = np.load(points_file)
+                index = np.argwhere(self._kept(npoints)).flatten()
+            else:
+                # No points file, count on the fly
+                log.info(
+                    f"No points count file for {h5_file}, counting points on the fly"
+                )
+                with h5py.File(h5_file, "r", libver="latest", swmr=True) as f:
+                    # Get all point counts
+                    npoints = []
+                    for i in range(f['point'].shape[0]):
+                        npoint = f['point'][i].size // 8
+                        npoints.append(npoint)
+                    npoints = np.array(npoints)
                     index = np.argwhere(self._kept(npoints)).flatten()
-                else:
-                    # No points file, count on the fly
-                    log.info(
-                        f"No points count file for {h5_file}, counting points on the fly"
-                    )
-                    with h5py.File(h5_file, "r", libver="latest", swmr=True) as f:
-                        # Get all point counts
-                        npoints = []
-                        for i in range(f['point'].shape[0]):
-                            npoint = f['point'][i].size // 8
-                            npoints.append(npoint)
-                        npoints = np.array(npoints)
-                        index = np.argwhere(self._kept(npoints)).flatten()
-                        self.file_events.append(npoints.shape[0])
-                if os.path.exists(points_file):
-                    self.file_events.append(int(npoints.shape[0]))
-            except Exception as e:
-                log.warning(f"Error processing {h5_file}: {e}")
-                index = np.array([])
-                self.file_events.append(0)
+                    self.file_events.append(npoints.shape[0])
+            if os.path.exists(points_file):
+                self.file_events.append(int(npoints.shape[0]))
 
             self.cumulative_lengths.append(index.shape[0])
             self.indices.append(index)
@@ -383,11 +356,9 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         return f"{h5_name}_{file_idx}"
 
     def _num_source_events(self):
-        """Count of donor events, optionally restricted to the selected subset."""
+        """Count of donor events: the selected ``max_len`` events."""
         total = int(self.cumulative_lengths[-1])
-        if self.max_len > 0 and (self.overlay_within_subset or self.subset is not None):
-            return min(self.max_len, total)
-        return total
+        return min(self.max_len, total) if self.max_len > 0 else total
 
     def prepare_train_data(self, idx):
         """Prepare training data with transforms."""
@@ -395,34 +366,8 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         data_dict = self._maybe_overlay(data_dict)
         return self.transform(data_dict)
 
-    def prepare_test_data(self, idx):
-        """Prepare test data with test transforms."""
-        # Load data
-        data_dict = self.get_data(idx % len(self))
-        data_dict = self._maybe_overlay(data_dict)
-
-        # Apply transforms
-        if self.transform is not None:
-            data_dict = self.transform(data_dict)
-
-        # Test mode specific handling
-        result_dict = dict(segment=data_dict.pop("segment"), name=data_dict.pop("name"))
-        if "origin_segment" in data_dict:
-            assert "inverse" in data_dict
-            result_dict["origin_segment"] = data_dict.pop("origin_segment")
-            result_dict["inverse"] = data_dict.pop("inverse")
-
-        data_dict_list = []
-        for aug in self.aug_transform:
-            data_dict_list.append(aug(deepcopy(data_dict)))
-        return result_dict
-
     def __getitem__(self, idx):
-        real_idx = idx % len(self)
-        if self.test_mode:
-            return self.prepare_test_data(real_idx)
-        else:
-            return self.prepare_train_data(real_idx)
+        return self.prepare_train_data(idx % len(self))
 
     def __len__(self):
         if self.max_len > 0:

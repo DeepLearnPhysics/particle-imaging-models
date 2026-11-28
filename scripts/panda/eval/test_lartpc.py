@@ -1,4 +1,4 @@
-"""Score LArTPC: python scripts/panda/eval/test_lartpc.py --config CONFIG --checkpoint WEIGHTS --out DIR."""
+"""Score LArTPC: python scripts/panda/eval/test_lartpc.py --config CONFIG --checkpoint WEIGHTS --task {semantic,instance} --out DIR."""
 
 import argparse
 import copy
@@ -10,10 +10,10 @@ import torch
 
 if __package__:
     from ._common import (jsonable, load_config, load_model, loader, make_dataset, numpy,
-                          preserve_hits, save_json, seed, to_device)
+                          save_json, seed, to_device)
 else:
     from _common import (jsonable, load_config, load_model, loader, make_dataset, numpy,
-                         preserve_hits, save_json, seed, to_device)
+                         save_json, seed, to_device)
 
 MOTIF5 = ["shower", "track", "michel", "delta", "led"]
 JOINT8 = ["shower+photon", "shower+electron", "track+muon", "track+pion", "track+proton",
@@ -53,10 +53,7 @@ def decode(model, batch, output, label, detector):
     from pimm.engines.metrics.panoptic import noise_points, scored_points
 
     spec = model.label_specs[label]
-    segment = spec["segment_key"] if spec["segment_key"] in batch else spec["segment_fallback_key"]
-    truth, classes, voxel = scored_points(batch, spec["instance_key"], segment)
-    if isinstance(voxel, slice):
-        raise ValueError("Hit-level scoring requires inverse and origin truth in the evaluation transforms")
+    truth, classes, voxel = scored_points(batch, spec["instance_key"], spec["segment_key"])
     results = model.postprocess(output, label=label, decoding="panda_v2", conf_threshold=0.3,
                                 mask_threshold=0.5, min_points=2, fill_uncovered=False)
     instances = numpy(results["instance_labels"]).reshape(-1).astype(np.int64)
@@ -166,7 +163,7 @@ def main(detector="lartpc"):
     parser.add_argument("--head-checkpoint", action="append", default=[], help="Partial best-head checkpoint; repeat for each frozen probe group")
     parser.add_argument("--data-root")
     parser.add_argument("--split", choices=("test", "val"), default="test")
-    parser.add_argument("--task", choices=("auto", "semantic", "instance"), default="auto")
+    parser.add_argument("--task", choices=("semantic", "instance"), required=True)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--max-events", type=int)
     parser.add_argument("--batch-size", type=int, default=1, help="Semantic inference batch size")
@@ -180,12 +177,10 @@ def main(detector="lartpc"):
     seed(args.seed)
     cfg = load_config(args.config)
     hook = next((h for h in cfg.get("hooks", []) if h["type"] == "PointClassificationEvaluator"), None)
-    task = ("semantic" if hook else "instance") if args.task == "auto" else args.task
+    task = args.task
     if task == "semantic" and hook is None:
         parser.error("Semantic config needs PointClassificationEvaluator head and class-name mappings")
     cfg = copy.deepcopy(cfg)
-    if task == "semantic" and detector == "lartpc" and list(hook["names"]["segment"]) == JOINT8:
-        preserve_hits(cfg.data[args.split], segment_motif="origin_segment_motif")
     limit = None if args.max_events is None else args.start + args.max_events
     dataset = make_dataset(cfg, args.split, args.data_root, max_events=limit)
     indices = list(range(args.start, len(dataset)))

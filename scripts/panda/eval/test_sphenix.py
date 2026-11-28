@@ -1,4 +1,4 @@
-"""Score sPHENIX: python scripts/panda/eval/test_sphenix.py --config CONFIG --checkpoint WEIGHTS --out DIR."""
+"""Score sPHENIX: python scripts/panda/eval/test_sphenix.py --config CONFIG --checkpoint WEIGHTS --task {semantic,instance} --out DIR."""
 
 if __package__:
     from .test_lartpc import main

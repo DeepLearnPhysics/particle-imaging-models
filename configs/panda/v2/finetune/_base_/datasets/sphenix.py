@@ -146,7 +146,6 @@ data = dict(
         loop=1,
         split="train",
         overlay_n_events=2,
-        overlay_within_subset=True,
         overlay_prob=0.5,
         overlay_rotate_90=False,
         overlay_dedup=False,

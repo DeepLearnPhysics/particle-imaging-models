@@ -322,35 +322,14 @@ class RingPanopticEvaluator(HookBase):
                     input_dict[k] = v.cuda(non_blocking=True)
             with torch.no_grad():
                 out = self.trainer.model(input_dict)
-            if "batch_pred" in out:
-                preds = out["batch_pred"]
-                gts = model.split_targets(input_dict)
-                rings_by_event = [
-                    model.postprocess_event(
-                        pred,
-                        conf_threshold=self.conf_threshold,
-                        mask_threshold=self.mask_threshold,
-                        min_points=self.min_points,
-                    )
-                    for pred in preds
-                ]
-            else:
-                if not hasattr(model, "postprocess"):
-                    raise TypeError(
-                        "RingPanopticEvaluator needs postprocess_event or an "
-                        "overlap-capable unified-detector postprocess method"
-                    )
-                rings_by_event = model.postprocess(
-                    out,
-                    conf_threshold=self.conf_threshold,
-                    mask_threshold=self.mask_threshold,
-                    min_points=self.min_points,
-                    **({} if self.dedup_iou is None else {"dedup_iou": self.dedup_iou}),
-                )
-                gts = self._split_overlap_targets(
-                    input_dict,
-                    batch_size=len(rings_by_event),
-                )
+            rings_by_event = model.postprocess(
+                out,
+                conf_threshold=self.conf_threshold,
+                mask_threshold=self.mask_threshold,
+                min_points=self.min_points,
+                **({} if self.dedup_iou is None else {"dedup_iou": self.dedup_iou}),
+            )
+            gts = self._split_overlap_targets(input_dict, batch_size=len(rings_by_event))
 
             for rings, gt in zip(rings_by_event, gts):
                 R = gt["masks"].shape[0]
@@ -371,7 +350,7 @@ class RingPanopticEvaluator(HookBase):
                     for p, g in zip(rows, cols)
                 )
                 # charge-weighted matches: the particle list, and its kinematics
-                charge = gt.get("charge")
+                charge = gt["charge"]
                 q_rows, q_cols, _ = match_rings(pm, truth, charge, self.iou_thresh)
                 for p, g in zip(q_rows, q_cols):
                     q_tp += 1

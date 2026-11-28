@@ -51,18 +51,14 @@ def test_point_limits_and_seeded_subset(pilarnet_v2_root):
     assert first._num_source_events() == 2
 
 
-def test_overlay_donor_subset_is_opt_in(pilarnet_v2_root):
-    options = dict(
+def test_overlay_donors_come_from_the_subset(pilarnet_v2_root):
+    dataset = PILArNetH5Dataset(
         data_root=str(pilarnet_v2_root), revision="v2", min_points=0, transform=[],
         max_len=1, overlay_n_events=2, overlay_rotate_90=False, overlay_dedup=False,
         overlay_max_instances=dict(instance_particle=8),
     )
-    legacy = PILArNetH5Dataset(**options)
-    closed = PILArNetH5Dataset(**options, overlay_within_subset=True)
     random.seed(0)
-    assert len(legacy[0]["coord"]) > 4
-    random.seed(0)
-    assert len(closed[0]["coord"]) == 4
+    assert len(dataset[0]["coord"]) == 4  # the only event in the subset is the host, which is never its own donor
 
 
 def test_overlay_hosts_can_omit_optional_controls(pilarnet_v2_root):

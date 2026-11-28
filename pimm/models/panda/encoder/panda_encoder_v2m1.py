@@ -5,7 +5,7 @@ nearby points attend to each other in windows of ``window_size`` serialized poin
 stages, points are pooled into voxels ``strides`` times larger. As in PTv3, the coarsest stage is returned as a Point:
 each pooled Point keeps the finer one in ``pooling_parent`` and its cluster indices in ``pooling_inverse``, and with
 ``Point.upcast()`` the four stages' features are joined at each input point (1170 channels by default). Inputs contain
-feat, coord, and batch or offset; grid_coord is optional and otherwise computed using grid_size.
+feat, coord, grid_coord (from GridSample), and batch or offset.
 """
 
 
@@ -280,11 +280,6 @@ class PandaV2Encoder(nn.Module):
 
     def forward(self, data_dict):
         point = data_dict if isinstance(data_dict, Point) else Point(data_dict)
-        if "grid_coord" not in point.keys():
-            coord = point.coord.float()
-            point.grid_coord = torch.div(
-                coord - coord.min(0).values, self.grid_size, rounding_mode="trunc"
-            ).long()
         point.sparsify()
         point.feat = F.gelu(self.stem_norm(self.stem(point.sparse_conv_feat).features))
         if "mask" in point.keys():

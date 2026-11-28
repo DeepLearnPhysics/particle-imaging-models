@@ -10,9 +10,9 @@ from .fm4npp import fm4npp_event_ari
 
 
 def scored_points(batch: dict, instance_key: str, segment_key: str):
-    """The scored points: each stored hit when the batch keeps its truth (``origin_<key>``, copied
-    before voxelization) and its voxel (GridSample's ``inverse``), else each voxel. Returns the points' truth
-    instance and class (flat int64) and the index that takes per-voxel predictions onto them.
+    """The scored points: each stored hit, with its truth (``origin_<key>``, copied before voxelization)
+    and its voxel (GridSample's ``inverse``). Returns the hits' truth instance and class (flat int64)
+    and the index that takes per-voxel predictions onto them.
     """
 
     def flat(value):
@@ -23,14 +23,7 @@ def scored_points(batch: dict, instance_key: str, segment_key: str):
         )
         return value.reshape(-1).astype(np.int64)
 
-    hit_keys = (f"origin_{instance_key}", f"origin_{segment_key}")
-    if "inverse" in batch and all(key in batch for key in hit_keys):
-        return (
-            flat(batch[hit_keys[0]]),
-            flat(batch[hit_keys[1]]),
-            flat(batch["inverse"]),
-        )
-    return flat(batch[instance_key]), flat(batch[segment_key]), slice(None)
+    return flat(batch[f"origin_{instance_key}"]), flat(batch[f"origin_{segment_key}"]), flat(batch["inverse"])
 
 
 def noise_class(spec: dict) -> int:
