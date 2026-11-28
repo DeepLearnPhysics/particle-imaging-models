@@ -20,6 +20,7 @@ Validation and test events follow file order.
 ``max_rings``. Each event is shifted to its own first light before hit PMTs are merged and sites are built.
 """
 
+import glob
 import os
 from collections import OrderedDict
 
@@ -405,13 +406,23 @@ def build_sites(event, coord_scale, grid_size):
     return out
 
 
-PACK = 100  # files per pack
+def pack_index(base):
+    """Where each shard of the packed copy ``<base>_packed`` lives: ``(modality, shard) -> pack file``, read from the
+    ``wc_NNNN`` groups of the packs, or None when the split has no packed copy."""
+    if not os.path.isdir(f"{base}_packed"):
+        return None
+    index = {}
+    for path in sorted(glob.glob(os.path.join(f"{base}_packed", "*", "*.h5"))):
+        modality = os.path.basename(os.path.dirname(path))
+        with h5py.File(path, "r", locking=False) as f:
+            index.update({(modality, int(key[3:])): path for key in f if key.startswith("wc_")})
+    return index
 
 
 class _Events:
     """Digits, particle hits and labl truth for one split. HDF5 files open lazily per
     process, the most recent ``max_open`` kept open. A packed copy of the split, next to it as
-    ``<config>_packed``, is read instead when present: the same events in ``PACK`` files per pack, so few files open.
+    ``<config>_packed``, is read instead when present: the same shards as ``wc_NNNN`` groups of a few pack files.
     """
 
     def __init__(self, base, split, events, max_open=256):
@@ -421,7 +432,8 @@ class _Events:
             events,
             max_open,
         )
-        self.packed = os.path.isdir(f"{base}_packed")
+        self.packs = pack_index(base)
+        self.packed = self.packs is not None
         self.files, self.pid = OrderedDict(), None
         with h5py.File(self.path("sensor", int(events[0][0])), "r", locking=False) as f:
             self.pmt = f["config/sensor_positions"][:].astype(np.float32)
@@ -444,21 +456,15 @@ class _Events:
 
     def path(self, modality, file):
         if self.packed:
-            return os.path.join(
-                f"{self.base}_packed", modality, f"pack_{file // PACK:03d}.h5"
-            )
+            return self.packs[modality, file]
         return os.path.join(self.base, modality, f"wc_{modality}_{file:04d}.h5")
 
     def group(self, modality, e):
         if self.pid != os.getpid():  # every dataloader worker opens its own handles
             self.files, self.pid = OrderedDict(), os.getpid()
         file, number = (int(x) for x in self.events[e])
-        key = (modality, file // PACK if self.packed else file)
-        handle = (
-            self.files.pop(key)
-            if key in self.files
-            else self.open(self.path(modality, file))
-        )
+        key = self.path(modality, file)
+        handle = self.files.pop(key) if key in self.files else self.open(key)
         self.files[key] = handle  # most recently used last
         if len(self.files) > self.max_open:
             self.files.popitem(last=False)[1].close()
