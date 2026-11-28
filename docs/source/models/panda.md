@@ -82,7 +82,7 @@ panda_transform = Compose([
 
 To fine-tune the semantic and detector recipes from `Panda-Base`, pass `--train.weight hf://DeepLearnPhysics/Panda-Base`; see [Fine-tune](fine-tune.md). The model in the detector recipes is `panda-detector-v1m1`, with the same parameter layout as the released V1 state dictionaries.
 
-Each V2 recipe that trains on labels sets its number of labeled training events in `num_train_events` at the top of the file, and its schedule length and evaluation interval follow from that number. The V2 recipes that start from a pretrained encoder load it from `weights/<dataset>.pth`.
+Each V2 recipe that trains on labels sets its number of labeled training events in `num_train_events` at the top of the file, and its schedule length and evaluation interval follow from that number. The V2 recipes that start from a pretrained encoder load it from `weights/<dataset>.pth`. The `tpcpp-10m` recipes read the TPCpp-10M release from `data/tpcpp-10m`: download it and, before pretraining, run `python -m pimm.datasets.preprocessing.tpcpp10m data/tpcpp-10m` once, as described in [Supported detectors](../data/datasets.md#tpcpp-10m).
 
 ## Cite
 

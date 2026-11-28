@@ -177,12 +177,9 @@ eval_transform = [
     ),
 ]
 dataset = dict(
-    type="PILArNetH5Dataset",
-    revision="v2",
+    type="TPCpp10MDataset",
     data_root="data/tpcpp-10m",
-    energy_threshold=0.0,
     min_points=0,
-    remove_low_energy_scatters=False,
     test_mode=False,
     loop=1,
 )
@@ -201,7 +198,7 @@ data = dict(
         overlay_dedup=False,
     ),
     val=dict(
-        dataset, split="val", max_len=1000, max_points=3200, transform=eval_transform
+        dataset, split="validation", max_len=1000, max_points=3200, transform=eval_transform
     ),
     test=dict(
         dataset, split="test", max_len=-1, max_points=3200, transform=eval_transform

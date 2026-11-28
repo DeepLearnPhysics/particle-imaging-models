@@ -149,6 +149,11 @@ training log in the same run directory. Without `--site`, you get the generic `s
 partition with flags or in a site file. To write a site profile for your cluster or run on several GPUs or nodes, see
 [Scale up](https://deeplearnphysics.org/particle-imaging-models/stable/training/scale.html).
 
+The sPHENIX recipes in `configs/panda/v2/tpcpp-10m` read the TPCpp-10M release, from Zenodo or its Hugging Face mirror
+`DeepLearnPhysics/tpcpp-10m`, in `data/tpcpp-10m`. Before pretraining, write its unlabeled shards uncompressed once
+with `uv run python -m pimm.datasets.preprocessing.tpcpp10m data/tpcpp-10m`; see
+[Supported detectors](https://deeplearnphysics.org/particle-imaging-models/stable/data/datasets.html#tpcpp-10m).
+
 To train on another detector, write its events as `.npy` files or add a reader; see
 [Bring your own data](https://deeplearnphysics.org/particle-imaging-models/stable/data/your-data.html).
 
@@ -157,7 +162,7 @@ To train on another detector, write its events as `.npy` files or add a reader; 
 | Area | Contents |
 |---|---|
 | Models | Panda V1, Panda V2 (self-distillation) and PoLAr-MAE (masked point modeling) pretraining; semantic segmentation, the Panda detectors and event classification; Point Transformer V3, SparseUNet, LitePT and the Panda V2 encoder as backbones |
-| Data | PILArNet-M and sPHENIX (HDF5), WAND water Cherenkov, NEXT, JAXTPC, LUCiD, and a generic `.npy` reader |
+| Data | PILArNet-M (HDF5), sPHENIX TPCpp-10M (the original release), WAND water Cherenkov, NEXT, JAXTPC, LUCiD, and a generic `.npy` reader |
 | Operations | [`pimm.ops`](https://github.com/DeepLearnPhysics/particle-imaging-models/blob/main/pimm/ops/README.md): accelerated attention, distillation loss, sparse convolution and serialization |
 | Training | `torchrun` with DDP, an experimental FSDP2 path, Slurm through Submitit |
 | Models out | Portable exports, loaded with `pimm.from_pretrained` from disk or Hugging Face |

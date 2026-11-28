@@ -21,6 +21,7 @@ from .pilarnet import (
 from .jaxtpc_dataset import JAXTPCDataset
 from .lucid_dataset import LUCiDDataset
 from .next_h5 import NEXTH5Dataset
+from .tpcpp10m import TPCpp10MDataset
 from .wand import WANDRingSitesDataset, WANDProbeDataset
 from .sphere_prior import SpherePriorDataset
 from . import transform  # register transform classes
