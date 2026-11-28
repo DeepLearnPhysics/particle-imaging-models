@@ -88,7 +88,7 @@ data = dict(
     names=["hit"],
     train=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         grid_size=0.03,
         coord_scale=18.1,
         overlay_prob=0.0,
@@ -272,7 +272,7 @@ data = dict(
     ),
     val=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         grid_size=0.03,
         coord_scale=18.1,
         overlay_prob=0.0,

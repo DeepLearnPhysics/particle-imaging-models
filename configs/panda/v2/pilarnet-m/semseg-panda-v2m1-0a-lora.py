@@ -37,7 +37,7 @@ scheduler = dict(
 )
 save_path = f"exp/pilarnet-m/semseg-panda-v2m1-0a-lora/k{num_train_events}"
 
-weight = "weights/lartpc.pth"
+weight = "weights/pilarnet-m.pth"
 encoder = dict(
     type="panda-encoder-v2m1",
     in_channels=4,
@@ -147,7 +147,7 @@ eval_transform = [
 dataset = dict(
     type="PILArNetH5Dataset",
     revision="v3_extra",
-    data_root="data/lartpc",
+    data_root="data/pilarnet-m",
     energy_threshold=0.13,
     min_points=0,
     remove_low_energy_scatters=False,

@@ -35,7 +35,7 @@ scheduler = dict(
 )
 save_path = f"exp/wand-sk-like/instance-panda-v2m1-0b-frozen/k{num_train_events}"
 
-weight = "weights/wc.pth"
+weight = "weights/wand-sk-like.pth"
 encoder = dict(
     type="panda-encoder-v2m1",
     in_channels=29,
@@ -238,7 +238,7 @@ data = dict(
     names=["e", "gamma", "mu", "pi", "p", "n", "K", "other"],
     train=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         config="config_01",
         max_rings=32,
         min_ring_hits=3,
@@ -253,7 +253,7 @@ data = dict(
     ),
     val=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         config="multi_primary",
         max_rings=32,
         min_ring_hits=3,

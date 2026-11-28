@@ -5,7 +5,7 @@ num_train_events = 1000
 assert num_train_events in (100, 1000, 10000, 100000, 416993)
 check = {100: 40, 1000: 20, 10000: 54, 100000: 97, 416993: 1000}[num_train_events]
 
-data_root = "data/next"
+data_root = "data/next-aiss"
 sources = [
     dict(name="Bi", label=0, pattern="Bi_part_*"),
     dict(name="0nubb", label=1, pattern="0nubb_part_*"),
@@ -29,7 +29,7 @@ dataset = dict(
     event_filter=[dict(type="NEXTTopologyCut")],
     index_workers=16,
     preload=True,
-    index_cache_dir="exp/cache/next",
+    index_cache_dir="exp/cache/next-aiss",
 )
 data = dict(
     num_classes=2,

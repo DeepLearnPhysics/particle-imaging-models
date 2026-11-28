@@ -4,9 +4,9 @@ _base_ = ["../_base_/default_runtime.py"]
 num_train_events = 1000
 assert num_train_events >= 16
 
-# Pretrained encoder: lartpc, sphenix, wc or next.
-source = "lartpc"
-assert source in ("lartpc", "sphenix", "wc", "next")
+# Pretrained encoder: pilarnet-m, tpcpp-10m, wand-sk-like or next-aiss.
+source = "pilarnet-m"
+assert source in ("pilarnet-m", "tpcpp-10m", "wand-sk-like", "next-aiss")
 
 schedule_total_steps = 625000
 epoch = eval_epoch = {100: 2000, 1000: 1000, 10000: 300}.get(
@@ -209,7 +209,7 @@ data = dict(
     train=dict(
         type="PILArNetH5Dataset",
         revision="v3_extra",
-        data_root="data/lartpc",
+        data_root="data/pilarnet-m",
         energy_threshold=0.13,
         min_points=0,
         remove_low_energy_scatters=False,
@@ -227,7 +227,7 @@ data = dict(
     val=dict(
         type="PILArNetH5Dataset",
         revision="v3_extra",
-        data_root="data/lartpc",
+        data_root="data/pilarnet-m",
         energy_threshold=0.13,
         min_points=0,
         remove_low_energy_scatters=False,
@@ -240,7 +240,7 @@ data = dict(
     test=dict(
         type="PILArNetH5Dataset",
         revision="v3_extra",
-        data_root="data/lartpc",
+        data_root="data/pilarnet-m",
         energy_threshold=0.13,
         min_points=0,
         remove_low_energy_scatters=False,
@@ -270,7 +270,7 @@ hooks = [
             "pools.": "model.backbone.pools.",
             "blocks.": "model.backbone.blocks.",
             **(
-                {"stem.weight": "unloaded_source_stem.weight"} if source == "wc" else {}
+                {"stem.weight": "unloaded_source_stem.weight"} if source == "wand-sk-like" else {}
             ),
         },
         strict=False,

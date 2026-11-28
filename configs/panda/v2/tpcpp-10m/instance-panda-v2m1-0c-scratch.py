@@ -227,7 +227,7 @@ data = dict(
     names=["other", "pion", "kaon", "proton", "electron"],
     train=dict(
         type="PILArNetH5Dataset",
-        data_root="data/sphenix",
+        data_root="data/tpcpp-10m",
         revision="v2",
         test_mode=False,
         energy_threshold=0.0,
@@ -245,7 +245,7 @@ data = dict(
     ),
     val=dict(
         type="PILArNetH5Dataset",
-        data_root="data/sphenix",
+        data_root="data/tpcpp-10m",
         revision="v2",
         test_mode=False,
         energy_threshold=0.0,
@@ -259,7 +259,7 @@ data = dict(
     ),
     test=dict(
         type="PILArNetH5Dataset",
-        data_root="data/sphenix",
+        data_root="data/tpcpp-10m",
         revision="v2",
         test_mode=False,
         energy_threshold=0.0,

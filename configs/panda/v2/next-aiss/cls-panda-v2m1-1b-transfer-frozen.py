@@ -4,9 +4,9 @@ _base_ = ["../_base_/default_runtime.py"]
 num_train_events = 1000
 assert num_train_events in (100, 1000, 10000, 100000, 416993)
 
-# Pretrained encoder: lartpc, sphenix, wc or next.
-source = "next"
-assert source in ("lartpc", "sphenix", "wc", "next")
+# Pretrained encoder: pilarnet-m, tpcpp-10m, wand-sk-like or next-aiss.
+source = "next-aiss"
+assert source in ("pilarnet-m", "tpcpp-10m", "wand-sk-like", "next-aiss")
 
 schedule_total_steps = 625000
 epoch = eval_epoch = {100: 2000, 1000: 1000, 10000: 300}.get(
@@ -69,7 +69,7 @@ model = dict(
     ),
 )
 
-data_root = "data/next"
+data_root = "data/next-aiss"
 sources = [
     dict(name="Bi", label=0, pattern="Bi_part_*"),
     dict(name="0nubb", label=1, pattern="0nubb_part_*"),
@@ -131,7 +131,7 @@ dataset = dict(
     event_filter=[dict(type="NEXTTopologyCut")],
     index_workers=16,
     preload=True,
-    index_cache_dir="exp/cache/next",
+    index_cache_dir="exp/cache/next-aiss",
 )
 pool = 1000000  # the events the encoders were pretrained on; the test set is every train event after them
 data = dict(
@@ -159,7 +159,7 @@ hooks = [
             "pools.": "model.backbone.pools.",
             "blocks.": "model.backbone.blocks.",
             **(
-                {"stem.weight": "unloaded_source_stem.weight"} if source == "wc" else {}
+                {"stem.weight": "unloaded_source_stem.weight"} if source == "wand-sk-like" else {}
             ),
         },
         strict=False,

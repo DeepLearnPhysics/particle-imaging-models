@@ -4,9 +4,9 @@ _base_ = ["../_base_/default_runtime.py"]
 num_train_events = 1000
 assert num_train_events >= 16
 
-# Pretrained encoder: lartpc, sphenix, wc or next.
-source = "wc"
-assert source in ("lartpc", "sphenix", "wc", "next")
+# Pretrained encoder: pilarnet-m, tpcpp-10m, wand-sk-like or next-aiss.
+source = "wand-sk-like"
+assert source in ("pilarnet-m", "tpcpp-10m", "wand-sk-like", "next-aiss")
 
 schedule_total_steps = 625000
 epoch = eval_epoch = {100: 2000, 1000: 1000, 10000: 300}.get(
@@ -246,7 +246,7 @@ data = dict(
     names=["e", "gamma", "mu", "pi", "p", "n", "K", "other"],
     train=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         config="config_01",
         max_rings=32,
         min_ring_hits=3,
@@ -261,7 +261,7 @@ data = dict(
     ),
     val=dict(
         type="WANDRingSitesDataset",
-        data_root="data/wc",
+        data_root="data/wand-sk-like",
         config="multi_primary",
         max_rings=32,
         min_ring_hits=3,
@@ -291,7 +291,7 @@ hooks = [
             "pools.": "model.backbone.pools.",
             "blocks.": "model.backbone.blocks.",
             **(
-                {"stem.weight": "unloaded_source_stem.weight"} if source != "wc" else {}
+                {"stem.weight": "unloaded_source_stem.weight"} if source != "wand-sk-like" else {}
             ),
         },
         strict=False,

@@ -37,7 +37,7 @@ scheduler = dict(
 )
 save_path = f"exp/next-aiss/cls-panda-v2m1-0a-lora/k{num_train_events}"
 
-weight = "weights/next.pth"
+weight = "weights/next-aiss.pth"
 encoder = dict(
     type="panda-encoder-v2m1",
     in_channels=4,
@@ -76,7 +76,7 @@ model = dict(
     ),
 )
 
-data_root = "data/next"
+data_root = "data/next-aiss"
 sources = [
     dict(name="Bi", label=0, pattern="Bi_part_*"),
     dict(name="0nubb", label=1, pattern="0nubb_part_*"),
@@ -138,7 +138,7 @@ dataset = dict(
     event_filter=[dict(type="NEXTTopologyCut")],
     index_workers=16,
     preload=True,
-    index_cache_dir="exp/cache/next",
+    index_cache_dir="exp/cache/next-aiss",
 )
 pool = 1000000  # the events the encoders were pretrained on; the test set is every train event after them
 data = dict(

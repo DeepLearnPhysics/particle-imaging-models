@@ -31,7 +31,7 @@ scheduler = dict(
 )
 save_path = f"exp/wand-sk-like/kinematics-panda-v2m1-0b-frozen/k{num_train_events}"
 
-weight = "weights/wc.pth"
+weight = "weights/wand-sk-like.pth"
 encoder = dict(
     type="panda-encoder-v2m1",
     in_channels=29,
@@ -45,8 +45,8 @@ tasks = [
     for species in ("e", "mu")
     for kind in ("vertex", "direction", "momentum")
 ]
-data_root = "data/wc"
-pools = "data/wc_probes/pools.npz"
+data_root = "data/wand-sk-like"
+pools = "data/wand-sk-like-probes/pools.npz"
 model = dict(
     type="WANDEventProbes",
     backbone=encoder,

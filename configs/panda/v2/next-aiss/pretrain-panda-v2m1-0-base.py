@@ -88,7 +88,7 @@ data = dict(
     train=dict(
         type="NEXTH5Dataset",
         split="train",
-        data_root="data/next",
+        data_root="data/next-aiss",
         configs=[
             dict(name="Bi", pattern="Bi_part_*", label=0),
             dict(name="0nubb", pattern="0nubb_part_*", label=1),
@@ -236,12 +236,12 @@ data = dict(
             ),
         ],
         subset=(0, 0, 1000000),
-        index_cache_dir="data/_cache/pretrain/next",
+        index_cache_dir="data/_cache/pretrain/next-aiss",
     ),
     val=dict(
         type="NEXTH5Dataset",
         split="holdout",
-        data_root="data/next",
+        data_root="data/next-aiss",
         configs=[
             dict(name="Bi", pattern="Bi_part_*", label=0),
             dict(name="0nubb", pattern="0nubb_part_*", label=1),
@@ -286,7 +286,7 @@ data = dict(
                 feat_keys=["coord", "energy"],
             ),
         ],
-        index_cache_dir="data/_cache/pretrain/next",
+        index_cache_dir="data/_cache/pretrain/next-aiss",
         index_workers=4,
     ),
 )

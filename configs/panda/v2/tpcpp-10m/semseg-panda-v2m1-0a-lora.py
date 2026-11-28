@@ -37,7 +37,7 @@ scheduler = dict(
 )
 save_path = f"exp/tpcpp-10m/semseg-panda-v2m1-0a-lora/k{num_train_events}"
 
-weight = "weights/sphenix.pth"
+weight = "weights/tpcpp-10m.pth"
 encoder = dict(
     type="panda-encoder-v2m1",
     in_channels=4,
@@ -179,7 +179,7 @@ eval_transform = [
 dataset = dict(
     type="PILArNetH5Dataset",
     revision="v2",
-    data_root="data/sphenix",
+    data_root="data/tpcpp-10m",
     energy_threshold=0.0,
     min_points=0,
     remove_low_energy_scatters=False,
