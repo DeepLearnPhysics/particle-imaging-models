@@ -19,7 +19,7 @@ Follow [Install](../../../docs/source/get-started/install.md), installing pimm f
 
 #### 2. Datasets
 We train on four datasets from the Hugging Face Hub, and next to each we give the `data_root` the recipes expect:
-- PILArNet-M, liquid argon TPC - [ [DeepLearnPhysics/PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M/tree/v3_extra) ], revision `v3_extra` in `data/pilarnet-m` (for pretraining, revision `v2` in `data/pilarnet-m-v2`)
+- PILArNet-M, liquid argon TPC - [ [DeepLearnPhysics/PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M/tree/v3_extra) ], revision `v3_extra` in `data/pilarnet-m`
 - TPCpp-10M, sPHENIX-like TPC - [ [DeepLearnPhysics/tpcpp-10m](https://huggingface.co/datasets/DeepLearnPhysics/tpcpp-10m) ], in `data/tpcpp-10m`
 - WAND SK-like, water Cherenkov - [ [DeepLearnPhysics/wand-sk-like](https://huggingface.co/datasets/DeepLearnPhysics/wand-sk-like) ], in `data/wand-sk-like`
 - NEXT-AISS, high-pressure xenon TPC - [ [DeepLearnPhysics/next-aiss](https://huggingface.co/datasets/DeepLearnPhysics/next-aiss) ], in `data/next-aiss`

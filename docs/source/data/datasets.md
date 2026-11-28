@@ -13,20 +13,20 @@ Each reader is a registered dataset class; you select one in a config with `type
 
 ## Download
 
-`pimm datasets list` prints the datasets you can download, and `pimm datasets download <name>` fetches one from the Hugging Face Hub; `--split` restricts the download to some splits and `--revision` picks a revision. The command asks how many download workers to use. Files go to `--output-dir`, else to `$PIMM_DATA_ROOT/<name>`, else to `~/.cache/pimm/datasets/<name>`; when you choose a folder of your own, the command offers to add `PIMM_DATA_ROOT` to your shell configuration.
+`pimm datasets list` prints the datasets you can download, and `pimm datasets download <name>` fetches one from the Hugging Face Hub; `--split` restricts the download to some splits. The command asks how many download workers to use. Files go to `--output-dir`, else to `$PIMM_DATA_ROOT/<name>`, else to `~/.cache/pimm/datasets/<name>`; when you choose a folder of your own, the command offers to add `PIMM_DATA_ROOT` to your shell configuration.
 
 | Name | Source | License | Size | Download | After the download |
 |---|---|---|---|---|---|
-| `pilarnet-m` | [DeepLearnPhysics/PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M) | Apache 2.0 | 168 GB, test split 7 GB | `pimm datasets download pilarnet-m --revision v3_extra` | — |
+| `pilarnet-m` | [DeepLearnPhysics/PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M) | Apache 2.0 | 168 GB, test split 7 GB | `pimm datasets download pilarnet-m` | — |
 | `tpcpp-10m` | [DeepLearnPhysics/tpcpp-10m](https://huggingface.co/datasets/DeepLearnPhysics/tpcpp-10m), mirror of [Zenodo 16970029](https://doi.org/10.5281/zenodo.16970029) | CC BY 4.0 | 119 GB, labeled splits 1 GB | `pimm datasets download tpcpp-10m` | for `unlabeled`, write the shards uncompressed (139 GB more); the command offers to run it |
 | `wand-sk-like` | [DeepLearnPhysics/wand-sk-like](https://huggingface.co/datasets/DeepLearnPhysics/wand-sk-like) | CC BY 4.0 | 328 GB, train 306 GB | `pimm datasets download wand-sk-like` | — |
 | `next-aiss` | [DeepLearnPhysics/next-aiss](https://huggingface.co/datasets/DeepLearnPhysics/next-aiss), mirror of [Zenodo 18927784](https://doi.org/10.5281/zenodo.18927784) | CC BY 4.0 | 16 GB in 20 tar parts | `pimm datasets download next-aiss` | extract the parts; the command offers to do it and keeps the `.tar` files |
 
-A dataset class looks for its files in the config's `data_root` (the recipes use `data/<name>`), then in `$PIMM_DATA_ROOT/<name>`, then in `~/.cache/pimm/datasets/<name>`; PILArNet-M revisions live in `<name>/<revision>`. To add a dataset, you add an entry to `CATALOG` in `pimm/datasets/catalog.py` and call `resolve_data_root` once in its class.
+A dataset class looks for its files in the config's `data_root` (the recipes use `data/<name>`), then in `$PIMM_DATA_ROOT/<name>`, then in `~/.cache/pimm/datasets/<name>`. To add a dataset, you add an entry to `CATALOG` in `pimm/datasets/catalog.py` and call `resolve_data_root` once in its class.
 
 ## PILArNet-M
 
-The supported revisions are `v3` (the default) and `v3_extra`; `v3_extra` also has momentum vectors, particle lineage and interaction-vertex tables. `v2` is read as `v3`, with a warning, and `v1` is rejected. `DeepLearnPhysics/PILArNet-M-mini` is a 120-event sample in the same layout.
+pimm reads PILArNet-M at revision `v3_extra`, which adds momentum vectors, particle lineage and interaction-vertex tables to the earlier revisions. For an older local copy, you set `revision` to `v2` or `v3`; `v1` is rejected. `DeepLearnPhysics/PILArNet-M-mini` is a 120-event sample in the `v3` layout, so you read it with `revision="v3"`.
 
 | Option | Default | Effect |
 |---|---|---|

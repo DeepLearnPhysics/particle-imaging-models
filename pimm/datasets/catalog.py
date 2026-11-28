@@ -3,14 +3,14 @@
 import os
 from pathlib import Path
 
-# splits: split -> Hub file patterns. revisions: pimm revision -> Hub branch, first is the default.
+# splits: split -> Hub file patterns. revision: the Hub branch to fetch, when not main.
 CATALOG = {
     "pilarnet-m": dict(
         repo="DeepLearnPhysics/PILArNet-M",
         license="Apache-2.0",
         size="168 GB",
         splits={"train": ["train/*"], "val": ["val/*"], "test": ["test/*"]},
-        revisions={"v3_extra": "v3_extra", "v3": "v3", "v2": "main"},
+        revision="v3_extra",
     ),
     "tpcpp-10m": dict(
         repo="DeepLearnPhysics/tpcpp-10m",
@@ -55,5 +55,5 @@ def resolve_data_root(name, data_root=None):
             return str(path)
     raise FileNotFoundError(
         f"{name} is in none of {', '.join(str(p) for p in candidates if p)}; "
-        f"download it with `pimm datasets download {name.replace('/', ' --revision ')}`"
+        f"download it with `pimm datasets download {name}`"
     )

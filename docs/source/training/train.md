@@ -18,7 +18,7 @@ Run `uv run pimm ls` to print every recipe, or `uv run pimm ls panda semseg` to 
 
 To fine-tune with a recipe, pass the starting weights with `--train.weight`; see [Fine-tune](../models/fine-tune.md).
 
-Each recipe has a PILArNet-M revision. `v3` and `v3_extra` are the supported revisions; to run a recipe set to `v1`, point each split at v3 with an override, such as `data.train.revision=v3 data.val.revision=v3`.
+The PILArNet-M recipes read revision `v3_extra`. For an older local copy, you override the revision of each split, such as `data.train.revision=v3 data.val.revision=v3`.
 
 ## Check it on a few events
 
@@ -27,11 +27,10 @@ uv run pimm launch \
   --train.config panda/v1/pretrain/pretrain-sonata-v1m1-pilarnet-smallmask \
   --resources.nproc-per-node 1 \
   --run.name sonata-smoke \
-  -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False \
-     data.train.revision=v3 data.val.revision=v3
+  -- epoch=1 data.train.max_len=32 data.val.max_len=16 batch_size=4 num_worker=0 use_wandb=False
 ```
 
-This command requires PILArNet-M v3 on disk (see [Supported detectors](../data/datasets.md#pilarnet-m)). Run the command once with `--dry-run` first. When the run finishes, you'll find `model/last/.complete` in the run directory.
+This command requires PILArNet-M v3_extra on disk (see [Supported detectors](../data/datasets.md#pilarnet-m)). Run the command once with `--dry-run` first. When the run finishes, you'll find `model/last/.complete` in the run directory.
 
 ## Keep a variant as a child config
 
@@ -43,7 +42,6 @@ seed = 17
 batch_size = 32
 epoch = 100
 optimizer = dict(lr=3e-5, weight_decay=0.2)
-data = dict(train=dict(revision="v3"), val=dict(revision="v3"))
 ```
 
 Dicts are merged with the base and lists are replaced, so if you redefine `hooks` or `transform`, you replace the whole list.

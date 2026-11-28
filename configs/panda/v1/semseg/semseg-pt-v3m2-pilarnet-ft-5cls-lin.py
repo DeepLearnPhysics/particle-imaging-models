@@ -129,9 +129,9 @@ data = dict(
     train=dict(
         # PILArNet
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="train",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="data/pilarnet-m",
         transform=transform,
         test_mode=False,
         energy_threshold=0.0,
@@ -142,9 +142,9 @@ data = dict(
     ),
     val=dict(
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="val",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="data/pilarnet-m",
         transform=transform,
         test_mode=False,
         energy_threshold=0.13,
@@ -155,9 +155,9 @@ data = dict(
     ),
     test=dict(
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="test",
-        # data_root="/path/to/pilarnet-m/",
+        data_root="data/pilarnet-m",
         transform=test_transform,
         test_mode=False,
         energy_threshold=0.13,
