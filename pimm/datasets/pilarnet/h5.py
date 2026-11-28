@@ -56,7 +56,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         energy_threshold (float): Drop points with energy at or below this value
             when positive. Defaults to ``0.13``.
         min_points (int): Minimum points per event; smaller events are excluded
-            from the index. Defaults to ``1024``.
+            from the index. Defaults to ``0``; the pretraining recipes use ``1024``.
         max_points (int | None): Maximum points per event; larger events are
             excluded from the index.
             Defaults to ``None`` (no cap).
@@ -125,7 +125,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         loop=1,
         ignore_index=-1,
         energy_threshold=0.13,
-        min_points=1024,
+        min_points=0,
         max_len=-1,
         remove_low_energy_scatters=False,
         old_pid_mapping=False,

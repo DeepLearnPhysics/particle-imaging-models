@@ -31,7 +31,7 @@ The supported revisions are `v3` (the default) and `v3_extra`; `v3_extra` also h
 | Option | Default | Effect |
 |---|---|---|
 | `split` | `"train"` | split directory, or a list of them |
-| `min_points` | `1024` | events with fewer points are skipped |
+| `min_points` | `0` | events with fewer points are skipped; the pretraining recipes set `1024` |
 | `max_len` | `-1` | cap on the number of events |
 | `energy_threshold` | `0.13` | points at or below this energy are dropped |
 | `remove_low_energy_scatters` | `False` | the low-energy-deposit cluster is dropped |

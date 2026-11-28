@@ -50,7 +50,7 @@ class TPCpp10MDataset(PILArNetH5Dataset):
             :func:`~pimm.datasets.pilarnet.default_transform`. Defaults to ``None``.
         test_mode (bool): Unsupported; must be ``False``. Defaults to ``False``.
         loop (int): Epoch multiplier. Defaults to ``1``.
-        min_points (int): Events with fewer points are skipped. Defaults to ``1024``.
+        min_points (int): Events with fewer points are skipped. Defaults to ``0``; the pretraining recipe uses ``1024``.
         max_points (int | None): Events with more points are skipped. Defaults to ``None``.
         max_len (int): Cap on the number of events before ``loop`` (-1 = no cap). Defaults to ``-1``.
         subset_seed (int | None): With ``max_len``, draw the events as
@@ -67,7 +67,7 @@ class TPCpp10MDataset(PILArNetH5Dataset):
         transform=None,
         test_mode=False,
         loop=1,
-        min_points=1024,
+        min_points=0,
         max_points=None,
         max_len=-1,
         subset_seed=None,
