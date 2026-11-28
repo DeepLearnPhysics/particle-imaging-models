@@ -32,7 +32,8 @@ def main(argv: list[str] | None = None) -> int:
             "  submit   submit training to Slurm through submitit\n"
             "  watchdog manage supervisors for chained interactive runs\n"
             "  trace    inspect or export structured trace logs\n"
-            "  export   export model weights (optionally push to the HF Hub)"
+            "  export   export model weights (optionally push to the HF Hub)\n"
+            "  datasets list the datasets pimm reads, or download one"
         )
         return 0
 
@@ -59,5 +60,9 @@ def main(argv: list[str] | None = None) -> int:
         from .export import main as export_main
 
         return export_main(args)
+    if command == "datasets":
+        from .datasets import main as datasets_main
+
+        return datasets_main(args)
 
     raise SystemExit(f"Unknown pimm command: {command}")

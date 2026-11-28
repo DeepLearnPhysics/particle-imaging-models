@@ -11,16 +11,20 @@ Each reader is a registered dataset class; you select one in a config with `type
 | `DefaultDataset` | any | one directory of `.npy` files per event |
 | `ConcatDataset` | — | several datasets as one |
 
+## Download
+
+`pimm datasets list` prints the datasets you can download, and `pimm datasets download <name>` fetches one from the Hugging Face Hub; `--split` restricts the download to some splits and `--revision` picks a revision. The command asks how many download workers to use. Files go to `--output-dir`, else to `$PIMM_DATA_ROOT/<name>`, else to `~/.cache/pimm/datasets/<name>`; when you choose a folder of your own, the command offers to add `PIMM_DATA_ROOT` to your shell configuration.
+
+| Name | Source | License | Size | Download | After the download |
+|---|---|---|---|---|---|
+| `pilarnet-m` | [DeepLearnPhysics/PILArNet-M](https://huggingface.co/datasets/DeepLearnPhysics/PILArNet-M) | Apache 2.0 | 168 GB, test split 7 GB | `pimm datasets download pilarnet-m --revision v3_extra` | — |
+| `tpcpp-10m` | [DeepLearnPhysics/tpcpp-10m](https://huggingface.co/datasets/DeepLearnPhysics/tpcpp-10m), mirror of [Zenodo 16970029](https://doi.org/10.5281/zenodo.16970029) | CC BY 4.0 | 119 GB, labeled splits 1 GB | `pimm datasets download tpcpp-10m` | for `unlabeled`, write the shards uncompressed (139 GB more); the command offers to run it |
+| `wand-sk-like` | [DeepLearnPhysics/wand-sk-like](https://huggingface.co/datasets/DeepLearnPhysics/wand-sk-like) | CC BY 4.0 | 328 GB, train 306 GB | `pimm datasets download wand-sk-like` | — |
+| `next-aiss` | [DeepLearnPhysics/next-aiss](https://huggingface.co/datasets/DeepLearnPhysics/next-aiss), mirror of [Zenodo 18927784](https://doi.org/10.5281/zenodo.18927784) | CC BY 4.0 | 16 GB in 20 tar parts | `pimm datasets download next-aiss` | extract the parts; the command offers to do it and keeps the `.tar` files |
+
+A dataset class looks for its files in the config's `data_root` (the recipes use `data/<name>`), then in `$PIMM_DATA_ROOT/<name>`, then in `~/.cache/pimm/datasets/<name>`; PILArNet-M revisions live in `<name>/<revision>`. To add a dataset, you add an entry to `CATALOG` in `pimm/datasets/catalog.py` and call `resolve_data_root` once in its class.
+
 ## PILArNet-M
-
-Download it with the bundled script:
-
-```bash
-uv run python scripts/pilarnet/download.py --revision v3                # all splits, about 168 GB
-uv run python scripts/pilarnet/download.py --revision v3 --split test   # test split, about 7 GB
-```
-
-Files are saved to `~/.cache/pimm/pilarnet/v3` unless you pass `--output-dir`, and you're offered the option to add `PILARNET_DATA_ROOT_V3` to your shell configuration. The search order for data is the config's `data_root`, then `$PILARNET_DATA_ROOT_<REVISION>`, then `~/.cache/pimm/pilarnet/<revision>`.
 
 The supported revisions are `v3` (the default) and `v3_extra`; `v3_extra` also has momentum vectors, particle lineage and interaction-vertex tables. `v2` is read as `v3`, with a warning, and `v1` is rejected. `DeepLearnPhysics/PILArNet-M-mini` is a 120-event sample in the same layout.
 
@@ -35,13 +39,7 @@ The supported revisions are `v3` (the default) and `v3_extra`; `v3_extra` also h
 
 ## TPCpp-10M
 
-`TPCpp10MDataset` reads TPCpp-10M, simulated proton-proton collisions in an sPHENIX-like Time Projection Chamber ([Li et al., 2025](https://doi.org/10.5281/zenodo.16970029), CC BY 4.0), from the files of the original release. Download the release from Zenodo, or its Hugging Face mirror, into `data/tpcpp-10m`, the `data_root` of the `configs/panda/v2/tpcpp-10m` recipes:
-
-```bash
-uv run hf download DeepLearnPhysics/tpcpp-10m --repo-type dataset --local-dir data/tpcpp-10m   # about 119 GB
-```
-
-The labeled splits are read from their `.npz` files as they are. The unlabeled shards are compressed, so before pretraining you write their points uncompressed once, which lets the dataset memory-map them:
+`TPCpp10MDataset` reads TPCpp-10M, simulated proton-proton collisions in an sPHENIX-like Time Projection Chamber ([Li et al., 2025](https://doi.org/10.5281/zenodo.16970029), CC BY 4.0), from the files of the original release. The labeled splits are read from their `.npz` files as they are. The unlabeled shards are compressed, so before pretraining you write their points uncompressed once, which lets the dataset memory-map them (`pimm datasets download` offers to run this):
 
 ```bash
 uv run python -m pimm.datasets.preprocessing.tpcpp10m data/tpcpp-10m --workers 8   # about 139 GB more

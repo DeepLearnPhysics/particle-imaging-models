@@ -282,6 +282,21 @@ def gen_cli(repo: Path) -> str:
     text.append(table(["Flag", "Meaning", "Default"], rows))
     sections["submit"] = "\n".join(text)
 
+    import tyro.extras
+
+    from pimm.cli import datasets as datasets_cli
+
+    text = [summary(datasets_cli.__doc__) + "\n"]
+    text.append(
+        "```text\nusage: pimm datasets list\n       pimm datasets download NAME [FLAGS]\n```\n\n"
+        "`list` prints the catalog: each dataset's Hub repo, license, size, splits and revisions. "
+        "`download` fetches `NAME` (see [Datasets](../data/datasets.md)) and takes:\n"
+    )
+    for _, _, rows in tyro_groups(tyro.extras.get_parser(datasets_cli.download)):
+        if rows:
+            text.append(table(["Flag", "Type", "Meaning", "Default"], rows))
+    sections["datasets"] = "\n".join(text)
+
     for name, module in (("watchdog", watchdog), ("trace", trace), ("export", export)):
         entry = getattr(module, "parse_args", None) or module.main
         parser = capture_parser(entry)
