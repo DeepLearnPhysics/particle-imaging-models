@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "particle-imaging-models"  # imported as pimm
-version = "0.6.2"
+version = "0.6.3"
 description = "Pretraining, fine-tuning and inference of foundation models for particle-imaging detectors"
 readme = "README.md"
 license = "MIT"
