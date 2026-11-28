@@ -310,14 +310,7 @@ hooks = [
     dict(
         type="CheckpointLoader",
         source="hf://DeepLearnPhysics/Panda-V2-Decoder/decoder_core.pth",
-        replacements={
-            "stem": "model.backbone.stem",
-            "pools.": "model.backbone.pools.",
-            "blocks.": "model.backbone.blocks.",
-            **(
-                {"stem.weight": "unloaded_source_stem.weight"} if source != "wc" else {}
-            ),
-        },
+        replacements={"decoder.": "model.decoder."},
         strict=False,
     ),
     dict(type="ParameterCounter", show_details=True, show_gradients=True),
