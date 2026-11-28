@@ -19,7 +19,7 @@ Find the symptom, run the check, apply the fix.
 : Set `data_root` in the config, export `PIMM_DATA_ROOT`, or run the `pimm datasets download` command that the error prints. On a cluster, put the variable in the site profile's `env:` so that it is set on compute nodes.
 
 `PILArNet revision='v1' is not supported`
-: The recipe is set to revision `v1`. Override each split to `v3`, for example `data.train.revision=v3 data.val.revision=v3`.
+: Your config is set to revision `v1`. Override each split to `v3_extra`, for example `data.train.revision=v3_extra data.val.revision=v3_extra`.
 
 `Key ... not found` in a transform
 : The key is not in the reader's output, or it was removed or renamed in an earlier transform. Apply the transforms one at a time and print the keys after each.

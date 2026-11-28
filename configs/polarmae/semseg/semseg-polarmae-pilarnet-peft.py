@@ -106,7 +106,7 @@ data = dict(
     names=["shower", "track", "michel", "delta", "led"],
     train=dict(
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="train",
         transform=transform,
         test_mode=False,
@@ -117,7 +117,7 @@ data = dict(
     ),
     val=dict(
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="val",
         transform=test_transform,
         test_mode=False,
@@ -128,7 +128,7 @@ data = dict(
     ),
     test=dict(
         type="PILArNetH5Dataset",
-        revision="v1",
+        revision="v3_extra",
         split="test",
         transform=test_transform,
         test_mode=False,

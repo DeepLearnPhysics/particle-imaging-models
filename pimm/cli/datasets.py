@@ -20,9 +20,9 @@ Name = Literal[tuple(CATALOG)]
 
 def list_datasets() -> None:
     """Print every dataset in the catalog."""
-    rows = [("name", "repo", "license", "size", "splits", "revisions")]
+    rows = [("name", "repo", "license", "size", "splits")]
     for name, d in CATALOG.items():
-        rows.append((name, d["repo"], d["license"], d["size"], " ".join(d["splits"]) or "-", " ".join(d.get("revisions", ())) or "-"))
+        rows.append((name, d["repo"], d["license"], d["size"], " ".join(d["splits"]) or "-"))
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
@@ -42,7 +42,6 @@ def shell_config() -> Path:
 def download(
     name: tyro.conf.Positional[Name],
     split: tuple[str, ...] = (),
-    revision: str | None = None,
     output_dir: Path | None = None,
 ) -> None:
     """Download a dataset, or some of its splits, to OUTPUT_DIR, which is $PIMM_DATA_ROOT/NAME or else
@@ -51,21 +50,17 @@ def download(
     Args:
         name: A dataset from `pimm datasets list`.
         split: Splits to download; leave it out for every split.
-        revision: The revision, for datasets that have several; leave it out for the first one listed.
         output_dir: Where the files go; leave it out for the default above.
     """
     entry = CATALOG[name]
-    revisions = entry.get("revisions")
-    revision = revision or (next(iter(revisions)) if revisions else None)
-    sub = f"{name}/{revision}" if revisions else name
-    dest = (output_dir or data_home(sub)).absolute()
+    dest = (output_dir or data_home(name)).absolute()
     workers = int(input("Download workers [8]: ").strip() or 8)
     patterns = [p for s in split for p in entry["splits"][s]] or None
     print(f"Downloading {entry['repo']} ({', '.join(split) or 'all splits'}) to {dest}")
     snapshot_download(
         entry["repo"],
         repo_type="dataset",
-        revision=(revisions or {}).get(revision, revision),
+        revision=entry.get("revision"),
         allow_patterns=patterns,
         local_dir=dest,
         max_workers=workers,
@@ -87,8 +82,8 @@ def download(
         else:
             print(f"To write them later: {shlex.join(['python'] + command[1:])}")
 
-    # The lookup finds `dest` through PIMM_DATA_ROOT only when `dest` is <root>/<sub>.
-    root = str(dest).removesuffix(f"/{sub}")
+    # The lookup finds `dest` through PIMM_DATA_ROOT only when `dest` is <root>/<name>.
+    root = str(dest).removesuffix(f"/{name}")
     if "PIMM_DATA_ROOT" not in os.environ and root not in (str(dest), str(CACHE)):
         line = f'export PIMM_DATA_ROOT="{root}"'
         config = shell_config()

@@ -18,7 +18,7 @@ Run `uv run pimm ls` to print every recipe, or `uv run pimm ls panda semseg` to 
 
 To fine-tune with a recipe, pass the starting weights with `--train.weight`; see [Fine-tune](../models/fine-tune.md).
 
-Each recipe has a PILArNet-M revision. `v3` and `v3_extra` are the supported revisions; to run a recipe set to `v1`, point each split at v3 with an override, such as `data.train.revision=v3 data.val.revision=v3`.
+The PILArNet-M recipes read revision `v3_extra`. For an older local copy, you override the revision of each split, such as `data.train.revision=v3 data.val.revision=v3`.
 
 ## Check it on a few events
 
@@ -42,7 +42,6 @@ seed = 17
 batch_size = 32
 epoch = 100
 optimizer = dict(lr=3e-5, weight_decay=0.2)
-data = dict(train=dict(revision="v3"), val=dict(revision="v3"))
 ```
 
 Dicts are merged with the base and lists are replaced, so if you redefine `hooks` or `transform`, you replace the whole list.

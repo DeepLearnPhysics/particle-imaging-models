@@ -289,7 +289,7 @@ def gen_cli(repo: Path) -> str:
     text = [summary(datasets_cli.__doc__) + "\n"]
     text.append(
         "```text\nusage: pimm datasets list\n       pimm datasets download NAME [FLAGS]\n```\n\n"
-        "`list` prints the catalog: each dataset's Hub repo, license, size, splits and revisions. "
+        "`list` prints the catalog: each dataset's Hub repo, license, size and splits. "
         "`download` fetches `NAME` (see [Datasets](../data/datasets.md)) and takes:\n"
     )
     for _, _, rows in tyro_groups(tyro.extras.get_parser(datasets_cli.download)):

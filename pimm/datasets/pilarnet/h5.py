@@ -41,9 +41,9 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
     2 muon, 3 pion, 4 proton, 5 none/LED (6 when ``old_pid_mapping``).
 
     Args:
-        data_root (str | None): Root directory of the revision's HDF5 shards. When it does not
-            exist, ``$PIMM_DATA_ROOT/pilarnet-m/<revision>``, then
-            ``~/.cache/pimm/datasets/pilarnet-m/<revision>``. Defaults to ``None``.
+        data_root (str | None): Root directory of the HDF5 shards. When it does not
+            exist, ``$PIMM_DATA_ROOT/pilarnet-m``, then
+            ``~/.cache/pimm/datasets/pilarnet-m``. Defaults to ``None``.
         split (str | Sequence[str]): Split name(s) used to glob ``*<split>/*.h5``
             under ``data_root``. Defaults to ``"train"``.
         transform (list[dict] | None): List of transform configs (NOT a prebuilt
@@ -73,7 +73,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         revision ({"v2", "v3", "v3_extra"}): On-disk truth schema. ``v2``
             uses the historical width-5 cluster-extra table; ``v3_extra``
             additionally requires momentum/lineage and interaction-vertex
-            tables. Defaults to ``"v3"``.
+            tables. Pass ``v2`` or ``v3`` only for an older local copy. Defaults to ``"v3_extra"``.
         overlay_n_events (int | tuple[int, int]): Number (or inclusive range) of
             events to overlay into one point cloud; ``> 1`` enables overlay.
             Defaults to ``1``.
@@ -102,7 +102,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         .. code-block:: python
 
             >>> from pimm.datasets.builder import build_dataset
-            >>> ds = build_dataset(dict(type="PILArNetH5Dataset", revision="v3",
+            >>> ds = build_dataset(dict(type="PILArNetH5Dataset",
             ...                         split="train", transform=[], min_points=1024))
             >>> sample = ds[0]
             >>> sorted(sample)[:6]
@@ -113,7 +113,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
             (7366, 1)
             >>> # in a config:
             >>> # data = dict(train=dict(type="PILArNetH5Dataset", split="train",
-            >>> #             revision="v3", min_points=1024, transform=transform))
+            >>> #             min_points=1024, transform=transform))
     """
 
     def __init__(
@@ -129,7 +129,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
         max_len=-1,
         remove_low_energy_scatters=False,
         old_pid_mapping=False,
-        revision: Literal["v2", "v3", "v3_extra"] = "v3",
+        revision: Literal["v2", "v3", "v3_extra"] = "v3_extra",
         # event overlay parameters
         overlay_n_events=1,
         overlay_prob=1.0,
@@ -141,7 +141,7 @@ class PILArNetH5Dataset(PILArNetOverlayMixin, Dataset):
     ):
         super().__init__()
         revision = resolve_revision(revision)
-        self.data_root = resolve_data_root(f"pilarnet-m/{revision}", data_root)
+        self.data_root = resolve_data_root("pilarnet-m", data_root)
         self.split = split
         self.transform = Compose(
             default_transform() if transform is None else transform

@@ -54,7 +54,7 @@ exp/tests/tiny-semseg-2026-07-14_14-30-00/
     └── model_best.pth
 ```
 
-The log has a note that revision `v2` is read as `v3`: the recipe's revision is `v2`, but the mini files have the v3 layout.
+The recipe sets `revision="v3"` because the mini files have the v3 layout; the full PILArNet-M recipes read `v3_extra`.
 
 Pass `--train.no-code-copy` to import pimm straight from your checkout. Without the flag, `pimm/` and `configs/` are copied into the run's `code/` directory, and that copy is imported.
 

@@ -22,7 +22,7 @@ packed batch
 : The cumulative end index of each event in a packed batch; `offset[-1]` is the total number of points.
 
 revision
-: A version of a dataset, such as PILArNet-M `v3`, or of a Hugging Face repository.
+: A version of a dataset, such as PILArNet-M `v3_extra`, or of a Hugging Face repository.
 
 semantic class
 : A per-point label such as shower or track (`segment_motif` in PILArNet-M).
